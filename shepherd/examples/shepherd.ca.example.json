@@ -1,0 +1,22 @@
+{
+  "includes": ["../vars.config.json"],
+
+  "cas": {
+    "vigil": {
+      "protocol": "acme",
+      "provider": "vigil",
+      "config": {
+        "directoryUrl":        "https://vigil.${vigilDomain}:7020/acme/directory",
+        "days":                365,
+        "renewBeforeDays":     7,
+        "accountEmail":        "ops@${vigilDomain}",
+        "accountKeyPath":      "./shepherd-acme-account.pem",
+        "supportedValidations": ["none-01"],
+        "defaultValidation":   "none-01",
+        "tlsCert": "${corgiRoot}/store/live/shepherd.${vigilDomain}/fullchain.pem",
+        "tlsKey":  "${corgiRoot}/store/live/shepherd.${vigilDomain}/privkey.pem",
+        "ca":      "${caTrustPath}"
+      }
+    }
+  }
+}

@@ -1,0 +1,737 @@
+use axum::extract::{Path, State};
+use axum::response::Json;
+use chrono::Utc;
+use serde_json::json;
+
+use axum::response::IntoResponse;
+use axum::http::header;
+
+use crate::assignments::{file_mtime, load_assignments};
+use crate::auth::check_min_role;
+use crate::cert_store;
+use crate::corgi_client::corgi_post;
+use crate::corgis::load_corgis;
+use crate::error::AppError;
+use crate::issuance::issue_cert;
+use crate::jwt::{jwks_response, sign_jwt};
+use crate::renewal_jobs::{complete_job, create_job, fail_job, update_phase};
+use crate::routes_corgi::build_domains;
+use crate::state::AppState;
+use crate::types::{AuthenticatedUser, Role, RenewalPhase};
+
+// ---------------------------------------------------------------------------
+// Public routes (no auth required)
+// ---------------------------------------------------------------------------
+
+pub async fn health() -> Json<serde_json::Value> {
+    Json(json!({ "status": "healthy", "service": "shepherd" }))
+}
+
+// ---------------------------------------------------------------------------
+// Flock state (dashboard view of all corgis + their runtime status)
+// ---------------------------------------------------------------------------
+
+pub async fn flock_list(State(state): State<AppState>) -> Json<serde_json::Value> {
+   let corgis = state.corgis.read().await;
+    let cs = state.corgi_state.read().await;
+    let entries: Vec<_> = corgis.iter().map(|node| {
+        let s = cs.get(&node.name);
+        json!({
+            "name": node.name,
+            "url": node.url,
+            "status": s.map(|s| format!("{:?}", s.status).to_lowercase()).unwrap_or_else(|| "unknown".into()),
+            "lastPolledAt": s.and_then(|s| s.last_health_check),
+            "flock": s.map(|s| &s.flock).cloned().unwrap_or_default(),
+            "error": s.and_then(|s| s.error.as_deref()),
+        })
+    }).collect();
+    Json(json!({ "corgis": entries }))
+}
+
+pub async fn flock_get(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let corgis = state.corgis.read().await;
+    let node = corgis.iter().find(|c| c.name == name)
+        .ok_or_else(|| AppError::NotFound(format!("Corgi '{name}' not found")))?;
+    let node_name = node.name.clone();
+    let node_url = node.url.clone();
+    drop(corgis);
+    let cs = state.corgi_state.read().await;
+    let s = cs.get(&node_name);
+    let status = s.map(|s| format!("{:?}", s.status).to_lowercase()).unwrap_or_else(|| "unknown".into());
+    let last_polled = s.and_then(|s| s.last_health_check);
+    let flock = s.map(|s| s.flock.clone()).unwrap_or_default();
+    let error = s.and_then(|s| s.error.clone());
+    Ok(Json(json!({
+        "corgi": {
+            "name": node_name,
+            "url": node_url,
+            "status": status,
+            "lastPolledAt": last_polled,
+            "flock": flock,
+            "error": error,
+        }
+    })))
+}
+
+pub async fn jwks(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(jwks_response(&state.jwt_keys))
+}
+
+pub async fn token(
+    State(state): State<AppState>,
+    maybe_peer: Option<axum::Extension<credo_lib::PeerCertDer>>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Bootstrap override: SHEPHERD_BOOTSTRAP_ADMIN_TOKEN env var bypasses cert validation
+    if let Ok(bootstrap_token) = std::env::var("SHEPHERD_BOOTSTRAP_ADMIN_TOKEN") {
+        if let Some(provided) = body.get("bootstrapToken").and_then(|v| v.as_str()) {
+            if provided == bootstrap_token {
+                let role = Role::Admin;
+                let identity_uri = "vigil://credo/bootstrap/admin";
+                let access = sign_jwt(&state.jwt_keys, identity_uri, &role, None)
+                    .map_err(AppError::Internal)?;
+                let expires_at = Utc::now().timestamp() + 86400;
+                let refresh = state.refresh_tokens
+                    .issue_token(identity_uri, &role, None, expires_at)
+                    .await;
+                return Ok(Json(json!({
+                    "accessToken": access,
+                    "refreshToken": refresh,
+                })));
+            }
+        }
+    }
+
+    // PoP token exchange
+    let pop = body.get("pop")
+        .ok_or_else(|| AppError::BadRequest("Missing pop field".to_string()))?;
+
+    let cert_pem     = pop.get("cert").and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::BadRequest("Missing pop.cert".to_string()))?;
+    let identity_uri = pop.get("identityUri").and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::BadRequest("Missing pop.identityUri".to_string()))?;
+    let issued_at_str = pop.get("issuedAt").and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::BadRequest("Missing pop.issuedAt".to_string()))?;
+    let challenge    = pop.get("challenge").and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::BadRequest("Missing pop.challenge".to_string()))?;
+    let signature_b64 = pop.get("signature").and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::BadRequest("Missing pop.signature".to_string()))?;
+
+    // Freshness: reject PoPs older than 5 minutes
+    let issued_at = chrono::DateTime::parse_from_rfc3339(issued_at_str)
+        .map_err(|_| AppError::BadRequest("Invalid issuedAt format".to_string()))?;
+    if (Utc::now() - issued_at.with_timezone(&Utc)).num_minutes() > 5 {
+        return Err(AppError::Unauthorized("PoP token has expired".to_string()));
+    }
+
+    // Parse cert DER
+    let cert_der = pop_pem_to_der(cert_pem)
+        .ok_or_else(|| AppError::BadRequest("Could not parse pop.cert".to_string()))?;
+
+    // Fast path: if client presented the same cert via TLS, the handshake already
+    // proved key possession and CA validity — skip crypto verification.
+    let tls_match = maybe_peer
+        .and_then(|ext| credo_lib::auth::identity_from_der(&ext.0.0).ok())
+        .zip(credo_lib::auth::identity_from_der(&cert_der).ok())
+        .map(|(peer, pop_id)| peer.fingerprint256 == pop_id.fingerprint256)
+        .unwrap_or(false);
+
+    if !tls_match {
+        // No matching TLS cert — verify CA chain then verify PoP signature
+        verify_pop_cert(&cert_der, &state.config.tls.client_ca_path)
+            .map_err(|e| AppError::Unauthorized(format!("Certificate not signed by configured CA: {e}")))?;
+
+        verify_pop_signature(&cert_der, challenge, identity_uri, issued_at_str, signature_b64)
+            .map_err(|e| AppError::Unauthorized(format!("PoP signature verification failed: {e}")))?;
+    }
+
+    // Verify the cert has a vigil:// URI SAN matching identityUri
+    let pop_identity = credo_lib::auth::identity_from_der(&cert_der)
+        .map_err(|_| AppError::BadRequest("Could not parse cert identity".to_string()))?;
+
+    let cert_uri = pop_identity.san_uris.iter()
+        .find(|u| u.starts_with("vigil://"))
+        .ok_or_else(|| AppError::Unauthorized("Certificate has no vigil:// URI SAN".to_string()))?;
+    if cert_uri != identity_uri {
+        return Err(AppError::Unauthorized(
+            "pop.identityUri does not match certificate URI SAN".to_string()
+        ));
+    }
+
+    // Look up the account
+    let accounts = state.accounts.read().await;
+    let account = accounts.iter()
+        .find(|a| a.active && a.identities.contains(&identity_uri.to_string()))
+        .ok_or_else(|| AppError::Unauthorized("Identity not found in accounts".to_string()))?
+        .clone();
+    drop(accounts);
+
+    // Cert expiry drives the refresh token TTL
+    let (_, x509) = x509_parser::parse_x509_certificate(&cert_der)
+        .map_err(|_| AppError::BadRequest("Could not parse cert".to_string()))?;
+    let cert_not_after = x509.validity().not_after.timestamp();
+
+    let access_token = sign_jwt(&state.jwt_keys, identity_uri, &account.role, Some(&account.name))
+        .map_err(AppError::Internal)?;
+    let refresh_token = state.refresh_tokens
+        .issue_token(identity_uri, &account.role, Some(&account.name), cert_not_after)
+        .await;
+    let expires_at = chrono::DateTime::from_timestamp(cert_not_after, 0)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_default();
+
+    Ok(Json(json!({
+        "accessToken": access_token,
+        "refreshToken": refresh_token,
+        "expiresAt": expires_at,
+    })))
+}
+
+pub async fn refresh_token(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let token = body.get("refreshToken")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::BadRequest("Missing refreshToken field".to_string()))?;
+
+    let entry = state.refresh_tokens.validate_token(token).await
+        .ok_or_else(|| AppError::Unauthorized("Invalid or expired refresh token".to_string()))?;
+
+    let role = Role::from_str(&entry.role);
+    let access = sign_jwt(&state.jwt_keys, &entry.identity_uri, &role, entry.account_name.as_deref())
+        .map_err(|e| AppError::Internal(e))?;
+
+    // Revoke old, issue new
+    state.refresh_tokens.revoke_token(token).await;
+    let expires_at = chrono::Utc::now().timestamp() + 86400;
+    let new_refresh = state.refresh_tokens
+        .issue_token(&entry.identity_uri, &role, entry.account_name.as_deref(), expires_at)
+        .await;
+
+    Ok(Json(json!({
+        "accessToken": access,
+        "refreshToken": new_refresh,
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// Authenticated routes (readonly+)
+// ---------------------------------------------------------------------------
+
+pub async fn get_assignments(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+    let assignments = state.assignments.read().await;
+    Ok(Json(json!({ "assignments": *assignments })))
+}
+
+pub async fn get_certstore(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+    let store_dir = &state.config.cert_store_dir;
+    let names = cert_store::list_cert_store_entries(store_dir);
+    let entries: Vec<_> = names.iter()
+        .filter_map(|n| cert_store::read_cert_store_entry(store_dir, n))
+        .collect();
+    Ok(Json(json!({ "certStoreDir": store_dir, "entries": entries })))
+}
+
+pub async fn get_certstore_entry(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Path(name): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+    let entry = cert_store::read_cert_store_entry(&state.config.cert_store_dir, &name)
+        .ok_or_else(|| AppError::NotFound(format!("Cert '{name}' not found")))?;
+    Ok(Json(json!({ "entry": entry })))
+}
+
+pub async fn get_certstore_pem(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Path(name): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+    let path = state.config.cert_store_dir.join("live").join(&name).join("cert.pem");
+    let pem = std::fs::read_to_string(&path)
+        .map_err(|_| AppError::NotFound(format!("Certificate file not found for '{name}'")))?;
+    Ok(([(header::CONTENT_TYPE, "text/plain")], pem))
+}
+
+pub async fn get_certstore_fullchain(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Path(name): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+    let path = state.config.cert_store_dir.join("live").join(&name).join("fullchain.pem");
+    let pem = std::fs::read_to_string(&path)
+        .map_err(|_| AppError::NotFound(format!("Fullchain file not found for '{name}'")))?;
+    Ok(([(header::CONTENT_TYPE, "text/plain")], pem))
+}
+
+pub async fn get_renewal_jobs(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+    let jobs = state.renewal_jobs.read().await;
+    let jobs_list: Vec<_> = jobs.values().collect();
+    Ok(Json(json!({ "jobs": jobs_list })))
+}
+
+pub async fn get_renewal_job(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+    let job_id: uuid::Uuid = id.parse()
+        .map_err(|_| AppError::BadRequest("Invalid job ID".to_string()))?;
+    let jobs = state.renewal_jobs.read().await;
+    let job = jobs.get(&job_id)
+        .ok_or_else(|| AppError::NotFound(format!("Renewal job '{id}' not found")))?;
+    Ok(Json(serde_json::to_value(job).unwrap()))
+}
+
+pub async fn get_last_renewal_job(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Path(cert_name): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+    let jobs = state.renewal_jobs.read().await;
+    let last = jobs.values()
+        .filter(|j| j.cert_name == cert_name && j.phase.is_terminal())
+        .max_by_key(|j| j.updated_at)
+        .cloned();
+    drop(jobs);
+    match last {
+        Some(job) => Ok(Json(json!({ "job": job }))),
+        None => Err(AppError::NotFound(format!("No completed job found for '{cert_name}'"))),
+    }
+}
+
+pub async fn list_accounts(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+    let accounts = state.accounts.read().await;
+    Ok(Json(json!({ "accounts": *accounts })))
+}
+
+pub async fn get_me(
+    State(_state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+    Ok(Json(json!({
+        "identityUri": user.identity_uri,
+        "role": format!("{:?}", user.role).to_lowercase(),
+        "accountId": user.account_id,
+        "accountName": user.account_name,
+    })))
+}
+
+pub async fn get_account(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+    let accounts = state.accounts.read().await;
+    let account = accounts.iter().find(|a| a.id == id)
+        .ok_or_else(|| AppError::NotFound(format!("Account '{id}' not found")))?;
+    Ok(Json(serde_json::to_value(account).unwrap()))
+}
+
+pub async fn get_cas(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+    let cas: Vec<_> = state.cas.iter().map(|(_, ca)| {
+        json!({
+            "name": ca.name,
+            "protocol": ca.protocol,
+            "provider": ca.provider,
+            "directoryUrl": ca.config.directory_url,
+            "supportedValidations": ca.config.supported_validations,
+            "defaultValidation": ca.config.default_validation,
+        })
+    }).collect();
+    Ok(Json(json!({ "cas": cas })))
+}
+
+pub async fn get_vigil_ca(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+    let url = state.config.vigil_url.as_ref()
+        .ok_or_else(|| AppError::BadRequest("Vigil not configured".to_string()))?;
+    let client = state.vigil_client.as_ref()
+        .ok_or_else(|| AppError::BadRequest("Vigil client unavailable".to_string()))?;
+    let body: serde_json::Value = client.get(format!("{}/ca", url.trim_end_matches('/')))
+        .send().await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Vigil request failed: {}", e)))?
+        .json().await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Vigil response parse error: {}", e)))?;
+    Ok(Json(body))
+}
+
+pub async fn get_vigil_status(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+    let url = state.config.vigil_url.as_ref()
+        .ok_or_else(|| AppError::BadRequest("Vigil not configured".to_string()))?;
+    let client = state.vigil_client.as_ref()
+        .ok_or_else(|| AppError::BadRequest("Vigil client unavailable".to_string()))?;
+    let body: serde_json::Value = client.get(format!("{}/health", url.trim_end_matches('/')))
+        .send().await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Vigil request failed: {}", e)))?
+        .json().await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("Vigil response parse error: {}", e)))?;
+    Ok(Json(body))
+}
+
+pub async fn config_summary(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+    let config = &state.config;
+    let cas: Vec<_> = state.cas.iter().map(|(_, ca)| {
+        json!({
+            "name": ca.name,
+            "protocol": ca.protocol,
+            "provider": ca.provider,
+            "defaultValidation": ca.config.default_validation,
+        })
+    }).collect();
+    Ok(Json(json!({
+        "agentPort": config.agent_port,
+        "dashboardPort": config.dashboard_port,
+        "bind": config.bind,
+        "certStoreDir": config.cert_store_dir,
+        "renewBeforeDays": config.renew_before_days,
+        "pollIntervalSeconds": config.poll_interval_seconds,
+        "corgiHealthCheckIntervalSeconds": config.corgi_health_check_interval_seconds,
+        "cas": cas,
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// Admin-only routes
+// ---------------------------------------------------------------------------
+
+pub async fn trigger_renew(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Path(cert_name): Path<String>,
+    body: Option<Json<serde_json::Value>>,
+) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
+    check_min_role(Some(&user.role), &Role::Admin)?;
+    let body = body.map(|b| b.0).unwrap_or_default();
+    admin_provision_or_renew(&state, &cert_name, &body).await
+}
+
+pub async fn trigger_provision(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Path(cert_name): Path<String>,
+    body: Option<Json<serde_json::Value>>,
+) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
+    check_min_role(Some(&user.role), &Role::Admin)?;
+    let body = body.map(|b| b.0).unwrap_or_default();
+    admin_provision_or_renew(&state, &cert_name, &body).await
+}
+
+async fn admin_provision_or_renew(
+    state: &AppState,
+    cert_name: &str,
+    body: &serde_json::Value,
+) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
+    let assignments = state.assignments.read().await;
+    let assignment = assignments
+        .iter()
+        .find(|a| a.cert_name == cert_name || a.domain.as_deref() == Some(cert_name))
+        .ok_or_else(|| AppError::NotFound(format!("No assignment for '{cert_name}'")))?
+        .clone();
+    drop(assignments);
+
+    let corgi_name = assignment.corgi.as_deref()
+        .ok_or_else(|| AppError::BadRequest(format!("Assignment '{cert_name}' has no corgi")))?;
+
+    let corgis = state.corgis.read().await.clone();
+    let node = corgis.iter()
+        .find(|c| c.name == corgi_name)
+        .ok_or_else(|| AppError::NotFound(format!("Corgi '{corgi_name}' not in config")))?
+        .clone();
+
+    let ca_config = state.cas.get(&assignment.ca)
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("CA '{}' not configured", assignment.ca)))?
+        .config.clone();
+
+    let key_algorithm = body.get("keyAlgorithm")
+        .and_then(|v| v.as_str())
+        .or(assignment.key_algorithm.as_deref())
+        .unwrap_or("rsa");
+
+    // Get CSR from corgi
+    #[derive(serde::Deserialize)]
+    struct CsrResponse { #[serde(rename = "csrPem")] csr_pem: String }
+    let csr: CsrResponse = corgi_post(
+        &state.corgi_client_pool,
+        &node,
+        &format!("/flock/{}/csr", urlencoded(cert_name)),
+        &json!({ "keyAlgorithm": key_algorithm }),
+    ).await.map_err(AppError::Internal)?;
+
+    let domains = build_domains(&assignment);
+    let job_id = create_job(&state.renewal_jobs, &assignment.cert_name, domains.clone(), &assignment.ca).await;
+
+    let state2 = state.clone();
+    let node2 = node.clone();
+    let assignment2 = assignment.clone();
+    let cert_name2 = assignment.cert_name.clone();
+    tokio::spawn(async move {
+        update_phase(&state2.renewal_jobs, job_id, RenewalPhase::SubmittingOrder).await;
+        let corgis = state2.corgis.read().await.clone();
+        match issue_cert(
+            &ca_config,
+            &assignment2.ca,
+            &cert_name2,
+            &state2.config.cert_store_dir,
+            &domains,
+            &csr.csr_pem,
+            &assignment2,
+            &state2.corgi_client_pool,
+            &corgis,
+            &state2.acme_accounts,
+        ).await {
+            Ok(result) => {
+                complete_job(&state2.renewal_jobs, job_id, result.fingerprint256.clone()).await;
+                if result.changed {
+                    let _ = corgi_post::<serde_json::Value>(
+                        &state2.corgi_client_pool,
+                        &node2,
+                        &format!("/flock/{}/install", urlencoded(&cert_name2)),
+                        &json!({ "certPem": result.cert_pem }),
+                    ).await;
+                }
+            }
+            Err(e) => {
+                fail_job(&state2.renewal_jobs, job_id, e.to_string()).await;
+                tracing::warn!(cert = %cert_name2, error = %e, "Admin-triggered renewal failed");
+            }
+        }
+    });
+
+    Ok((axum::http::StatusCode::ACCEPTED, Json(json!({
+        "jobId": job_id.to_string(),
+        "status": "pending",
+        "certName": assignment.cert_name,
+    }))))
+}
+
+pub async fn cancel_renewal_job(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Admin)?;
+    let job_id: uuid::Uuid = id.parse()
+        .map_err(|_| AppError::BadRequest("Invalid job ID".to_string()))?;
+    let mut jobs = state.renewal_jobs.write().await;
+    if jobs.remove(&job_id).is_some() {
+        Ok(Json(json!({ "cancelled": true })))
+    } else {
+        Err(AppError::NotFound(format!("Renewal job '{id}' not found")))
+    }
+}
+
+pub async fn create_account(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Admin)?;
+    let account: crate::types::Account = serde_json::from_value(body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid account: {e}")))?;
+    let mut accounts = state.accounts.write().await;
+    accounts.push(account.clone());
+    drop(accounts);
+    let all = state.accounts.read().await;
+    crate::accounts::save_accounts(&state.config.accounts_path, &all)
+        .map_err(|e| AppError::Internal(e))?;
+    Ok(Json(serde_json::to_value(&account).unwrap()))
+}
+
+pub async fn update_account(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Path(id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Admin)?;
+    let mut accounts = state.accounts.write().await;
+    let account = accounts.iter_mut().find(|a| a.id == id)
+        .ok_or_else(|| AppError::NotFound(format!("Account '{id}' not found")))?;
+    if let Some(v) = body.get("displayName").and_then(|v| v.as_str()) {
+        account.display_name = v.to_string();
+    }
+    if let Some(v) = body.get("role").and_then(|v| v.as_str()) {
+        account.role = Role::from_str(v);
+    }
+    if let Some(v) = body.get("active").and_then(|v| v.as_bool()) {
+        account.active = v;
+    }
+    if let Some(v) = body.get("notes").and_then(|v| v.as_str()) {
+        account.notes = v.to_string();
+    }
+    if let Some(ids) = body.get("identities").and_then(|v| v.as_array()) {
+        account.identities = ids.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+    }
+    let updated = account.clone();
+    drop(accounts);
+    let all = state.accounts.read().await;
+    crate::accounts::save_accounts(&state.config.accounts_path, &all)
+        .map_err(|e| AppError::Internal(e))?;
+    Ok(Json(serde_json::to_value(&updated).unwrap()))
+}
+
+pub async fn delete_account(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Admin)?;
+    let mut accounts = state.accounts.write().await;
+    let before = accounts.len();
+    accounts.retain(|a| a.id != id);
+    if accounts.len() == before {
+        return Err(AppError::NotFound(format!("Account '{id}' not found")));
+    }
+    drop(accounts);
+    let all = state.accounts.read().await;
+    crate::accounts::save_accounts(&state.config.accounts_path, &all)
+        .map_err(|e| AppError::Internal(e))?;
+    Ok(Json(json!({ "deleted": true })))
+}
+
+pub async fn reload_corgis(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Admin)?;
+    let path = &state.config.corgis_config_path;
+    let list = load_corgis(path).map_err(AppError::Internal)?;
+    let count = list.len();
+    *state.corgis.write().await = list;
+    *state.corgis_mtime.lock().unwrap() = file_mtime(path);
+    Ok(Json(json!({ "reloaded": true, "corgis": count, "corgisConfigPath": path })))
+}
+
+pub async fn reload_assignments(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Admin)?;
+    let path = &state.config.assignments_config_path;
+    let list = load_assignments(path).map_err(AppError::Internal)?;
+    let count = list.len();
+    *state.assignments.write().await = list;
+    *state.assignments_mtime.lock().unwrap() = file_mtime(path);
+    Ok(Json(json!({ "reloaded": true, "assignments": count, "assignmentsConfigPath": path })))
+}
+
+fn urlencoded(s: &str) -> String {
+    s.replace('/', "%2F")
+}
+
+// ---------------------------------------------------------------------------
+// PoP token helpers
+// ---------------------------------------------------------------------------
+
+fn pop_pem_to_der(pem: &str) -> Option<Vec<u8>> {
+    use rustls_pemfile::Item;
+    let mut rd = std::io::BufReader::new(pem.as_bytes());
+    rustls_pemfile::read_one(&mut rd).ok()?.and_then(|item| match item {
+        Item::X509Certificate(d) => Some(d.to_vec()),
+        _ => None,
+    })
+}
+
+/// Verify that `cert_der` was signed by at least one cert in `ca_path`.
+fn verify_pop_cert(cert_der: &[u8], ca_path: &std::path::Path) -> anyhow::Result<()> {
+    use x509_parser::prelude::*;
+
+    let ca_pem = std::fs::read_to_string(ca_path)
+        .with_context(|| format!("Reading client CA: {}", ca_path.display()))?;
+
+    let (_, user_cert) = X509Certificate::from_der(cert_der)
+        .map_err(|e| anyhow::anyhow!("Parsing pop.cert: {e:?}"))?;
+
+    // Try each cert in the CA bundle
+    for block in rustls_pemfile::certs(&mut std::io::BufReader::new(ca_pem.as_bytes())).flatten() {
+        if let Ok((_, ca_cert)) = X509Certificate::from_der(block.as_ref()) {
+            if user_cert.verify_signature(Some(ca_cert.public_key())).is_ok() {
+                return Ok(());
+            }
+        }
+    }
+    anyhow::bail!("Certificate not signed by any cert in client CA bundle")
+}
+
+use anyhow::Context as AnyhowContext;
+
+/// Verify the PoP signature:
+///   message = hex_decode(challenge) || identityUri_bytes || issuedAt_bytes
+///   sig     = base64url(DER-encoded ECDSA or PKCS1v15 SHA-256 signature)
+fn verify_pop_signature(
+    cert_der: &[u8],
+    challenge_hex: &str,
+    identity_uri: &str,
+    issued_at: &str,
+    signature_b64: &str,
+) -> anyhow::Result<()> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    use x509_parser::prelude::*;
+
+    let challenge_bytes = hex::decode(challenge_hex)
+        .context("Decoding PoP challenge hex")?;
+    let mut message = challenge_bytes;
+    message.extend_from_slice(identity_uri.as_bytes());
+    message.extend_from_slice(issued_at.as_bytes());
+
+    let sig_bytes = URL_SAFE_NO_PAD.decode(signature_b64)
+        .or_else(|_| base64::engine::general_purpose::STANDARD.decode(signature_b64))
+        .context("Decoding PoP signature base64")?;
+
+    let (_, cert) = X509Certificate::from_der(cert_der)
+        .map_err(|e| anyhow::anyhow!("Parsing cert DER: {e:?}"))?;
+    let spki = cert.public_key();
+    let pk_data = spki.subject_public_key.data.as_ref();
+
+    // EC P-256 (all Vigil-issued certs are P-256)
+    use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+    let vk = VerifyingKey::from_sec1_bytes(pk_data)
+        .context("Parsing EC P-256 public key from cert")?;
+    let sig = Signature::from_der(&sig_bytes)
+        .context("Parsing DER-encoded PoP signature")?;
+    vk.verify(&message, &sig).context("EC P-256 PoP signature mismatch")
+}

@@ -1,0 +1,13 @@
+The dashboard acts as a front end for shepherd.  It will be built with vite+express.  it should be a modern, clean interface that allows for the following actions:
+
+- Monitor the health of shepherd
+- Monitor the health of corgis
+- Monitor the health of certs
+- Show a heirarcical view of corgis and certs
+- Show a list of all certs.
+- Allow renewal of certs.
+- Allow the adding and editing of assignments
+
+The will undoubtedly be more but we can start there. To start there will be no authentication, but we will be adding an auth layers in the future. Note that to talk to shepherd with will need to do mTLS.
+
+it will only serve over HTTP

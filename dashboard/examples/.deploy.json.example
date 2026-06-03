@@ -1,0 +1,17 @@
+{
+  "default": {
+    "host": "deploy@dashboard-01.example.com",
+    "remoteDir": "/opt/credo/dashboard",
+    "sshPort": 22,
+    "sshOpts": "",
+    "serviceName": "credo-dashboard",
+    "transferPatterns": [
+      "dist/***",
+      "package.json",
+      "package-lock.json",
+      "vendor/***",
+      "scripts/***",
+      "dashboard.config.example.json"
+    ]
+  }
+}

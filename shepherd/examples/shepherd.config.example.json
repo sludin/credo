@@ -1,0 +1,37 @@
+{
+  "includes": ["../vars.config.json"],
+
+  "_comment": "Companion config file paths (defaults shown — omit to use defaults)",
+  "corgisConfigPath":      "./shepherd.corgis.json",
+  "caConfigPath":          "./shepherd.ca.json",
+  "assignmentsConfigPath": "./shepherd.assignments.json",
+  "certStoreDir":          "./store",
+  "accountsPath":          "./shepherd.accounts.json",
+  "renewalJobsDir":        "./renewal-jobs",
+
+  "_identity": "Required when using Vigil as the CA",
+  "commonName":     "shepherd.${vigilDomain}",
+  "identityUri":    "${identityPrefix}/service/shepherd",
+  "vigilUrl":       "https://vigil.${vigilDomain}:7020",
+  "shepherdCaPath": "${caTrustPath}",
+
+  "tls": {
+    "certPath":     "${corgiRoot}/store/live/shepherd.${vigilDomain}/fullchain.pem",
+    "keyPath":      "${corgiRoot}/store/live/shepherd.${vigilDomain}/privkey.pem",
+    "clientCaPath": "${caTrustPath}"
+  },
+
+  "auth": {
+    "jwtSigningKeyPath": "./shepherd.jwt.key.pem"
+  },
+
+  "agentPort":     7010,
+  "dashboardPort": 7011,
+  "bind":          "0.0.0.0",
+
+  "pollIntervalSeconds":             60,
+  "corgiHealthCheckIntervalSeconds": 300,
+  "renewBeforeDays":                 7,
+
+  "logLevel": "info"
+}

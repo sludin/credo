@@ -1,0 +1,26 @@
+{
+  "includes": ["../vars.config.json"],
+
+  "defaults": {
+    "mtlsCert": "${corgiRoot}/store/live/shepherd.${vigilDomain}/fullchain.pem",
+    "mtlsKey":  "${corgiRoot}/store/live/shepherd.${vigilDomain}/privkey.pem",
+    "mtlsCa":   "${caTrustPath}"
+  },
+  "corgis": [
+    {
+      "name":        "corgi-shepherd",
+      "url":         "https://shepherd.${vigilDomain}:7001",
+      "identityUri": "${identityPrefix}/node/corgi-shepherd"
+    },
+    {
+      "name":        "corgi-vigil",
+      "url":         "https://vigil.${vigilDomain}:7001",
+      "identityUri": "${identityPrefix}/node/corgi-vigil"
+    },
+    {
+      "name":        "corgi-01",
+      "url":         "https://corgi-01.${vigilDomain}:7001",
+      "identityUri": "${identityPrefix}/node/corgi-01"
+    }
+  ]
+}

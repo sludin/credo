@@ -1,0 +1,71 @@
+[package]
+name        = "shepherd"
+version     = "0.1.0"
+edition     = "2021"
+description = "Shepherd - TLS certificate management control plane for the credo system"
+
+[[bin]]
+name = "shepherd"
+path = "src/main.rs"
+
+[dependencies]
+credo-lib = { path = "../credo-lib" }
+
+# Async runtime + HTTP (mirrors rest of workspace)
+tokio          = { version = "1",   features = ["full"] }
+axum           = { version = "0.7", features = ["macros"] }
+hyper          = { version = "1",   features = ["http1", "server"] }
+hyper-util     = { version = "0.1", features = ["tokio", "server-auto"] }
+http-body-util = "0.1"
+tower          = { version = "0.4", features = ["util"] }
+
+# TLS (pure Rust — cross-compile safe; ring uses cc/Zig for assembly)
+rustls         = { version = "0.23", default-features = false, features = ["ring", "tls12"] }
+tokio-rustls   = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls-pemfile = "2"
+
+# ACME client (pure Rust — no OpenSSL)
+instant-acme = "0.6"
+
+# mTLS HTTP client for outbound Corgi calls
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# DNS resolver for authoritative NS polling (dns-01 challenge propagation)
+hickory-resolver = { version = "0.24", default-features = false, features = ["tokio-runtime"] }
+
+# JWT (ES256)
+jsonwebtoken = "9"
+p256 = { version = "0.13", features = ["pkcs8", "pem", "ecdsa"] }
+
+# X.509 / PEM parsing
+x509-parser = { version = "0.16", features = ["verify"] }
+pem         = "3"
+pkcs8       = { version = "0.10", features = ["pem"] }
+
+# Crypto
+sha2   = "0.10"
+hex    = "0.4"
+base64 = "0.22"
+
+# Serialization
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Logging
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Error handling
+anyhow    = "1"
+thiserror = "1"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+time   = { version = "0.3", features = ["std"] }
+
+# Misc
+rand = "0.8"
+uuid = { version = "1", features = ["v4", "serde"] }

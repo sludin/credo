@@ -1,0 +1,91 @@
+{
+  "includes": ["../vars.config.json"],
+
+  "vars": {
+    "nodeName": "corgi-01"
+  },
+
+  "nodeId":      "${nodeName}",
+  "commonName":  "${nodeName}.${vigilDomain}",
+  "identityUri": "${identityPrefix}/node/${nodeName}",
+  "shepherdUrl": "https://shepherd.${vigilDomain}:7010",
+
+  "certStoreDir": "${corgiRoot}/store",
+
+  "filePolicy": {
+    "owner":    "root",
+    "group":    "ssl-cert",
+    "certMode": "0644",
+    "keyMode":  "0600"
+  },
+
+  "tls": {
+    "certPath": "${corgiStore}/${nodeName}.${vigilDomain}/fullchain.pem",
+    "keyPath":  "${corgiStore}/${nodeName}.${vigilDomain}/privkey.pem"
+  },
+
+  "mtls": {
+    "certPath": "${corgiStore}/${nodeName}.${vigilDomain}/fullchain.pem",
+    "keyPath":  "${corgiStore}/${nodeName}.${vigilDomain}/privkey.pem",
+    "caPath":   "${caTrustPath}"
+  },
+
+  "mtlsPort": 7001,
+  "bind":     "0.0.0.0",
+
+  "auth": {
+    "mode": "mtls"
+  },
+
+  "rbacIdentities": [
+    {
+      "uri":  "${identityPrefix}/service/shepherd",
+      "role": "admin",
+      "name": "shepherd"
+    }
+  ],
+
+  "shepherdSync": {
+    "enabled":              true,
+    "intervalSeconds":      60,
+    "staleWarningSeconds":  300,
+    "assignmentsCachePath": "./corgi.assignments.cache.json"
+  },
+
+  "_httpChallenge": "Uncomment to enable HTTP-01 ACME challenge listener",
+  "_httpChallengeBlock": {
+    "enabled": true,
+    "port":    7080,
+    "bind":    "0.0.0.0"
+  },
+
+  "_certHooksNote": "Per-cert hooks — use when different certs need different service reloads. For a single service on this node, use defaultHooks instead.",
+  "certHooks": {
+    "api.${vigilDomain}": ["nginx"]
+  },
+
+  "defaultHooks": [],
+
+  "_flockNote": "Flock entries are optional. Define one only to install a cert at a non-default path or to write extra files (chain, fullchain). Hooks and permissions come from certHooks/defaultHooks and filePolicy.",
+  "flock": [
+    {
+      "_comment": "Example: install to a custom path AND write a fullchain for nginx",
+      "name":          "api.${vigilDomain}",
+      "path":          "/etc/ssl/certs/api.${vigilDomain}.pem",
+      "keyPath":       "/etc/ssl/private/api.${vigilDomain}.key",
+      "fullchainPath": "/etc/ssl/certs/api.${vigilDomain}.fullchain.pem"
+    }
+  ],
+
+  "serviceHooks": {
+    "nginx":  ["systemctl", "reload", "nginx"],
+    "caddy":  ["caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--force"],
+    "apache": ["systemctl", "reload", "apache2"],
+    "docker-nginx": {
+      "exec": ["docker", "exec", "-t", "{container}", "nginx", "-s", "reload"],
+      "args": { "container": { "type": "container-name" } }
+    }
+  },
+
+  "logLevel": "info"
+}

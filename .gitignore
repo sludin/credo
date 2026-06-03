@@ -1,0 +1,45 @@
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Scratch / notes (not tracked)
+SCRATCHPAD
+FLOW
+
+# Test certs (generated artifacts)
+test_certs/
+
+bootstrap/
+backup/
+.env.disabled
+ca-vars.env
+
+# Visual companion brainstorm sessions
+.superpowers/
+
+# Git worktrees
+.worktrees/
+
+# Top-level deploy config (contains hostnames — use examples/.deploy.json.example as template)
+.deploy.json
+
+# TLS certificates (managed outside git)
+cert.pem
+privkey.pem
+*.pem~
+
+*~
+
+.deploy-remote.json
+.deploy-rsync-include
+
+node_modules
+
+ceremony/ca/
+.scratch/
+target/
+lib/credo-lib-0.1.0.tgz
+deprecated

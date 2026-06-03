@@ -1,0 +1,9 @@
+node_modules
+dist
+.dashboard.cache
+
+# Live config (copy from example)
+dashboard.config.json
+
+# TLS certs (generated — do not commit private keys)
+certs/

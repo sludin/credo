@@ -1,0 +1,41 @@
+{
+  "port": 7030,
+  "bind": "0.0.0.0",
+  "shepherdApiUrl": "https://shepherd.example.com:7011",
+
+  "caPath": "/etc/credo/credo-catrust.pem",
+
+  "tls": {
+    "certPath": "./certs/dashboard.example.com/fullchain.pem",
+    "keyPath":  "./certs/dashboard.example.com/privkey.pem"
+  },
+  "mtls": {
+    "certPath":          "./certs/dashboard.example.com/fullchain.pem",
+    "keyPath":           "./certs/dashboard.example.com/privkey.pem",
+    "caPath":            "/etc/credo/credo-catrust.pem",
+    "rejectUnauthorized": true
+  },
+
+  "requestTimeoutSeconds": 15,
+  "dnsPollingIntervalSeconds": 5,
+  "dnsJobTimeoutSeconds": 600,
+  "dnsPublicResolvers": [
+    { "name": "Google",     "ip": "8.8.8.8" },
+    { "name": "Cloudflare", "ip": "1.1.1.1" },
+    { "name": "Quad9",      "ip": "9.9.9.9" }
+  ],
+
+  "auth": {
+    "usersPath": "./dashboard.users.json",
+    "sessionSecret": "replace-with-a-long-random-secret",
+    "sessionDurationHours": 24,
+    "enrollmentTokenTTLHours": 24,
+    "rpId": "dashboard.example.com",
+    "rpName": "Credo Dashboard",
+    "origin": "https://dashboard.example.com",
+    "identityEnvironment": "prod",
+    "roleRefreshIntervalSeconds": 300,
+    "roleStaleTimeoutSeconds": 1800,
+    "sessionsDir": "./sessions"
+  }
+}

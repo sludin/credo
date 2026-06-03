@@ -1,0 +1,12 @@
+{
+  "vars": {
+    "credoRoot":      "/var/apps/credo",
+    "caTrustPath":    "${credoRoot}/credo-catrust.pem",
+    "vigilRoot":      "${credoRoot}/vigil",
+    "shepherdRoot":   "${credoRoot}/shepherd",
+    "corgiRoot":      "${credoRoot}/corgi",
+    "corgiStore":     "${corgiRoot}/store/live",
+    "vigilDomain":    "example.com",
+    "identityPrefix": "vigil://credo/prod"
+  }
+}

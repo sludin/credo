@@ -1,0 +1,53 @@
+{
+  "includes": ["../vars.config.json"],
+
+  "port": 7020,
+  "bind": "127.0.0.1",
+
+  "commonName": "vigil.${vigilDomain}",
+
+  "tls": {
+    "certPath":     "${corgiRoot}/store/live/vigil.${vigilDomain}/fullchain.pem",
+    "keyPath":      "${corgiRoot}/store/live/vigil.${vigilDomain}/privkey.pem",
+    "clientCaPath": "${caTrustPath}"
+  },
+
+  "_caKeyMaterial": "Paths to the offline-generated intermediate CA (ceremony/ scripts)",
+  "caEcdsaIntermediateKeyPath":  "${vigilRoot}/ca/int-ecdsa/private/int-ecdsa.key.pem",
+  "caEcdsaIntermediateCertPath": "${vigilRoot}/ca/int-ecdsa/certs/int-ecdsa.cert.pem",
+  "caDir": "${vigilRoot}/ca",
+
+  "ca": {
+    "curve":              "P-384",
+    "certDefaultDays":    365,
+    "crlNextUpdateHours": 24,
+    "ocspMaxAgeSeconds":  60
+  },
+
+  "_dataPaths": "Runtime data — omit to use dataDir-relative defaults",
+  "dataDir":            "${vigilRoot}/data",
+  "usersDbPath":        "${vigilRoot}/data/users.json",
+  "certDbPath":         "${vigilRoot}/data/certificates.json",
+  "acmeAccountsDbPath": "${vigilRoot}/data/acme-accounts.json",
+  "certsDir":           "${vigilRoot}/data/certs",
+  "ctLogPath":          "${vigilRoot}/logs/ct.log",
+
+  "rbacIdentities": [
+    {
+      "uri":  "${identityPrefix}/service/shepherd",
+      "role": "admin",
+      "name": "shepherd"
+    }
+  ],
+
+  "_issuancePolicy": "Restrict which certificates Vigil will sign",
+  "issuancePolicy": {
+    "allowedDnsSuffixes":         ["${vigilDomain}"],
+    "allowSubdomains":            true,
+    "allowBareSuffix":            true,
+    "allowedIdentityUriPrefixes": ["${identityPrefix}/"],
+    "allowIpSans":                false
+  },
+
+  "logLevel": "info"
+}

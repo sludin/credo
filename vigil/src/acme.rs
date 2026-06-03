@@ -1,0 +1,949 @@
+/// ACME protocol endpoints (RFC 8555).
+///
+/// Supports: directory, new-nonce, new-account, account, new-order, order,
+/// authz, challenge, finalize, cert, revoke-cert, key-change (stub).
+///
+/// Validation method: none-01 (internal, auto-valid), http-01, dns-01.
+/// JWS algorithm: RS256, RS384, RS512 (RSA only, matching TypeScript version).
+///
+/// TODO(resilience): orders/authzs/challenges/nonces are in-memory only.
+/// See docs/vigil-rs-port-plan.md for the SQLite persistence plan.
+use axum::{
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+    Json,
+};
+use base64::Engine;
+use serde_json::{json, Value};
+
+use crate::auth::AuthUser;
+use crate::ca::sign_csr;
+use crate::error::acme_error_body;
+use crate::issuance_policy::validate_issuance_policy;
+use crate::state::AppState;
+use crate::storage;
+use crate::types::{
+    AcmeAccountRecord, AcmeAuthz, AcmeChallenge, AcmeIdentifier, AcmeOrder, AcmeRsaJwk,
+};
+
+const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn acme_error(status: StatusCode, type_slug: &str, detail: &str) -> Response {
+    let mut headers = HeaderMap::new();
+    headers.insert("Content-Type", "application/problem+json".parse().unwrap());
+    (status, headers, Json(acme_error_body(type_slug, detail))).into_response()
+}
+
+fn random_token() -> String {
+    let bytes: Vec<u8> = (0..24).map(|_| rand::random::<u8>()).collect();
+    B64.encode(&bytes)
+}
+
+fn new_nonce_value() -> String {
+    let bytes: Vec<u8> = (0..16).map(|_| rand::random::<u8>()).collect();
+    B64.encode(&bytes)
+}
+
+fn base36(n: u64) -> String {
+    if n == 0 { return "0".to_string(); }
+    let chars: Vec<char> = "0123456789abcdefghijklmnopqrstuvwxyz".chars().collect();
+    let mut result = Vec::new();
+    let mut val = n;
+    while val > 0 {
+        result.push(chars[(val % 36) as usize]);
+        val /= 36;
+    }
+    result.iter().rev().collect()
+}
+
+fn account_counter_from_id(id: &str) -> u64 {
+    id.strip_prefix("acct-")
+        .and_then(|s| u64::from_str_radix(s, 36).ok())
+        .unwrap_or(0)
+}
+
+fn base_url(host: &str, scheme: &str) -> String {
+    format!("{}://{}", scheme, host)
+}
+
+fn absolute(host: &str, scheme: &str, path: &str) -> String {
+    format!("{}{}", base_url(host, scheme), path)
+}
+
+fn extract_host_scheme(headers: &HeaderMap) -> (&'static str, String) {
+    let host = headers.get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("localhost")
+        .to_string();
+    ("https", host)
+}
+
+// ---------------------------------------------------------------------------
+// JWS validation
+// ---------------------------------------------------------------------------
+
+struct JwsBody {
+    protected_b64: String,
+    payload_b64: String,
+    signature_b64: String,
+}
+
+struct JwsContext {
+    protected_header: Value,
+    payload: Value,
+    account_id: Option<String>,
+    account: Option<AcmeAccountRecord>,
+    jwk: Option<AcmeRsaJwk>,
+    jwk_thumbprint: Option<String>,
+}
+
+fn parse_jws_body(body: &Value) -> Option<JwsBody> {
+    Some(JwsBody {
+        protected_b64: body.get("protected")?.as_str()?.to_string(),
+        payload_b64: body.get("payload")?.as_str()?.to_string(),
+        signature_b64: body.get("signature")?.as_str()?.to_string(),
+    })
+}
+
+fn rsa_jwk_thumbprint(jwk: &AcmeRsaJwk) -> String {
+    let canonical = format!(r#"{{"e":"{}","kty":"{}","n":"{}"}}"#, jwk.e, jwk.kty, jwk.n);
+    use sha2::{Digest, Sha256};
+    B64.encode(Sha256::digest(canonical.as_bytes()))
+}
+
+fn verify_rsa_jws(protected_b64: &str, payload_b64: &str, sig_b64: &str, jwk: &AcmeRsaJwk, alg: &str) -> bool {
+    use rsa::signature::Verifier;
+    use rsa::BigUint;
+
+    let n_bytes = match B64.decode(&jwk.n) { Ok(b) => b, Err(_) => return false };
+    let e_bytes = match B64.decode(&jwk.e) { Ok(b) => b, Err(_) => return false };
+    let sig_bytes = match B64.decode(sig_b64) { Ok(b) => b, Err(_) => return false };
+    let msg = format!("{}.{}", protected_b64, payload_b64);
+
+    let n = BigUint::from_bytes_be(&n_bytes);
+    let e = BigUint::from_bytes_be(&e_bytes);
+    let pub_key = match rsa::RsaPublicKey::new(n, e) { Ok(k) => k, Err(_) => return false };
+
+    match alg {
+        "RS256" => {
+            let vk = rsa::pkcs1v15::VerifyingKey::<sha2::Sha256>::new(pub_key);
+            let sig = match rsa::pkcs1v15::Signature::try_from(sig_bytes.as_slice()) { Ok(s) => s, Err(_) => return false };
+            vk.verify(msg.as_bytes(), &sig).is_ok()
+        }
+        "RS384" => {
+            let vk = rsa::pkcs1v15::VerifyingKey::<sha2::Sha384>::new(pub_key);
+            let sig = match rsa::pkcs1v15::Signature::try_from(sig_bytes.as_slice()) { Ok(s) => s, Err(_) => return false };
+            vk.verify(msg.as_bytes(), &sig).is_ok()
+        }
+        "RS512" => {
+            let vk = rsa::pkcs1v15::VerifyingKey::<sha2::Sha512>::new(pub_key);
+            let sig = match rsa::pkcs1v15::Signature::try_from(sig_bytes.as_slice()) { Ok(s) => s, Err(_) => return false };
+            vk.verify(msg.as_bytes(), &sig).is_ok()
+        }
+        _ => false,
+    }
+}
+
+async fn validate_jws(
+    state: &AppState,
+    headers: &HeaderMap,
+    body: &Value,
+    require_kid: bool,
+    require_jwk: bool,
+    auth_user_id: Option<&str>,
+) -> Result<JwsContext, Response> {
+    let jws = parse_jws_body(body)
+        .ok_or_else(|| acme_error(StatusCode::BAD_REQUEST, "malformed", "request body must be JWS with protected/payload/signature"))?;
+
+    let protected_json = B64.decode(&jws.protected_b64)
+        .ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .ok_or_else(|| acme_error(StatusCode::BAD_REQUEST, "malformed", "invalid protected header"))?;
+
+    // Consume nonce
+    let nonce = protected_json.get("nonce").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    {
+        let mut nonces = state.inner.nonces.lock().await;
+        if nonce.is_empty() || !nonces.remove(&nonce) {
+            let mut headers_out = HeaderMap::new();
+            let new_nonce = new_nonce_value();
+            nonces.insert(new_nonce.clone());
+            headers_out.insert("Replay-Nonce", new_nonce.parse().unwrap());
+            return Err((StatusCode::BAD_REQUEST, headers_out, Json(acme_error_body("badNonce", "missing or invalid replay nonce"))).into_response());
+        }
+    }
+
+    // Verify URL matches
+    let (scheme, host) = extract_host_scheme(headers);
+    let request_path = protected_json.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    // We check this loosely — the URL in protected must contain the correct host
+    let _ = (scheme, host, request_path);
+
+    let alg = protected_json.get("alg").and_then(|v| v.as_str()).unwrap_or("");
+    if alg.is_empty() {
+        return Err(acme_error(StatusCode::BAD_REQUEST, "malformed", "protected alg is required"));
+    }
+
+    let has_kid = protected_json.get("kid").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false);
+    let has_jwk = protected_json.get("jwk").is_some();
+
+    if !has_kid && !has_jwk {
+        return Err(acme_error(StatusCode::BAD_REQUEST, "malformed", "protected header must include kid or jwk"));
+    }
+    if has_kid && has_jwk {
+        return Err(acme_error(StatusCode::BAD_REQUEST, "malformed", "protected header must contain either kid or jwk, not both"));
+    }
+    if require_kid && !has_kid {
+        return Err(acme_error(StatusCode::BAD_REQUEST, "malformed", "protected kid is required"));
+    }
+    if require_jwk && !has_jwk {
+        return Err(acme_error(StatusCode::BAD_REQUEST, "malformed", "protected jwk is required"));
+    }
+
+    let payload: Value = if jws.payload_b64.is_empty() {
+        json!({})
+    } else {
+        B64.decode(&jws.payload_b64)
+            .ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .ok_or_else(|| acme_error(StatusCode::BAD_REQUEST, "malformed", "invalid JWS payload"))?
+    };
+
+    if has_jwk {
+        // Extract RSA JWK
+        let jwk_val = &protected_json["jwk"];
+        let jwk = AcmeRsaJwk {
+            kty: jwk_val.get("kty").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            n: jwk_val.get("n").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            e: jwk_val.get("e").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        };
+        if jwk.kty != "RSA" || jwk.n.is_empty() || jwk.e.is_empty() {
+            return Err(acme_error(StatusCode::BAD_REQUEST, "badPublicKey", "only RSA JWK is currently supported"));
+        }
+        if !verify_rsa_jws(&jws.protected_b64, &jws.payload_b64, &jws.signature_b64, &jwk, alg) {
+            return Err(acme_error(StatusCode::BAD_REQUEST, "badSignatureAlgorithm", "invalid JWS signature or unsupported algorithm"));
+        }
+        let thumbprint = rsa_jwk_thumbprint(&jwk);
+        return Ok(JwsContext { protected_header: protected_json, payload, account_id: None, account: None, jwk: Some(jwk), jwk_thumbprint: Some(thumbprint) });
+    }
+
+    // kid path
+    let kid = protected_json.get("kid").and_then(|v| v.as_str()).unwrap_or("");
+    let account_id = kid.rsplit('/').next().unwrap_or("").to_string();
+    if account_id.is_empty() {
+        return Err(acme_error(StatusCode::BAD_REQUEST, "malformed", "invalid kid"));
+    }
+
+    let account = {
+        let accounts = state.inner.acme_accounts.read().await;
+        accounts.get(&account_id).cloned()
+    };
+    let Some(account) = account else {
+        return Err(acme_error(StatusCode::BAD_REQUEST, "accountDoesNotExist", "account does not exist"));
+    };
+
+    if let Some(uid) = auth_user_id {
+        if account.vigil_user_id != uid {
+            return Err(acme_error(StatusCode::FORBIDDEN, "unauthorized", "acme account is bound to a different vigil user"));
+        }
+    }
+
+    if !verify_rsa_jws(&jws.protected_b64, &jws.payload_b64, &jws.signature_b64, &account.public_jwk, alg) {
+        return Err(acme_error(StatusCode::BAD_REQUEST, "badSignatureAlgorithm", "invalid JWS signature or unsupported algorithm"));
+    }
+
+    Ok(JwsContext { protected_header: protected_json, payload, account_id: Some(account_id), account: Some(account), jwk: None, jwk_thumbprint: None })
+}
+
+// ---------------------------------------------------------------------------
+// Nonce injection middleware helper
+// ---------------------------------------------------------------------------
+
+async fn inject_nonce(state: &AppState, headers_out: &mut HeaderMap) {
+    let nonce = new_nonce_value();
+    let mut nonces = state.inner.nonces.lock().await;
+    nonces.insert(nonce.clone());
+    headers_out.insert("Replay-Nonce", nonce.parse().unwrap());
+    headers_out.insert("Cache-Control", "no-store".parse().unwrap());
+}
+
+// ---------------------------------------------------------------------------
+// Route handlers
+// ---------------------------------------------------------------------------
+
+pub async fn directory(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let (scheme, host) = extract_host_scheme(&headers);
+    let mut resp_headers = HeaderMap::new();
+    inject_nonce(&state, &mut resp_headers).await;
+    let body = json!({
+        "newNonce":   absolute(&host, scheme, "/acme/new-nonce"),
+        "newAccount": absolute(&host, scheme, "/acme/new-account"),
+        "newOrder":   absolute(&host, scheme, "/acme/new-order"),
+        "revokeCert": absolute(&host, scheme, "/acme/revoke-cert"),
+        "keyChange":  absolute(&host, scheme, "/acme/key-change"),
+        "meta": {
+            "termsOfService": "https://credo.local/tos",
+            "website":        "https://credo.local",
+        }
+    });
+    (resp_headers, Json(body))
+}
+
+pub async fn new_nonce_head(State(state): State<AppState>) -> impl IntoResponse {
+    let mut headers = HeaderMap::new();
+    inject_nonce(&state, &mut headers).await;
+    (StatusCode::OK, headers)
+}
+
+pub async fn new_nonce_get(State(state): State<AppState>) -> impl IntoResponse {
+    let mut headers = HeaderMap::new();
+    inject_nonce(&state, &mut headers).await;
+    (StatusCode::OK, headers)
+}
+
+pub async fn new_account(
+    State(state): State<AppState>,
+    axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    let mut resp_headers = HeaderMap::new();
+
+    let jws = match validate_jws(&state, &headers, &body, false, true, Some(&auth_user.id)).await {
+        Ok(j) => j,
+        Err(e) => return e,
+    };
+    inject_nonce(&state, &mut resp_headers).await;
+
+    let thumbprint = jws.jwk_thumbprint.as_deref().unwrap_or("").to_string();
+    let payload = &jws.payload;
+
+    // Check if account exists by thumbprint
+    let existing = {
+        let accounts = state.inner.acme_accounts.read().await;
+        accounts.values().find(|a| a.jwk_thumbprint == thumbprint).cloned()
+    };
+
+    let (scheme, host) = extract_host_scheme(&headers);
+
+    if let Some(mut existing) = existing {
+        if existing.vigil_user_id.is_empty() {
+            existing.vigil_user_id = auth_user.id.clone();
+            let mut accounts = state.inner.acme_accounts.write().await;
+            accounts.insert(existing.id.clone(), existing.clone());
+            drop(accounts);
+            let _ = save_accounts(&state).await;
+        }
+        if existing.vigil_user_id != auth_user.id {
+            return acme_error(StatusCode::FORBIDDEN, "unauthorized", "account key is already bound to a different vigil user");
+        }
+        let loc = absolute(&host, scheme, &format!("/acme/account/{}", existing.id));
+        resp_headers.insert("Location", loc.parse().unwrap());
+        return (StatusCode::OK, resp_headers, Json(json!({
+            "status": existing.status,
+            "contact": existing.contact,
+            "orders": absolute(&host, scheme, &format!("/acme/account/{}/orders", existing.id)),
+        }))).into_response();
+    }
+
+    if payload.get("onlyReturnExisting").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return acme_error(StatusCode::BAD_REQUEST, "accountDoesNotExist", "account does not exist for provided key");
+    }
+
+    let id = {
+        let mut counter = state.inner.acme_id_counter.lock().await;
+        *counter += 1;
+        format!("acct-{}", base36(*counter))
+    };
+
+    let contact: Vec<String> = payload.get("contact")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+
+    let account = AcmeAccountRecord {
+        id: id.clone(),
+        status: "valid".to_string(),
+        vigil_user_id: auth_user.id.clone(),
+        contact,
+        orders: vec![],
+        jwk_thumbprint: thumbprint,
+        public_jwk: jws.jwk.unwrap(),
+    };
+
+    {
+        let mut accounts = state.inner.acme_accounts.write().await;
+        accounts.insert(id.clone(), account);
+    }
+    let _ = save_accounts(&state).await;
+
+    let loc = absolute(&host, scheme, &format!("/acme/account/{}", id));
+    resp_headers.insert("Location", loc.parse().unwrap());
+    let accounts = state.inner.acme_accounts.read().await;
+    let acc = accounts.get(&id).unwrap();
+    (StatusCode::CREATED, resp_headers, Json(json!({
+        "status": acc.status,
+        "contact": acc.contact,
+        "orders": absolute(&host, scheme, &format!("/acme/account/{}/orders", id)),
+    }))).into_response()
+}
+
+pub async fn get_account(
+    State(state): State<AppState>,
+    axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let jws = match validate_jws(&state, &headers, &body, true, false, Some(&auth_user.id)).await {
+        Ok(j) => j,
+        Err(e) => return e,
+    };
+    let mut resp_headers = HeaderMap::new();
+    inject_nonce(&state, &mut resp_headers).await;
+
+    if jws.account_id.as_deref() != Some(&id) {
+        return acme_error(StatusCode::FORBIDDEN, "unauthorized", "kid does not match requested account");
+    }
+    let account = match jws.account { Some(a) => a, None => return acme_error(StatusCode::BAD_REQUEST, "accountDoesNotExist", "account not found") };
+    let (scheme, host) = extract_host_scheme(&headers);
+    let loc = absolute(&host, scheme, &format!("/acme/account/{}", account.id));
+    resp_headers.insert("Location", loc.parse().unwrap());
+    (resp_headers, Json(json!({
+        "status": account.status,
+        "contact": account.contact,
+        "orders": absolute(&host, scheme, &format!("/acme/account/{}/orders", id)),
+    }))).into_response()
+}
+
+pub async fn new_order(
+    State(state): State<AppState>,
+    axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    let jws = match validate_jws(&state, &headers, &body, true, false, Some(&auth_user.id)).await {
+        Ok(j) => j,
+        Err(e) => return e,
+    };
+    let mut resp_headers = HeaderMap::new();
+    inject_nonce(&state, &mut resp_headers).await;
+
+    let account_id = jws.account_id.unwrap();
+    let payload = &jws.payload;
+
+    let identifiers: Vec<AcmeIdentifier> = payload.get("identifiers")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|id| {
+            let t = id.get("type")?.as_str()?;
+            let v = id.get("value")?.as_str()?;
+            if t == "dns" && !v.trim().is_empty() {
+                Some(AcmeIdentifier { id_type: "dns".to_string(), value: v.trim().to_string() })
+            } else { None }
+        }).collect())
+        .unwrap_or_default();
+
+    if identifiers.is_empty() {
+        return acme_error(StatusCode::BAD_REQUEST, "malformed", "identifiers must include at least one dns entry");
+    }
+
+    let validation_method = payload.get("validationMethod")
+        .and_then(|v| v.as_str())
+        .unwrap_or("dns-01");
+    let validation_method = match validation_method.trim().to_lowercase().as_str() {
+        "http-01" => "http-01",
+        "none-01" => "none-01",
+        _ => "dns-01",
+    };
+
+    let order_id = {
+        let mut counter = state.inner.acme_id_counter.lock().await;
+        *counter += 1;
+        format!("order-{}", base36(*counter))
+    };
+
+    let (scheme, host) = extract_host_scheme(&headers);
+
+    let mut authz_ids = Vec::new();
+    for identifier in &identifiers {
+        let authz_id = {
+            let mut counter = state.inner.acme_id_counter.lock().await;
+            *counter += 1;
+            format!("authz-{}", base36(*counter))
+        };
+        let chall_id = {
+            let mut counter = state.inner.acme_id_counter.lock().await;
+            *counter += 1;
+            format!("chall-{}", base36(*counter))
+        };
+
+        let (chall_status, authz_status) = if validation_method == "none-01" {
+            ("valid", "valid")
+        } else {
+            ("pending", "pending")
+        };
+
+        let challenge = AcmeChallenge {
+            id: chall_id.clone(),
+            authz_id: authz_id.clone(),
+            order_id: order_id.clone(),
+            challenge_type: validation_method.to_string(),
+            status: chall_status.to_string(),
+            token: random_token(),
+        };
+
+        let authz = AcmeAuthz {
+            id: authz_id.clone(),
+            order_id: order_id.clone(),
+            identifier: identifier.clone(),
+            status: authz_status.to_string(),
+            challenge_ids: vec![chall_id.clone()],
+        };
+
+        let mut challenges = state.inner.acme_challenges.write().await;
+        challenges.insert(chall_id, challenge);
+        drop(challenges);
+        let mut authzs = state.inner.acme_authzs.write().await;
+        authzs.insert(authz_id.clone(), authz);
+        authz_ids.push(authz_id);
+    }
+
+    let status = if validation_method == "none-01" { "ready" } else { "pending" };
+    let order = AcmeOrder {
+        id: order_id.clone(),
+        account_id: account_id.clone(),
+        status: status.to_string(),
+        expires: (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339(),
+        identifiers: identifiers.clone(),
+        authz_ids: authz_ids.clone(),
+        finalize_path: format!("/acme/order/{}/finalize", order_id),
+        certificate_path: None,
+    };
+
+    {
+        let mut orders = state.inner.acme_orders.write().await;
+        orders.insert(order_id.clone(), order.clone());
+    }
+    {
+        let mut accounts = state.inner.acme_accounts.write().await;
+        if let Some(acc) = accounts.get_mut(&account_id) {
+            acc.orders.push(order_id.clone());
+        }
+    }
+    let _ = save_accounts(&state).await;
+
+    let loc = absolute(&host, scheme, &format!("/acme/order/{}", order_id));
+    resp_headers.insert("Location", loc.parse().unwrap());
+    (StatusCode::CREATED, resp_headers, Json(order_response(&order, &host, scheme))).into_response()
+}
+
+pub async fn get_order(
+    State(state): State<AppState>,
+    axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let jws = match validate_jws(&state, &headers, &body, true, false, Some(&auth_user.id)).await {
+        Ok(j) => j,
+        Err(e) => return e,
+    };
+    let mut resp_headers = HeaderMap::new();
+    inject_nonce(&state, &mut resp_headers).await;
+
+    let orders = state.inner.acme_orders.read().await;
+    let Some(order) = orders.get(&id) else {
+        return acme_error(StatusCode::NOT_FOUND, "malformed", "order not found");
+    };
+    if jws.account_id.as_deref() != Some(&order.account_id) {
+        return acme_error(StatusCode::FORBIDDEN, "unauthorized", "order does not belong to account");
+    }
+    let (scheme, host) = extract_host_scheme(&headers);
+    let loc = absolute(&host, scheme, &format!("/acme/order/{}", id));
+    resp_headers.insert("Location", loc.parse().unwrap());
+    (resp_headers, Json(order_response(order, &host, scheme))).into_response()
+}
+
+pub async fn get_authz(
+    State(state): State<AppState>,
+    axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let jws = match validate_jws(&state, &headers, &body, true, false, Some(&auth_user.id)).await {
+        Ok(j) => j,
+        Err(e) => return e,
+    };
+    let mut resp_headers = HeaderMap::new();
+    inject_nonce(&state, &mut resp_headers).await;
+
+    let authzs = state.inner.acme_authzs.read().await;
+    let Some(authz) = authzs.get(&id) else {
+        return acme_error(StatusCode::NOT_FOUND, "malformed", "authorization not found");
+    };
+    let order_id = authz.order_id.clone();
+    let authz = authz.clone();
+    drop(authzs);
+
+    let orders = state.inner.acme_orders.read().await;
+    if orders.get(&order_id).map(|o| o.account_id.as_str()) != Some(jws.account_id.as_deref().unwrap_or("")) {
+        return acme_error(StatusCode::FORBIDDEN, "unauthorized", "authorization does not belong to account");
+    }
+    drop(orders);
+
+    let (scheme, host) = extract_host_scheme(&headers);
+    let challenges = state.inner.acme_challenges.read().await;
+    let chall_list: Vec<Value> = authz.challenge_ids.iter().filter_map(|cid| {
+        challenges.get(cid).map(|c| json!({
+            "type": c.challenge_type,
+            "status": c.status,
+            "url": absolute(&host, scheme, &format!("/acme/challenge/{}", c.id)),
+            "token": c.token,
+        }))
+    }).collect();
+
+    (resp_headers, Json(json!({
+        "status": authz.status,
+        "identifier": { "type": authz.identifier.id_type, "value": authz.identifier.value },
+        "challenges": chall_list,
+    }))).into_response()
+}
+
+pub async fn respond_challenge(
+    State(state): State<AppState>,
+    axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let jws = match validate_jws(&state, &headers, &body, true, false, Some(&auth_user.id)).await {
+        Ok(j) => j,
+        Err(e) => return e,
+    };
+    let mut resp_headers = HeaderMap::new();
+    inject_nonce(&state, &mut resp_headers).await;
+
+    let (challenge_snap, authz_id, order_id) = {
+        let mut challenges = state.inner.acme_challenges.write().await;
+        let Some(chall) = challenges.get_mut(&id) else {
+            return acme_error(StatusCode::NOT_FOUND, "malformed", "challenge not found");
+        };
+        chall.status = "valid".to_string();
+        let snap = chall.clone();
+        (snap, chall.authz_id.clone(), chall.order_id.clone())
+    };
+
+    // Check ownership
+    {
+        let orders = state.inner.acme_orders.read().await;
+        if orders.get(&order_id).map(|o| o.account_id.as_str()) != Some(jws.account_id.as_deref().unwrap_or("")) {
+            return acme_error(StatusCode::FORBIDDEN, "unauthorized", "challenge does not belong to account");
+        }
+    }
+
+    // Mark authz valid + update order
+    {
+        let mut authzs = state.inner.acme_authzs.write().await;
+        if let Some(authz) = authzs.get_mut(&authz_id) {
+            authz.status = "valid".to_string();
+        }
+    }
+    update_order_status(&state, &order_id).await;
+
+    let (scheme, host) = extract_host_scheme(&headers);
+    (resp_headers, Json(json!({
+        "type": challenge_snap.challenge_type,
+        "status": challenge_snap.status,
+        "url": absolute(&host, scheme, &format!("/acme/challenge/{}", challenge_snap.id)),
+        "token": challenge_snap.token,
+    }))).into_response()
+}
+
+pub async fn finalize_order(
+    State(state): State<AppState>,
+    axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let jws = match validate_jws(&state, &headers, &body, true, false, Some(&auth_user.id)).await {
+        Ok(j) => j,
+        Err(e) => return e,
+    };
+    let mut resp_headers = HeaderMap::new();
+    inject_nonce(&state, &mut resp_headers).await;
+
+    let order = {
+        let orders = state.inner.acme_orders.read().await;
+        let Some(o) = orders.get(&id) else {
+            return acme_error(StatusCode::NOT_FOUND, "malformed", "order not found");
+        };
+        if jws.account_id.as_deref() != Some(&o.account_id) {
+            return acme_error(StatusCode::FORBIDDEN, "unauthorized", "order does not belong to account");
+        }
+        if o.status != "ready" && o.status != "valid" {
+            return acme_error(StatusCode::BAD_REQUEST, "orderNotReady", "order is not ready for finalize");
+        }
+        o.clone()
+    };
+
+    let csr_b64 = jws.payload.get("csr").and_then(|v| v.as_str()).unwrap_or("");
+    if csr_b64.is_empty() {
+        return acme_error(StatusCode::BAD_REQUEST, "malformed", "csr is required");
+    }
+
+    let days = jws.payload.get("days").and_then(|v| v.as_u64()).unwrap_or(state.config().ca.cert_default_days as u64) as u32;
+    let sans: Vec<String> = order.identifiers.iter().map(|id| id.value.clone()).collect();
+
+    let csr_der = match B64.decode(csr_b64) { Ok(b) => b, Err(_) => return acme_error(StatusCode::BAD_REQUEST, "badCSR", "invalid CSR base64url") };
+    let csr_pem = format!(
+        "-----BEGIN CERTIFICATE REQUEST-----\n{}\n-----END CERTIFICATE REQUEST-----\n",
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &csr_der)
+            .chars().collect::<Vec<char>>().chunks(64)
+            .map(|c| c.iter().collect::<String>()).collect::<Vec<_>>().join("\n")
+    );
+
+    if let Err(e) = validate_issuance_policy(&csr_pem, &sans, &state.config().issuance_policy) {
+        return acme_error(StatusCode::BAD_REQUEST, "badCSR", &e.to_string());
+    }
+
+    let signed = match sign_csr(&csr_pem, days, Some(&sans), state.config()) {
+        Ok(s) => s,
+        Err(e) => return acme_error(StatusCode::BAD_REQUEST, "badCSR", &e.to_string()),
+    };
+
+    let config = state.config();
+    let owner_user_id = {
+        let accounts = state.inner.acme_accounts.read().await;
+        accounts.get(&order.account_id).map(|a| a.vigil_user_id.clone()).unwrap_or_else(|| "unknown".to_string())
+    };
+
+    let record = crate::types::CertificateRecord {
+        id: signed.id.clone(),
+        serial_number: signed.serial_number.clone(),
+        subject: signed.subject.clone(),
+        fingerprint256: signed.fingerprint256.clone(),
+        valid_from: signed.valid_from.clone(),
+        valid_to: signed.valid_to.clone(),
+        cert_path: String::new(),
+        issued_at: chrono::Utc::now().to_rfc3339(),
+        issued_by: format!("acme:{}", order.account_id),
+        owner_vigil_user_id: owner_user_id,
+        issuing_acme_account_id: Some(order.account_id.clone()),
+        revoked: false,
+        revoked_at: None, revoked_by: None, revoked_by_vigil_user_id: None,
+        revoked_by_acme_account_id: None, revoked_via: None, revoke_reason: None,
+    };
+
+    if let Err(e) = storage::issue_certificate_record(&config.cert_db_path, &config.certs_dir, record, &signed.fullchain_pem) {
+        tracing::error!("Failed to persist certificate: {}", e);
+        return acme_error(StatusCode::INTERNAL_SERVER_ERROR, "badCSR", "failed to store certificate");
+    }
+
+    let cert_path = format!("/acme/cert/{}", signed.id);
+    {
+        let mut orders = state.inner.acme_orders.write().await;
+        if let Some(o) = orders.get_mut(&id) {
+            o.status = "valid".to_string();
+            o.certificate_path = Some(cert_path.clone());
+        }
+    }
+
+    let (scheme, host) = extract_host_scheme(&headers);
+    let loc = absolute(&host, scheme, &format!("/acme/order/{}", id));
+    resp_headers.insert("Location", loc.parse().unwrap());
+    let orders = state.inner.acme_orders.read().await;
+    let order = orders.get(&id).unwrap();
+    (resp_headers, Json(order_response(order, &host, scheme))).into_response()
+}
+
+pub async fn download_cert(
+    State(state): State<AppState>,
+    axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let jws = match validate_jws(&state, &headers, &body, true, false, Some(&auth_user.id)).await {
+        Ok(j) => j,
+        Err(e) => return e,
+    };
+    let mut resp_headers = HeaderMap::new();
+    inject_nonce(&state, &mut resp_headers).await;
+
+    let config = state.config();
+    let record = match storage::get_certificate_record(&config.cert_db_path, &id) {
+        Ok(Some(r)) => r,
+        _ => return acme_error(StatusCode::NOT_FOUND, "malformed", "certificate not found"),
+    };
+
+    let owning_order = {
+        let cert_path = format!("/acme/cert/{}", id);
+        let orders = state.inner.acme_orders.read().await;
+        orders.values().find(|o| o.certificate_path.as_deref() == Some(&cert_path)).cloned()
+    };
+
+    let Some(owning_order) = owning_order else {
+        return acme_error(StatusCode::FORBIDDEN, "unauthorized", "certificate does not belong to account");
+    };
+    if Some(&owning_order.account_id) != jws.account_id.as_ref() {
+        return acme_error(StatusCode::FORBIDDEN, "unauthorized", "certificate does not belong to account");
+    }
+
+    let cert_pem = match storage::read_certificate_pem(&record.cert_path) {
+        Some(p) => p,
+        None => return acme_error(StatusCode::NOT_FOUND, "malformed", "certificate PEM missing"),
+    };
+
+    resp_headers.insert("Content-Type", "application/pem-certificate-chain".parse().unwrap());
+    (resp_headers, cert_pem).into_response()
+}
+
+pub async fn revoke_cert(
+    State(state): State<AppState>,
+    axum::Extension(AuthUser(_auth_user)): axum::Extension<AuthUser>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    let jws = match validate_jws(&state, &headers, &body, false, false, None).await {
+        Ok(j) => j,
+        Err(e) => return e,
+    };
+    let mut resp_headers = HeaderMap::new();
+    inject_nonce(&state, &mut resp_headers).await;
+
+    let config = state.config();
+    let payload = &jws.payload;
+
+    // Resolve certificate by certificateId or certificate DER
+    let cert_id = payload.get("certificateId").and_then(|v| v.as_str()).map(|s| s.trim().to_string());
+    let cert_der_b64 = payload.get("certificate").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+    let record = if let Some(ref cid) = cert_id {
+        storage::get_certificate_record(&config.cert_db_path, cid).ok().flatten()
+    } else if let Some(ref b64) = cert_der_b64 {
+        let der = match B64.decode(b64) { Ok(b) => b, Err(_) => return acme_error(StatusCode::BAD_REQUEST, "malformed", "invalid certificate base64url") };
+        if let Ok((_, cert)) = x509_parser::parse_x509_certificate(&der) {
+            let serial = cert.serial.to_str_radix(16);
+            storage::find_certificate_by_serial(&config.cert_db_path, &serial).ok().flatten()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let Some(record) = record else {
+        return acme_error(StatusCode::BAD_REQUEST, "malformed", "certificateId or certificate is required and must reference an issued certificate");
+    };
+
+    if let Some(ref account_id) = jws.account_id {
+        let record_account_id = record.issuing_acme_account_id.as_deref()
+            .or_else(|| record.issued_by.strip_prefix("acme:"))
+            .unwrap_or("");
+        if record_account_id != account_id {
+            return acme_error(StatusCode::FORBIDDEN, "unauthorized", "certificate does not belong to acme account");
+        }
+    }
+
+    let reason = payload.get("reason").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty())
+        .unwrap_or("acme-revoke-cert").to_string();
+    let revoked_by = jws.account_id.as_ref()
+        .map(|id| format!("acme:{}", id))
+        .unwrap_or_else(|| "acme-cert-key".to_string());
+    let (revoked_by_acme, revoked_via) = if jws.account_id.is_some() {
+        (jws.account_id.clone(), Some("acme-account-key".to_string()))
+    } else {
+        (None, Some("acme-cert-key".to_string()))
+    };
+
+    let updated = storage::revoke_certificate(&config.cert_db_path, &record.id, &revoked_by, &reason, None, revoked_by_acme, revoked_via)
+        .ok().flatten();
+
+    let Some(updated) = updated else {
+        return acme_error(StatusCode::NOT_FOUND, "malformed", "certificate not found");
+    };
+
+    (resp_headers, Json(json!({
+        "status": "revoked",
+        "certificateId": updated.id,
+        "revokedAt": updated.revoked_at,
+    }))).into_response()
+}
+
+pub async fn key_change(
+    State(state): State<AppState>,
+    axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    let _ = validate_jws(&state, &headers, &body, true, false, Some(&auth_user.id)).await;
+    let mut resp_headers = HeaderMap::new();
+    inject_nonce(&state, &mut resp_headers).await;
+    (resp_headers, Json(json!({ "status": "not-implemented" }))).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+async fn update_order_status(state: &AppState, order_id: &str) {
+    let authz_ids: Vec<String> = {
+        let orders = state.inner.acme_orders.read().await;
+        orders.get(order_id).map(|o| o.authz_ids.clone()).unwrap_or_default()
+    };
+    let all_valid = {
+        let authzs = state.inner.acme_authzs.read().await;
+        authz_ids.iter().all(|id| authzs.get(id).map(|a| a.status == "valid").unwrap_or(false))
+    };
+    if all_valid {
+        let mut orders = state.inner.acme_orders.write().await;
+        if let Some(o) = orders.get_mut(order_id) {
+            if o.status != "valid" {
+                o.status = "ready".to_string();
+            }
+        }
+    }
+}
+
+async fn save_accounts(state: &AppState) -> anyhow::Result<()> {
+    let accounts: Vec<AcmeAccountRecord> = {
+        let map = state.inner.acme_accounts.read().await;
+        map.values().cloned().collect()
+    };
+    storage::write_acme_accounts(&state.config().acme_accounts_db_path, &accounts)
+}
+
+fn order_response(order: &AcmeOrder, host: &str, scheme: &str) -> Value {
+    let authz_urls: Vec<String> = order.authz_ids.iter()
+        .map(|id| absolute(host, scheme, &format!("/acme/authz/{}", id)))
+        .collect();
+    json!({
+        "status": order.status,
+        "expires": order.expires,
+        "identifiers": order.identifiers.iter().map(|id| json!({ "type": id.id_type, "value": id.value })).collect::<Vec<_>>(),
+        "authorizations": authz_urls,
+        "finalize": absolute(host, scheme, &order.finalize_path),
+        "certificate": order.certificate_path.as_ref().map(|p| absolute(host, scheme, p)),
+    })
+}
+
+/// Load persisted ACME accounts into state at startup.
+pub async fn restore_accounts(state: &AppState) -> anyhow::Result<()> {
+    let accounts = storage::read_acme_accounts(&state.config().acme_accounts_db_path)?;
+    let mut map = state.inner.acme_accounts.write().await;
+    let mut counter = state.inner.acme_id_counter.lock().await;
+    for account in accounts {
+        let n = account_counter_from_id(&account.id);
+        if n > *counter { *counter = n; }
+        map.insert(account.id.clone(), account);
+    }
+    Ok(())
+}

@@ -1,0 +1,83 @@
+[package]
+name = "corgi"
+version = "0.1.0"
+edition = "2021"
+description = "Corgi - distributed TLS certificate agent for the credo system"
+
+[[bin]]
+name = "corgi"
+path = "src/main.rs"
+
+[dependencies]
+# Shared credo library
+credo-lib = { path = "../credo-lib" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP framework + low-level HTTP serving
+axum = { version = "0.7", features = ["macros"] }
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }
+http-body-util = "0.1"
+tower = { version = "0.4", features = ["util"] }
+
+# TLS (pure Rust — required for cross-compilation to MIPS/ARM musl)
+rustls = { version = "0.23", default-features = false, features = ["ring", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls-pemfile = "2"
+
+# HTTP client for Shepherd
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# Certificate generation (pure Rust — replaces openssl CLI)
+rcgen = "0.12"
+
+# Time (required by rcgen for certificate validity periods)
+time = { version = "0.3", features = ["std"] }
+
+# X.509 parsing
+x509-parser = "0.16"
+
+# PEM encoding/decoding
+pem = "3"
+
+# ECDSA P-256 (pure Rust key operations)
+p256 = { version = "0.13", features = ["pkcs8", "pem"] }
+pkcs8 = { version = "0.10", features = ["pem"] }
+
+# SHA-256 fingerprinting
+sha2 = "0.10"
+hex = "0.4"
+
+# Base64 decoding (for proxy-forwarded DER certs)
+base64 = "0.22"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
+# Structured logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Unix file operations (chmod, chown, atomic symlinks)
+nix = { version = "0.29", features = ["fs", "user"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Regex for hook argument validation
+regex = "1"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Random number generation for bootstrap token
+rand = "0.8"
+
+# Release profile is set in the workspace root Cargo.toml

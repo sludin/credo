@@ -1,0 +1,467 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/prompts.sh"
+source "$SCRIPT_DIR/lib/runner.sh"
+source "$SCRIPT_DIR/lib/config-gen.sh"
+
+# ---------------------------------------------------------------------------
+# Globals — wizard answer variables (populated by collect_answers)
+# ---------------------------------------------------------------------------
+
+CREDO_ROOT=""
+CA_TRUST_PATH=""
+DOMAIN=""
+
+VIGIL_HOSTNAME=""
+VIGIL_PORT=""
+VIGIL_INT_CA_KEY_PATH=""
+VIGIL_INT_CA_CERT_PATH=""
+VIGIL_DIR=""
+VIGIL_IDENTITY_URI=""
+
+SHEPHERD_HOSTNAME=""
+SHEPHERD_AGENT_PORT=""
+SHEPHERD_DASHBOARD_PORT=""
+SHEPHERD_DIR=""
+SHEPHERD_IDENTITY_URI=""
+
+CORGI_NAME=""
+CORGI_HOSTNAME=""
+CORGI_PORT=""
+CORGI_BOOTSTRAP_PORT=""
+CORGI_DIR=""
+CORGI_IDENTITY_URI=""
+
+ADMIN_IDENTITY_URI=""
+ADMIN_OUT_CERT=""
+ADMIN_OUT_KEY=""
+
+DNS_OVERRIDE_JSON=""   # optional; loaded from defaults file only
+
+DEFAULTS_FILE=""
+DEFAULTS_SAVE_PATH=""
+ORIG_DEFAULTS=""       # original file content cached in memory before any saves
+AUTO=false
+DRY_RUN=false
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
+
+# Read a field from the original defaults content; returns fallback if absent/empty.
+# Always reads from the in-memory snapshot so that save_defaults cannot clobber
+# values that haven't been prompted for yet.
+_df() {
+  local jq_path="$1" fallback="${2:-}"
+  local val=""
+  if [[ -n "$ORIG_DEFAULTS" ]]; then
+    val=$(printf '%s' "$ORIG_DEFAULTS" | jq -r "$jq_path // empty" 2>/dev/null || true)
+  fi
+  printf '%s' "${val:-$fallback}"
+}
+
+# Like _df but exits if neither the file nor the fallback provides a value.
+_require_df() {
+  local field="$1" jq_path="$2" fallback="${3:-}"
+  local val
+  val=$(_df "$jq_path" "$fallback")
+  if [[ -z "$val" ]]; then
+    die "--auto mode requires $field to be set in the defaults file"
+  fi
+  printf '%s' "$val"
+}
+
+save_defaults() {
+  mkdir -p "$(dirname "$DEFAULTS_SAVE_PATH")"
+  local dns_arg="${DNS_OVERRIDE_JSON:-null}"
+  jq -n \
+    --arg  credoRoot           "$CREDO_ROOT" \
+    --arg  caTrustPath         "$CA_TRUST_PATH" \
+    --arg  domain              "$DOMAIN" \
+    --arg  vigilHostname       "$VIGIL_HOSTNAME" \
+    --argjson vigilPort        "${VIGIL_PORT:-0}" \
+    --arg  vigilIntCaKeyPath   "$VIGIL_INT_CA_KEY_PATH" \
+    --arg  vigilIntCaCertPath  "$VIGIL_INT_CA_CERT_PATH" \
+    --arg  vigilDir            "$VIGIL_DIR" \
+    --arg  vigilIdentityUri    "$VIGIL_IDENTITY_URI" \
+    --arg  shepherdHostname    "$SHEPHERD_HOSTNAME" \
+    --argjson shepherdAgentPort    "${SHEPHERD_AGENT_PORT:-0}" \
+    --argjson shepherdDashboardPort "${SHEPHERD_DASHBOARD_PORT:-0}" \
+    --arg  shepherdDir         "$SHEPHERD_DIR" \
+    --arg  shepherdIdentityUri "$SHEPHERD_IDENTITY_URI" \
+    --arg  corgiName           "$CORGI_NAME" \
+    --arg  corgiHostname       "$CORGI_HOSTNAME" \
+    --argjson corgiPort        "${CORGI_PORT:-0}" \
+    --argjson corgiBootstrapPort "${CORGI_BOOTSTRAP_PORT:-0}" \
+    --arg  corgiDir            "$CORGI_DIR" \
+    --arg  corgiIdentityUri    "$CORGI_IDENTITY_URI" \
+    --arg  adminIdentityUri    "$ADMIN_IDENTITY_URI" \
+    --arg  adminOutCert        "$ADMIN_OUT_CERT" \
+    --arg  adminOutKey         "$ADMIN_OUT_KEY" \
+    --argjson dnsOverride      "$dns_arg" \
+    '{
+      credoRoot:   $credoRoot,
+      caTrustPath: $caTrustPath,
+      domain:      $domain,
+      vigil: {
+        hostname:      $vigilHostname,
+        port:          $vigilPort,
+        intCaKeyPath:  $vigilIntCaKeyPath,
+        intCaCertPath: $vigilIntCaCertPath,
+        dir:           $vigilDir,
+        identityUri:   $vigilIdentityUri
+      },
+      shepherd: {
+        hostname:      $shepherdHostname,
+        agentPort:     $shepherdAgentPort,
+        dashboardPort: $shepherdDashboardPort,
+        dir:           $shepherdDir,
+        identityUri:   $shepherdIdentityUri
+      },
+      corgi: {
+        name:          $corgiName,
+        hostname:      $corgiHostname,
+        port:          $corgiPort,
+        bootstrapPort: $corgiBootstrapPort,
+        dir:           $corgiDir,
+        identityUri:   $corgiIdentityUri
+      },
+      admin: {
+        identityUri: $adminIdentityUri,
+        outCert:     $adminOutCert,
+        outKey:      $adminOutKey
+      }
+    }
+    | if $dnsOverride != null then . + {dnsOverride: $dnsOverride} else . end' \
+    > "$DEFAULTS_SAVE_PATH"
+}
+
+# ---------------------------------------------------------------------------
+# Answer collection
+# ---------------------------------------------------------------------------
+
+collect_answers() {
+  # Load dnsOverride from defaults file (never prompted interactively)
+  DNS_OVERRIDE_JSON=$(_df '.dnsOverride' '')
+  if [[ "$DNS_OVERRIDE_JSON" == "null" ]]; then DNS_OVERRIDE_JSON=""; fi
+
+  # --- Base ---
+  if ! $AUTO; then printf '\n=== Base ===\n'; fi
+
+  if $AUTO; then
+    CREDO_ROOT=$(_require_df 'credoRoot' '.credoRoot')
+    CA_TRUST_PATH=$(_require_df 'caTrustPath' '.caTrustPath')
+    DOMAIN=$(_require_df 'domain' '.domain')
+  else
+    ask_required 'Installation root (credoRoot)' "$(_df '.credoRoot')"
+    CREDO_ROOT="$REPLY_VAL"
+    ask_required 'CA trust bundle path (caTrustPath)' "$(_df '.caTrustPath')"
+    CA_TRUST_PATH="$REPLY_VAL"
+    ask_required 'Base domain (e.g. example.com)' "$(_df '.domain')"
+    DOMAIN="$REPLY_VAL"
+  fi
+  save_defaults
+
+  # --- Vigil ---
+  if ! $AUTO; then printf '\n=== Vigil ===\n'; fi
+
+  local _def_vigil_key="$CREDO_ROOT/ca/int-ecdsa/private/int-ecdsa.key.pem"
+  local _def_vigil_cert="$CREDO_ROOT/ca/int-ecdsa/certs/int-ecdsa.cert.pem"
+  local _def_vigil_dir="$CREDO_ROOT/vigil"
+
+  if $AUTO; then
+    VIGIL_HOSTNAME=$(_require_df 'vigil.hostname' '.vigil.hostname' "vigil.$DOMAIN")
+    VIGIL_PORT=$(_require_df 'vigil.port' '.vigil.port' '7020')
+    VIGIL_INT_CA_KEY_PATH=$(_require_df 'vigil.intCaKeyPath' '.vigil.intCaKeyPath' "$_def_vigil_key")
+    VIGIL_INT_CA_CERT_PATH=$(_require_df 'vigil.intCaCertPath' '.vigil.intCaCertPath' "$_def_vigil_cert")
+    VIGIL_DIR=$(_require_df 'vigil.dir' '.vigil.dir' "$_def_vigil_dir")
+    VIGIL_IDENTITY_URI=$(_require_df 'vigil.identityUri' '.vigil.identityUri' 'vigil://credo/service/vigil')
+  else
+    ask_required 'Vigil hostname' "$(_df '.vigil.hostname' "vigil.$DOMAIN")"
+    VIGIL_HOSTNAME="$REPLY_VAL"
+    ask_int 'Vigil port' "$(_df '.vigil.port' '7020')"
+    VIGIL_PORT="$REPLY_VAL"
+    ask_required 'Intermediate CA private key path' "$(_df '.vigil.intCaKeyPath' "$_def_vigil_key")"
+    VIGIL_INT_CA_KEY_PATH="$REPLY_VAL"
+    ask_required 'Intermediate CA cert path' "$(_df '.vigil.intCaCertPath' "$_def_vigil_cert")"
+    VIGIL_INT_CA_CERT_PATH="$REPLY_VAL"
+    ask_required 'Vigil install directory' "$(_df '.vigil.dir' "$_def_vigil_dir")"
+    VIGIL_DIR="$REPLY_VAL"
+    ask_required 'Vigil identity URI' "$(_df '.vigil.identityUri' 'vigil://credo/service/vigil')"
+    VIGIL_IDENTITY_URI="$REPLY_VAL"
+  fi
+  save_defaults
+
+  # --- Shepherd ---
+  if ! $AUTO; then printf '\n=== Shepherd ===\n'; fi
+
+  local _def_shepherd_dir="$CREDO_ROOT/shepherd"
+
+  if $AUTO; then
+    SHEPHERD_HOSTNAME=$(_require_df 'shepherd.hostname' '.shepherd.hostname' "shepherd.$DOMAIN")
+    SHEPHERD_AGENT_PORT=$(_require_df 'shepherd.agentPort' '.shepherd.agentPort' '7010')
+    SHEPHERD_DASHBOARD_PORT=$(_require_df 'shepherd.dashboardPort' '.shepherd.dashboardPort' '7011')
+    SHEPHERD_DIR=$(_require_df 'shepherd.dir' '.shepherd.dir' "$_def_shepherd_dir")
+    SHEPHERD_IDENTITY_URI=$(_require_df 'shepherd.identityUri' '.shepherd.identityUri' 'vigil://credo/service/shepherd')
+  else
+    ask_required 'Shepherd hostname' "$(_df '.shepherd.hostname' "shepherd.$DOMAIN")"
+    SHEPHERD_HOSTNAME="$REPLY_VAL"
+    ask_int 'Shepherd agent port' "$(_df '.shepherd.agentPort' '7010')"
+    SHEPHERD_AGENT_PORT="$REPLY_VAL"
+    ask_int 'Shepherd dashboard port' "$(_df '.shepherd.dashboardPort' '7011')"
+    SHEPHERD_DASHBOARD_PORT="$REPLY_VAL"
+    ask_required 'Shepherd install directory' "$(_df '.shepherd.dir' "$_def_shepherd_dir")"
+    SHEPHERD_DIR="$REPLY_VAL"
+    ask_required 'Shepherd identity URI' "$(_df '.shepherd.identityUri' 'vigil://credo/service/shepherd')"
+    SHEPHERD_IDENTITY_URI="$REPLY_VAL"
+  fi
+  save_defaults
+
+  # --- Corgi ---
+  if ! $AUTO; then printf '\n=== Corgi ===\n'; fi
+
+  if $AUTO; then
+    CORGI_NAME=$(_require_df 'corgi.name' '.corgi.name')
+    CORGI_HOSTNAME=$(_require_df 'corgi.hostname' '.corgi.hostname' "${CORGI_NAME}.$DOMAIN")
+    CORGI_PORT=$(_require_df 'corgi.port' '.corgi.port' '7001')
+    CORGI_BOOTSTRAP_PORT=$(_require_df 'corgi.bootstrapPort' '.corgi.bootstrapPort' "$(( CORGI_PORT + 1 ))")
+    CORGI_DIR=$(_require_df 'corgi.dir' '.corgi.dir' "$CREDO_ROOT/corgi")
+    CORGI_IDENTITY_URI=$(_require_df 'corgi.identityUri' '.corgi.identityUri' "vigil://credo/node/$CORGI_NAME")
+  else
+    ask_required 'Corgi node name (e.g. corgi-A)' "$(_df '.corgi.name')"
+    CORGI_NAME="$REPLY_VAL"
+    ask_required 'Corgi hostname' "$(_df '.corgi.hostname' "${CORGI_NAME}.$DOMAIN")"
+    CORGI_HOSTNAME="$REPLY_VAL"
+    ask_int 'Corgi mTLS port' "$(_df '.corgi.port' '7001')"
+    CORGI_PORT="$REPLY_VAL"
+    ask_int 'Corgi bootstrap port' "$(_df '.corgi.bootstrapPort' "$(( CORGI_PORT + 1 ))")"
+    CORGI_BOOTSTRAP_PORT="$REPLY_VAL"
+    ask_required 'Corgi install directory' "$(_df '.corgi.dir' "$CREDO_ROOT/corgi")"
+    CORGI_DIR="$REPLY_VAL"
+    ask_required 'Corgi identity URI' "$(_df '.corgi.identityUri' "vigil://credo/node/$CORGI_NAME")"
+    CORGI_IDENTITY_URI="$REPLY_VAL"
+  fi
+  save_defaults
+}
+
+collect_admin_answers() {
+  if ! $AUTO; then printf '\n=== Admin account ===\n'; fi
+
+  local _def_uri="vigil://credo/dev/admin/admin"
+  local _def_cert="$HOME/.vigil/admin.pem"
+  local _def_key="$HOME/.vigil/admin.key"
+
+  if $AUTO; then
+    ADMIN_IDENTITY_URI=$(_require_df 'admin.identityUri' '.admin.identityUri' "$_def_uri")
+    ADMIN_OUT_CERT=$(expand_home "$(_require_df 'admin.outCert' '.admin.outCert' "$_def_cert")")
+    ADMIN_OUT_KEY=$(expand_home "$(_require_df 'admin.outKey' '.admin.outKey' "$_def_key")")
+  else
+    ask_required 'Admin identity URI' "$(_df '.admin.identityUri' "$_def_uri")"
+    ADMIN_IDENTITY_URI="$REPLY_VAL"
+    ask_required 'Admin cert output path' "$(_df '.admin.outCert' "$_def_cert")"
+    ADMIN_OUT_CERT=$(expand_home "$REPLY_VAL")
+    ask_required 'Admin key output path' "$(_df '.admin.outKey' "$_def_key")"
+    ADMIN_OUT_KEY=$(expand_home "$REPLY_VAL")
+  fi
+  save_defaults
+}
+
+# ---------------------------------------------------------------------------
+# Usage
+# ---------------------------------------------------------------------------
+
+print_help() {
+  cat >&2 <<'EOF'
+Usage: bootstrap-wizard [options]
+
+Options:
+  --defaults <file>   Load defaults from a JSON file; prompts with pre-filled values
+  --auto              Non-interactive; use defaults file values, fail on any missing
+  --dry-run           Generate config files only, do not start services
+  --help              Show this help
+
+Examples:
+  bootstrap-wizard                               # fully interactive
+  bootstrap-wizard --defaults defaults.json      # interactive with defaults
+  bootstrap-wizard --defaults defaults.json --auto  # non-interactive
+  bootstrap-wizard --dry-run                     # generate configs only
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+main() {
+  # Require jq
+  if ! command -v jq &>/dev/null; then
+    die "jq is required but not installed. Install it with: brew install jq  OR  apt install jq"
+  fi
+
+  # Parse args
+  while (( $# > 0 )); do
+    case "$1" in
+      --help|-h)    print_help; exit 0 ;;
+      --defaults)   DEFAULTS_FILE="$2"; shift 2 ;;
+      --auto)       AUTO=true; shift ;;
+      --dry-run)    DRY_RUN=true; shift ;;
+      *)            die "Unknown option: $1" ;;
+    esac
+  done
+
+  if $AUTO && [[ -z "$DEFAULTS_FILE" ]]; then
+    die '--auto requires --defaults <file>'
+  fi
+
+  DEFAULTS_SAVE_PATH="${DEFAULTS_FILE:-$PWD/defaults.json}"
+
+  if [[ -n "$DEFAULTS_FILE" ]]; then
+    [[ -f "$DEFAULTS_FILE" ]] || die "Defaults file not found: $DEFAULTS_FILE"
+    DEFAULTS_FILE="$(cd "$(dirname "$DEFAULTS_FILE")" && pwd)/$(basename "$DEFAULTS_FILE")"
+    # Cache original content so save_defaults cannot clobber values not yet collected
+    ORIG_DEFAULTS=$(cat "$DEFAULTS_FILE")
+  fi
+
+  printf 'Credo Bootstrap Wizard\n'
+  printf '%s\n' "========================================"
+  if $DRY_RUN; then printf '(dry-run mode — config files will be written, services will not start)\n'; fi
+  if $AUTO;    then printf '(auto mode — using defaults file, no interactive prompts)\n'; fi
+
+  collect_answers
+
+  generate_all_configs "$($DRY_RUN && echo yes || echo no)"
+
+  if $DRY_RUN; then
+    printf '\nDry run complete. Review the configs above, then run without --dry-run to bootstrap.\n\n'
+    exit 0
+  fi
+
+  # Kill any services from a previous interrupted run, then let the OS release ports
+  kill_stale_pids
+  sleep 0.3
+
+  # Log file paths — written to service dirs so they survive the wizard process
+  local VIGIL_LOG="$VIGIL_DIR/vigil.log"
+  local SHEPHERD_LOG="$SHEPHERD_DIR/shepherd.log"
+  local CORGI_BOOT_LOG="$CORGI_DIR/corgi-bootstrap.log"
+  local CORGI_LOG="$CORGI_DIR/corgi.log"
+
+  local VIGIL_EXEC="$VIGIL_DIR/vigil"
+  local SHEPHERD_EXEC="$SHEPHERD_DIR/shepherd"
+  local CORGI_EXEC="$CORGI_DIR/corgi"
+
+  # Step 1: Vigil
+  printf '\nStep 1/4: Starting vigil in bootstrap mode...\n'
+  local _vpid
+  _vpid=$(start_service "$VIGIL_EXEC" "$VIGIL_LOG" bootstrap)
+  track_pid "$_vpid"
+  local VIGIL_SECRET=""
+  capture_from_log "$VIGIL_LOG" 60 \
+    VIGIL_SECRET 'Vigil bootstrap secret: ([a-f0-9]{64})'
+  printf '  Vigil secret captured.\n'
+
+  # Step 2: Shepherd
+  printf '\nStep 2/4: Starting shepherd in bootstrap mode...\n'
+  local _spid
+  _spid=$(start_service "$SHEPHERD_EXEC" "$SHEPHERD_LOG" bootstrap --vigil-secret "$VIGIL_SECRET")
+  track_pid "$_spid"
+  local ADMIN_TOKEN=""
+  capture_from_log "$SHEPHERD_LOG" 60 \
+    ADMIN_TOKEN 'Shepherd bootstrap admin token: ([a-f0-9]{64})'
+  printf '  Admin token captured.\n'
+
+  # Step 3: Corgi
+  printf '\nStep 3/4: Starting corgi in bootstrap mode...\n'
+  local _cpid
+  _cpid=$(start_service "$CORGI_EXEC" "$CORGI_BOOT_LOG" bootstrap)
+  track_pid "$_cpid"
+  local CORGI_TOKEN="" CORGI_FINGERPRINT="" CORGI_BOOT_READY=""
+  capture_from_log "$CORGI_BOOT_LOG" 60 \
+    CORGI_TOKEN       'Corgi bootstrap token:[[:space:]]+([a-f0-9]{64})' \
+    CORGI_FINGERPRINT 'Corgi bootstrap fingerprint: ([a-f0-9]{64})' \
+    CORGI_BOOT_READY  'Bootstrap HTTPS server listening'
+  printf '  Corgi token and fingerprint captured.\n'
+
+  # Collect admin account answers
+  collect_admin_answers
+
+  # Step 4: Register admin
+  printf '\nStep 4/4: Registering admin account...\n'
+  run_command "$SHEPHERD_EXEC" \
+    bootstrap admin \
+    --admin-token    "$ADMIN_TOKEN" \
+    --identity-uri   "$ADMIN_IDENTITY_URI" \
+    --out-cert       "$ADMIN_OUT_CERT" \
+    --out-key        "$ADMIN_OUT_KEY" \
+    --domain         "$DOMAIN"
+
+  # Enroll corgi
+  printf '\nEnrolling corgi node...\n'
+  run_command "$SHEPHERD_EXEC" \
+    bootstrap corgi \
+    --admin-token    "$ADMIN_TOKEN" \
+    --name           "$CORGI_NAME" \
+    --token          "$CORGI_TOKEN" \
+    --fingerprint    "$CORGI_FINGERPRINT" \
+    --identity-uri   "$CORGI_IDENTITY_URI" \
+    --corgi-url      "https://$CORGI_HOSTNAME:$CORGI_BOOTSTRAP_PORT"
+
+  # Switch corgi to server mode
+  printf '\nRestarting corgi in server mode...\n'
+  printf '  vigil    → %s\n' "$VIGIL_LOG"
+  printf '  shepherd → %s\n' "$SHEPHERD_LOG"
+  printf '  corgi    → %s\n' "$CORGI_LOG"
+
+  kill "$_cpid" 2>/dev/null || true
+  local _corgi_restarted_at
+  _corgi_restarted_at=$(date +%s)
+  local _cpid2
+  _cpid2=$(start_service "$CORGI_EXEC" "$CORGI_LOG" server start)
+  track_pid "$_cpid2"
+
+  # Tail all three logs while waiting for certs
+  printf '\nWaiting for corgi to issue certificates (this may take up to 5 minutes)...\n'
+  printf '--- service logs ---\n'
+  local _vt _st _ct
+  _vt=$(tail_log_start "$VIGIL_LOG"    vigil)
+  _st=$(tail_log_start "$SHEPHERD_LOG" shepherd)
+  _ct=$(tail_log_start "$CORGI_LOG"    corgi)
+
+  local _corgi_live="$CORGI_DIR/store/live"
+  wait_for_certs "$_corgi_restarted_at" \
+    "$VIGIL_HOSTNAME:$_corgi_live/$VIGIL_HOSTNAME/fullchain.pem" \
+    "$SHEPHERD_HOSTNAME:$_corgi_live/$SHEPHERD_HOSTNAME/fullchain.pem" \
+    "$CORGI_HOSTNAME:$_corgi_live/$CORGI_HOSTNAME/fullchain.pem"
+
+  tail_log_stop "$_vt"
+  tail_log_stop "$_st"
+  tail_log_stop "$_ct"
+  printf '---\n'
+
+  printf '\n%s\n' "========================================"
+  printf 'Bootstrap complete!\n\n'
+  printf 'Production TLS certificates are on disk:\n'
+  printf '  vigil    → %s\n' "$_corgi_live/$VIGIL_HOSTNAME/fullchain.pem"
+  printf '  shepherd → %s\n' "$_corgi_live/$SHEPHERD_HOSTNAME/fullchain.pem"
+  printf '  corgi    → %s\n' "$_corgi_live/$CORGI_HOSTNAME/fullchain.pem"
+  printf '\n'
+  printf 'Admin cert: %s\n' "$ADMIN_OUT_CERT"
+  printf 'Admin key:  %s\n' "$ADMIN_OUT_KEY"
+  printf '\n'
+  printf 'All bootstrap services are being stopped.\n'
+  printf 'Start vigil, shepherd, and corgi via your process manager to go live.\n'
+  printf 'Add service restart hooks to corgi.config.json → serviceHooks once\n'
+  printf 'your process manager is configured.\n'
+  exit 0
+}
+
+# Cleanup on exit/signal
+trap 'kill_tracked_pids' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+main "$@"

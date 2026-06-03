@@ -1,0 +1,33 @@
+{
+  "includes": ["../vars.config.json"],
+
+  "assignments": [
+    {
+      "certName":    "shepherd.${vigilDomain}",
+      "corgi":       "corgi-shepherd",
+      "ca":          "vigil",
+      "domain":      "shepherd.${vigilDomain}",
+      "sans":        ["shepherd.${vigilDomain}"],
+      "identityUri": "${identityPrefix}/service/shepherd",
+      "validation":  { "type": "none-01" }
+    },
+    {
+      "certName":    "vigil.${vigilDomain}",
+      "corgi":       "corgi-vigil",
+      "ca":          "vigil",
+      "domain":      "vigil.${vigilDomain}",
+      "sans":        ["vigil.${vigilDomain}"],
+      "identityUri": "${identityPrefix}/service/vigil",
+      "validation":  { "type": "none-01" }
+    },
+    {
+      "certName":    "corgi-01.${vigilDomain}",
+      "corgi":       "corgi-01",
+      "ca":          "vigil",
+      "domain":      "corgi-01.${vigilDomain}",
+      "sans":        ["corgi-01.${vigilDomain}"],
+      "identityUri": "${identityPrefix}/node/corgi-01",
+      "validation":  { "type": "none-01" }
+    }
+  ]
+}

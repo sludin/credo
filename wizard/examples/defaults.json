@@ -1,0 +1,33 @@
+{
+  "credoRoot": "/var/apps/credo",
+  "caTrustPath": "/var/apps/credo/credo-catrust.pem",
+  "domain": "example.com",
+  "vigil": {
+    "hostname": "vigil.example.com",
+    "port": 7020,
+    "intCaKeyPath": "/var/apps/credo/ca/int-ecdsa/private/int-ecdsa.key.pem",
+    "intCaCertPath": "/var/apps/credo/ca/int-ecdsa/certs/int-ecdsa.cert.pem",
+    "dir": "/var/apps/credo/vigil",
+    "identityUri": "vigil://credo/service/vigil"
+  },
+  "shepherd": {
+    "hostname": "shepherd.example.com",
+    "agentPort": 7010,
+    "dashboardPort": 7011,
+    "dir": "/var/apps/credo/shepherd",
+    "identityUri": "vigil://credo/service/shepherd"
+  },
+  "corgi": {
+    "name": "corgi-A",
+    "hostname": "corgi.example.com",
+    "port": 7001,
+    "bootstrapPort": 7002,
+    "dir": "/var/apps/credo/corgi",
+    "identityUri": "vigil://credo/node/corgi-A"
+  },
+  "admin": {
+    "identityUri": "vigil://credo/dev/admin/alice",
+    "outCert": "~/.vigil/admin.pem",
+    "outKey": "~/.vigil/admin.key"
+  }
+}
