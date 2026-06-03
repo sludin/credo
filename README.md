@@ -8,6 +8,17 @@
 
 Current repository status: early scaffold with working HTTP services and placeholder certificate-management logic.
 
+## Background
+
+Credo started as an effort to monitor the health of my certificates on my various nodes. I wanted a single pane of glass
+that showed me everything at once. The auto-renew aspects of certbot and Caddy are great, but they did not
+provide the vivilbilty and alerting that I wanted. So I wrote a script (later agent) to monitor my certs and provide
+regular updates. Then I left my job at Google and had time on my hands, and Credo came from that. Is it needed? - probably
+not. Is it useful for me? - definitley. Is it over engineered? - oh yeah. Is is under engineered for an enterprise system? - very likely.
+
+A secondary goal was to do as much with agentic coding as I could as a learning exercise, so this is a product of me and my junior 
+coders Claude and Codex - whoever wasn't on a token time out. 
+
 ## Goals
 
 - Keep certificate state visible across machines.
