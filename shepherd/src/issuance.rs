@@ -339,9 +339,13 @@ async fn verify_dns_propagation(
     record_name: &str,
     expected_txt: &str,
 ) -> Result<()> {
-    use hickory_resolver::{config::*, TokioAsyncResolver};
+    use hickory_resolver::config::{NameServerConfig, ResolverConfig};
+    use hickory_resolver::TokioResolver;
 
-    let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
+    let resolver = TokioResolver::builder_with_config(
+        ResolverConfig::default(),
+        hickory_resolver::net::runtime::TokioRuntimeProvider::new(),
+    ).build().context("Building DNS resolver")?;
 
     // Walk up labels to find authoritative NS
     let ns_names = resolve_authoritative_ns(&resolver, record_name).await;
@@ -351,13 +355,18 @@ async fn verify_dns_propagation(
     }
 
     // Resolve NS IPs
+    use hickory_resolver::proto::rr::RData;
     let mut ns_ips: Vec<std::net::IpAddr> = Vec::new();
     for ns in &ns_names {
         if let Ok(r) = resolver.ipv4_lookup(ns.as_str()).await {
-            ns_ips.extend(r.iter().map(|ip| std::net::IpAddr::V4(**ip)));
+            ns_ips.extend(r.answers().iter().filter_map(|rec| {
+                if let RData::A(a) = &rec.data { Some(std::net::IpAddr::V4(a.0)) } else { None }
+            }));
         }
         if let Ok(r) = resolver.ipv6_lookup(ns.as_str()).await {
-            ns_ips.extend(r.iter().map(|ip| std::net::IpAddr::V6(**ip)));
+            ns_ips.extend(r.answers().iter().filter_map(|rec| {
+                if let RData::AAAA(aaaa) = &rec.data { Some(std::net::IpAddr::V6(aaaa.0)) } else { None }
+            }));
         }
     }
 
@@ -371,18 +380,27 @@ async fn verify_dns_propagation(
     for attempt in 1..=100u32 {
         let mut all_ok = true;
         for &ip in &ns_ips {
-            use hickory_resolver::config::*;
             let ns_cfg = ResolverConfig::from_parts(
                 None, vec![],
-                NameServerConfigGroup::from_ips_clear(&[ip], 53, true),
+                vec![NameServerConfig::udp_and_tcp(ip)],
             );
-            let ns_resolver = TokioAsyncResolver::tokio(ns_cfg, ResolverOpts::default());
+            let ns_resolver = match TokioResolver::builder_with_config(
+                ns_cfg,
+                hickory_resolver::net::runtime::TokioRuntimeProvider::new(),
+            ).build() {
+                Ok(r) => r,
+                Err(_) => { all_ok = false; continue; }
+            };
             match ns_resolver.txt_lookup(record_name).await {
                 Ok(records) => {
-                    let found = records.iter().any(|r| {
-                        r.txt_data().iter().any(|d| {
-                            std::str::from_utf8(d).map(|s| s == expected_txt).unwrap_or(false)
-                        })
+                    let found = records.answers().iter().any(|rec| {
+                        if let RData::TXT(txt) = &rec.data {
+                            txt.txt_data.iter().any(|d| {
+                                std::str::from_utf8(d).map(|s| s == expected_txt).unwrap_or(false)
+                            })
+                        } else {
+                            false
+                        }
                     });
                     if !found {
                         all_ok = false;
@@ -403,14 +421,24 @@ async fn verify_dns_propagation(
 }
 
 async fn resolve_authoritative_ns(
-    resolver: &hickory_resolver::TokioAsyncResolver,
+    resolver: &hickory_resolver::TokioResolver,
     fqdn: &str,
 ) -> Vec<String> {
+    use hickory_resolver::proto::rr::RData;
     let parts: Vec<&str> = fqdn.trim_end_matches('.').split('.').collect();
     for i in 0..parts.len().saturating_sub(1) {
         let zone = parts[i..].join(".");
         if let Ok(ns_lookup) = resolver.ns_lookup(zone.as_str()).await {
-            let names: Vec<String> = ns_lookup.iter().map(|r| r.to_string()).collect();
+            let names: Vec<String> = ns_lookup.answers()
+                .iter()
+                .filter_map(|r| {
+                    if let RData::NS(ns) = &r.data {
+                        Some(ns.0.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
             if !names.is_empty() {
                 return names;
             }
