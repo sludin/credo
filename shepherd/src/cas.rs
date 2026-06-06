@@ -80,9 +80,9 @@ pub fn load_cas(path: &Path) -> Result<HashMap<String, CaConfig>> {
         return Ok(HashMap::new());
     }
     let base = path.parent().unwrap_or(Path::new("."));
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Reading CA config: {}", path.display()))?;
-    let file: CaFile = serde_json::from_str(&content)
+    let value = credo_lib::config::load_json_config(path)
+        .with_context(|| format!("Loading CA config: {}", path.display()))?;
+    let file: CaFile = serde_json::from_value(value)
         .with_context(|| format!("Parsing CA config: {}", path.display()))?;
 
     let mut out = HashMap::new();

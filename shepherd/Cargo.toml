@@ -27,6 +27,7 @@ tower          = { version = "0.4", features = ["util"] }
 rustls         = { version = "0.23", default-features = false, features = ["ring", "tls12"] }
 tokio-rustls   = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 rustls-pemfile = "2"
+webpki-roots   = "1"
 
 # ACME client (pure Rust — no OpenSSL)
 instant-acme = "0.6"
@@ -71,6 +72,9 @@ thiserror = "1"
 # Time
 chrono = { version = "0.4", features = ["serde"] }
 time   = { version = "0.3", features = ["std"] }
+
+# .env file loading
+dotenvy = "0.15"
 
 # Misc
 rand  = "0.8"

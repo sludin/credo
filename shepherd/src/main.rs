@@ -98,6 +98,7 @@ enum CertCommands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
     let cli = Cli::parse();
     match cli.command {
         Commands::Server { cmd } => match cmd {

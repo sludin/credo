@@ -199,6 +199,68 @@ pub fn u16_from_env(env_key: &str, fallback: u16) -> u16 {
 }
 
 // ---------------------------------------------------------------------------
+// Common config file loader
+// ---------------------------------------------------------------------------
+
+/// Load a JSON config file through the full credo pipeline:
+///
+/// 1. Read file from disk
+/// 2. Parse JSON
+/// 3. Resolve `includes` recursively
+/// 4. Expand `${VAR}` — env vars as fallback, explicit `vars` block on top
+/// 5. Strip `_`-prefixed keys (JSON comment-out convention)
+/// 6. Remove the meta-keys `vars` and `includes` (consumed; would trip
+///    `deny_unknown_fields` structs)
+///
+/// Returns the fully-processed `serde_json::Value`.
+pub fn load_json_config(path: &Path) -> Result<serde_json::Value> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Reading config: {}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&content)
+        .with_context(|| format!("Parsing config: {}", path.display()))?;
+    let value = resolve_includes(
+        value,
+        path,
+        &mut vec![path.canonicalize().unwrap_or_else(|_| path.to_path_buf())],
+    )?;
+    let vars = vars_with_env(&value);
+    let mut value = interpolate_json(&value, &vars);
+    strip_underscore_keys(&mut value);
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("vars");
+        obj.remove("includes");
+    }
+    Ok(value)
+}
+
+/// Build a variable map seeded from the process environment (as fallback),
+/// then overlaid with the config's own `vars` block (which takes priority).
+/// Explicit vars may themselves reference env vars or earlier vars.
+fn vars_with_env(raw: &serde_json::Value) -> HashMap<String, String> {
+    let mut map: HashMap<String, String> = std::env::vars().collect();
+    if let Some(obj) = raw.get("vars").and_then(|v| v.as_object()) {
+        for (k, v) in obj {
+            let raw_str = match v {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            let resolved = interpolate(&raw_str, &map);
+            map.insert(k.clone(), resolved);
+        }
+    }
+    loop {
+        let snapshot = map.clone();
+        for val in map.values_mut() {
+            *val = interpolate(val, &snapshot);
+        }
+        if map == snapshot {
+            break;
+        }
+    }
+    map
+}
+
+// ---------------------------------------------------------------------------
 // Unknown-field guard (JSON comment-out convention)
 // ---------------------------------------------------------------------------
 

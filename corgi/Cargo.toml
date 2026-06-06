@@ -81,6 +81,9 @@ regex = "1"
 # Date/time
 chrono = { version = "0.4", features = ["serde"] }
 
+# .env file loading
+dotenvy = "0.15"
+
 # Random number generation for bootstrap token
 rand = "0.8"
 

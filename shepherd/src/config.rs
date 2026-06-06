@@ -1,12 +1,10 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use credo_lib::config::{
-    collect_vars, interpolate_json, resolve_includes, resolve_path, resolve_path_opt,
-    resolve_path_or, strip_underscore_keys, u16_from_env,
+    load_json_config, resolve_path, resolve_path_opt, resolve_path_or, u16_from_env,
 };
 
 // ---------------------------------------------------------------------------
@@ -171,47 +169,20 @@ pub fn load_config() -> Result<ShepherdConfig> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("shepherd.config.json"));
 
-    let content = std::fs::read_to_string(&config_path)
-        .with_context(|| format!("Reading config: {}", config_path.display()))?;
+    let mut raw_value = load_json_config(&config_path)
+        .with_context(|| format!("Loading config: {}", config_path.display()))?;
 
-    let mut raw_value: Value = serde_json::from_str(&content)
-        .with_context(|| format!("Parsing config: {}", config_path.display()))?;
-
-    // Resolve includes (must be first)
-    let mut seen = vec![config_path.canonicalize().unwrap_or_else(|_| config_path.clone())];
-    raw_value = resolve_includes(raw_value, &config_path, &mut seen)
-        .context("Resolving config includes")?;
-
-    // Collect vars (config vars block + env vars)
-    let mut vars: HashMap<String, String> = std::env::vars().collect();
-    let config_vars = collect_vars(&raw_value);
-    vars.extend(config_vars);
-
-    // Interpolate ${VAR} placeholders
-    raw_value = interpolate_json(&raw_value, &vars);
-
-    // Strip _prefixed keys (JSON comment-out mechanism)
-    strip_underscore_keys(&mut raw_value);
-
-    // Extract meta fields before handing to serde (they'd fail deny_unknown_fields)
+    // Extract baseDir before handing to serde (deny_unknown_fields would reject it)
     let base_dir: PathBuf = raw_value
         .get("baseDir")
         .and_then(|v| v.as_str())
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            config_path
-                .parent()
-                .unwrap_or(Path::new("."))
-                .to_path_buf()
-        });
+        .unwrap_or_else(|| config_path.parent().unwrap_or(Path::new(".")).to_path_buf());
 
     if let Some(obj) = raw_value.as_object_mut() {
-        obj.remove("vars");
-        obj.remove("includes");
         obj.remove("baseDir");
     }
 
-    // Deserialize with strict field checking — serde rejects unknown fields
     let raw: RawShepherdConfig = serde_json::from_value(raw_value)
         .map_err(|e| anyhow::anyhow!("Config error in {}: {}", config_path.display(), e))?;
 

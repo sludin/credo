@@ -392,6 +392,7 @@ dependencies = [
  "clap",
  "credo-lib",
  "credo-test",
+ "dotenvy",
  "hex",
  "http-body-util",
  "hyper",
@@ -628,6 +629,12 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "dotenvy"
+version = "0.15.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
 name = "ecdsa"
@@ -1272,8 +1279,6 @@ dependencies = [
 [[package]]
 name = "instant-acme"
 version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f67269b7c1c49bb71b356962f9f0419aa20e2a25b10a1c7d29aa34d34e65dbda"
 dependencies = [
  "base64 0.21.7",
  "http-body-util",
@@ -2392,6 +2397,7 @@ dependencies = [
  "clap",
  "credo-lib",
  "credo-test",
+ "dotenvy",
  "hex",
  "hickory-resolver",
  "http-body-util",
@@ -2420,6 +2426,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "webpki-roots",
  "x509-parser",
 ]
 
@@ -2951,6 +2958,7 @@ dependencies = [
  "clap",
  "credo-lib",
  "credo-test",
+ "dotenvy",
  "hex",
  "http-body-util",
  "hyper",

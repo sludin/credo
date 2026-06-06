@@ -4,6 +4,7 @@ use vigil::cli::{AcmeCommands, CaCommands, Cli, Commands, ServerCommands};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
     let cli = Cli::parse();
 
     match cli.command {

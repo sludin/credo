@@ -164,6 +164,12 @@ fn build_instant_acme_client(
         }
     }
 
+    // No custom CA configured — trust the standard Mozilla root store so
+    // public ACME endpoints (Let's Encrypt prod/staging) work out of the box.
+    if root_store.is_empty() {
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    }
+
     // Resolve client identity: disk files take priority; fall back to
     // identity_override when files are absent (bootstrap); else no client auth.
     let resolved_identity: Option<(Vec<u8>, Vec<u8>)> = if let Some(tls) = &config.tls {

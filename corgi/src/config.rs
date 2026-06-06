@@ -376,18 +376,9 @@ struct RawShepherdSync {
 // ---------------------------------------------------------------------------
 
 use credo_lib::config::{
-    bool_from_env, bool_from_value, collect_vars, interpolate_json, resolve_includes,
-    resolve_path, str_from_env, u16_from_env, u64_from_env, u64_from_value,
+    bool_from_env, bool_from_value, load_json_config, resolve_path, str_from_env,
+    u16_from_env, u64_from_env, u64_from_value,
 };
-
-/// Corgi-specific var resolution: seeds with all env vars so `${HOME}` etc.
-/// work in config values, then overlays the config `vars` block on top.
-fn resolve_vars(raw_value: &Value) -> HashMap<String, String> {
-    let mut vars: HashMap<String, String> = std::env::vars().collect();
-    let config_vars = collect_vars(raw_value);
-    vars.extend(config_vars);
-    vars
-}
 
 fn parse_mode(s: &str) -> Option<u32> {
     credo_lib::file_policy::parse_mode_octal(s).ok()
@@ -571,22 +562,10 @@ pub fn load_config() -> Result<CorgiConfig> {
         .canonicalize()
         .with_context(|| format!("Config file not found: {}", config_path.display()))?;
 
-    let content = std::fs::read_to_string(&config_path)
-        .with_context(|| format!("Reading config file: {}", config_path.display()))?;
+    let raw_value = load_json_config(&config_path)
+        .with_context(|| format!("Loading config: {}", config_path.display()))?;
 
-    let raw_value: Value = serde_json::from_str(&content)
-        .with_context(|| format!("Parsing config JSON: {}", config_path.display()))?;
-
-    // Resolve includes first (before interpolation)
-    let mut seen = vec![config_path.clone()];
-    let raw_value = resolve_includes(raw_value, &config_path, &mut seen)?;
-
-    // Build variable lookup and interpolate (env vars seeded before config vars)
-    let vars = resolve_vars(&raw_value);
-    let raw_value = interpolate_json(&raw_value, &vars);
-
-    // Deserialize into raw struct
-    let raw: RawConfig = serde_json::from_value(raw_value.clone())
+    let raw: RawConfig = serde_json::from_value(raw_value)
         .with_context(|| "Deserializing config")?;
 
     let config_dir = config_path.parent().unwrap_or(Path::new("."));

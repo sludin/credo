@@ -17,9 +17,9 @@ pub fn load_assignments(path: &Path) -> Result<Vec<ManagedAssignment>> {
     if !path.exists() {
         return Ok(vec![]);
     }
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Reading assignments: {}", path.display()))?;
-    let mut file: AssignmentsFile = serde_json::from_str(&content)
+    let value = credo_lib::config::load_json_config(path)
+        .with_context(|| format!("Loading assignments config: {}", path.display()))?;
+    let mut file: AssignmentsFile = serde_json::from_value(value)
         .with_context(|| format!("Parsing assignments: {}", path.display()))?;
     for a in &mut file.assignments {
         if a.cert_name.is_empty() {

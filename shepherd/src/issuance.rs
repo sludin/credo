@@ -544,7 +544,9 @@ fn find_challenge<'a>(
     match method {
         "dns-01" => challenges.iter().find(|c| c.r#type == ChallengeType::Dns01),
         "http-01" => challenges.iter().find(|c| c.r#type == ChallengeType::Http01),
-        _ => challenges.first(), // none-01 or unknown
+        // none-01 or other vigil-style: skip unrecognised challenge types that
+        // the server may include (e.g. dns-persist-01).
+        _ => challenges.iter().find(|c| c.r#type != ChallengeType::Unknown),
     }
 }
 

@@ -47,9 +47,9 @@ pub fn load_corgis(path: &Path) -> Result<Vec<CorgiNodeConfig>> {
         return Ok(vec![]);
     }
     let base = path.parent().unwrap_or(Path::new("."));
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Reading corgis config: {}", path.display()))?;
-    let file: CorgisFile = serde_json::from_str(&content)
+    let value = credo_lib::config::load_json_config(path)
+        .with_context(|| format!("Loading corgis config: {}", path.display()))?;
+    let file: CorgisFile = serde_json::from_value(value)
         .with_context(|| format!("Parsing corgis config: {}", path.display()))?;
 
     let defaults = file.defaults.as_ref();

@@ -74,6 +74,9 @@ thiserror = "1"
 chrono = { version = "0.4", features = ["serde"] }
 time = { version = "0.3", features = ["std"] }   # required by rcgen
 
+# .env file loading
+dotenvy = "0.15"
+
 # Misc
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }

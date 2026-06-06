@@ -29,13 +29,22 @@ impl HeProvider {
             .build()
             .context("Building HE DNS HTTP client")?;
 
+        let body = format!(
+            "hostname={}&password={}&txt={}",
+            record_name, ddns_key, txt_value
+        );
+        tracing::info!(
+            url = "https://dyn.dns.he.net/nic/update",
+            hostname = %record_name,
+            password = %ddns_key,
+            txt = %txt_value,
+            "HE DNS TXT update request"
+        );
+
         let resp = client
             .post("https://dyn.dns.he.net/nic/update")
-            .form(&[
-                ("hostname", record_name.as_str()),
-                ("password", ddns_key.as_str()),
-                ("txt", txt_value.as_str()),
-            ])
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
             .send()
             .await
             .context("POST to dyn.dns.he.net")?;

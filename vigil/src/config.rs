@@ -140,7 +140,7 @@ struct RawConfig {
 // Config utilities — from credo-lib
 // ---------------------------------------------------------------------------
 
-use credo_lib::config::{collect_vars, interpolate_json, resolve_includes, resolve_path};
+use credo_lib::config::{load_json_config, resolve_path};
 
 fn resolve(base: &Path, raw: Option<&str>, fallback: &str) -> PathBuf {
     resolve_path(base, raw.unwrap_or(fallback))
@@ -159,20 +159,10 @@ pub fn load_config() -> Result<VigilConfig> {
         .canonicalize()
         .unwrap_or(config_path.clone());
 
-    let content = std::fs::read_to_string(&config_path)
-        .with_context(|| format!("Reading vigil config: {}", config_path.display()))?;
+    let processed = load_json_config(&config_path)
+        .with_context(|| format!("Loading vigil config: {}", config_path.display()))?;
 
-    let raw_json: serde_json::Value = serde_json::from_str(&content)
-        .context("Parsing vigil.config.json as JSON")?;
-
-    // Resolve includes before interpolation (same order as TypeScript resolveIncludes).
-    let mut seen = vec![config_path.clone()];
-    let raw_json = resolve_includes(raw_json, &config_path, &mut seen)?;
-
-    let vars = collect_vars(&raw_json);
-    let interpolated = interpolate_json(&raw_json, &vars);
-
-    let raw: RawConfig = serde_json::from_value(interpolated)
+    let raw: RawConfig = serde_json::from_value(processed.clone())
         .context("Deserializing vigil config")?;
 
     let config_dir = config_path.parent().unwrap_or(Path::new(".")).to_path_buf();
@@ -211,13 +201,9 @@ pub fn load_config() -> Result<VigilConfig> {
         .unwrap_or_default();
     let _ = ca_block;
 
-    // Re-parse ca sub-block
     let ca_config = {
-        let ca_json = serde_json::from_str::<serde_json::Value>(&content)
-            .ok()
-            .and_then(|v| v.get("ca").cloned());
-        let raw_ca: RawCaBlock = ca_json
-            .map(|v| serde_json::from_value(v).unwrap_or_default())
+        let raw_ca: RawCaBlock = processed.get("ca")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
         CaConfig {
             curve: raw_ca.curve.unwrap_or_else(|| "P-384".to_string()),
