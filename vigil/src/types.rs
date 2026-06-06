@@ -59,8 +59,18 @@ pub struct CertificateRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcmeRsaJwk {
     pub kty: String,
+    // RSA fields
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub n: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub e: String,
+    // EC fields
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub crv: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub x: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub y: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

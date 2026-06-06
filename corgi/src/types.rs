@@ -13,10 +13,11 @@ pub struct FlockSummary {
     pub name: String,
     pub fingerprint256: Option<String>,
     pub valid_to: Option<String>,
-    pub lifetime_days: f64,
+    pub lifetime_days: Option<f64>,
     pub san_names: Vec<String>,
     pub domain: Option<String>,
     pub status: String,
+    pub key_exists: bool,
 }
 
 #[derive(Debug, Serialize)]

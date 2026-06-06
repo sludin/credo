@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Vigil - private certificate authority for the credo system"
 
+[lib]
+name = "vigil"
+path = "src/lib.rs"
+
 [[bin]]
 name = "vigil"
 path = "src/main.rs"
@@ -73,5 +77,10 @@ time = { version = "0.3", features = ["std"] }   # required by rcgen
 # Misc
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+credo-test = { path = "../credo-test" }
+tempfile   = "3"
+tokio      = { version = "1", features = ["full"] }
 
 # Release profile is set in the workspace root Cargo.toml

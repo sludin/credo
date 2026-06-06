@@ -134,10 +134,16 @@ pub async fn provision_cert(
             &state.corgi_client_pool,
             &node,
             &format!("/flock/{}/install", urlencoded(&cert_name)),
-            &json!({ "certPem": result.cert_pem }),
+            &json!({
+                "certPem":      result.cert_pem,
+                "chainPem":     result.chain_pem,
+                "fullchainPem": result.fullchain_pem,
+            }),
         ).await {
             tracing::warn!(corgi = %corgi_id, cert = %cert_name, error = %e,
                 "Cert issued but install failed; corgi will sync on next poll");
+        } else {
+            crate::corgi_client::evict(&state.corgi_client_pool, &node.name).await;
         }
     }
 
@@ -221,12 +227,19 @@ pub async fn renew_cert(
             Ok(result) => {
                 complete_job(&state2.renewal_jobs, job_id, result.fingerprint256.clone()).await;
                 if result.changed {
-                    let _ = corgi_post::<serde_json::Value>(
+                    let ok = corgi_post::<serde_json::Value>(
                         &state2.corgi_client_pool,
                         &node2,
                         &format!("/flock/{}/install", urlencoded(&cert_name2)),
-                        &json!({ "certPem": result.cert_pem }),
+                        &json!({
+                            "certPem":      result.cert_pem,
+                            "chainPem":     result.chain_pem,
+                            "fullchainPem": result.fullchain_pem,
+                        }),
                     ).await;
+                    if ok.is_ok() {
+                        crate::corgi_client::evict(&state2.corgi_client_pool, &node2.name).await;
+                    }
                 }
             }
             Err(e) => {

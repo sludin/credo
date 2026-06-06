@@ -1,50 +1,28 @@
-#![allow(dead_code)]
-
-extern crate credo_lib;
-
-mod acme;
-mod auth;
-mod bootstrap;
-mod ca;
-mod cli;
-mod config;
-mod ctlog;
-mod error;
-mod issuance_policy;
-mod log_middleware;
-mod openssl_db;
-mod pki_wire;
-mod revocation;
-mod routes;
-mod server;
-mod state;
-mod storage;
-mod types;
-
 use anyhow::Result;
-use cli::{AcmeCommands, CaCommands, Cli, Commands, ServerCommands};
 use clap::Parser;
+use vigil::cli::{AcmeCommands, CaCommands, Cli, Commands, ServerCommands};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Bootstrap => vigil::cli::run_server_start(true).await,
         Commands::Server { cmd } => match cmd {
             ServerCommands::Start { bootstrap } => {
-                cli::run_server_start(bootstrap).await
+                vigil::cli::run_server_start(bootstrap).await
             }
             ServerCommands::CheckConfig => {
-                cli::run_check_config()
+                vigil::cli::run_check_config()
             }
             ServerCommands::Status => {
-                let config = config::load_config()?;
-                let meta = ca::load_ca_metadata(&config)?;
+                let config = vigil::config::load_config()?;
+                let meta = vigil::ca::load_ca_metadata(&config)?;
                 println!("CA subject:      {}", meta.subject);
                 println!("CA serial:       {}", meta.serial_number);
                 println!("CA valid to:     {}", meta.valid_to);
                 println!("CA fingerprint:  {}", meta.fingerprint256);
-                let (total, revoked, active) = storage::certificate_stats(&config.cert_db_path)?;
+                let (total, revoked, active) = vigil::storage::certificate_stats(&config.cert_db_path)?;
                 println!("Certificates:    total={} active={} revoked={}", total, active, revoked);
                 Ok(())
             }
@@ -52,13 +30,13 @@ async fn main() -> Result<()> {
 
         Commands::Ca { cmd } => match cmd {
             CaCommands::AddUser { id, name, public_key_pem_file, active } => {
-                cli::run_ca_add_user(&id, &name, &public_key_pem_file, active)
+                vigil::cli::run_ca_add_user(&id, &name, &public_key_pem_file, active)
             }
             CaCommands::ExportCrl { out, format } => {
-                cli::run_ca_export_crl(out.as_deref(), &format)
+                vigil::cli::run_ca_export_crl(out.as_deref(), &format)
             }
             CaCommands::OcspCheck { id, serial } => {
-                cli::run_ca_ocsp_check(id.as_deref(), serial.as_deref())
+                vigil::cli::run_ca_ocsp_check(id.as_deref(), serial.as_deref())
             }
         },
 

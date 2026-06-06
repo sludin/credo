@@ -25,6 +25,7 @@ ca-vars.env
 
 # Top-level deploy config (contains hostnames — use examples/.deploy.json.example as template)
 .deploy.json
+.deploy*
 
 # TLS certificates (managed outside git)
 cert.pem
@@ -42,4 +43,9 @@ ceremony/ca/
 .scratch/
 target/
 lib/credo-lib-0.1.0.tgz
-deprecated
+deprecated/
+.claude/
+.scratch/
+
+
+

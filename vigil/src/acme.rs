@@ -4,7 +4,7 @@
 /// authz, challenge, finalize, cert, revoke-cert, key-change (stub).
 ///
 /// Validation method: none-01 (internal, auto-valid), http-01, dns-01.
-/// JWS algorithm: RS256, RS384, RS512 (RSA only, matching TypeScript version).
+/// JWS algorithm: RS256, RS384, RS512 (RSA) and ES256 (EC P-256).
 ///
 /// TODO(resilience): orders/authzs/challenges/nonces are in-memory only.
 /// See docs/vigil-rs-port-plan.md for the SQLite persistence plan.
@@ -116,6 +116,47 @@ fn rsa_jwk_thumbprint(jwk: &AcmeRsaJwk) -> String {
     B64.encode(Sha256::digest(canonical.as_bytes()))
 }
 
+fn ec_jwk_thumbprint(jwk: &AcmeRsaJwk) -> String {
+    // RFC 7638 canonical form: lexicographically sorted keys
+    let canonical = format!(r#"{{"crv":"{}","kty":"{}","x":"{}","y":"{}"}}"#,
+        jwk.crv, jwk.kty, jwk.x, jwk.y);
+    use sha2::{Digest, Sha256};
+    B64.encode(Sha256::digest(canonical.as_bytes()))
+}
+
+fn jwk_thumbprint(jwk: &AcmeRsaJwk) -> String {
+    if jwk.kty == "EC" { ec_jwk_thumbprint(jwk) } else { rsa_jwk_thumbprint(jwk) }
+}
+
+fn verify_ec_jws(protected_b64: &str, payload_b64: &str, sig_b64: &str, jwk: &AcmeRsaJwk) -> bool {
+    use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+    use p256::elliptic_curve::sec1::FromEncodedPoint;
+    use p256::{EncodedPoint, PublicKey};
+
+    let x_bytes = match B64.decode(&jwk.x) { Ok(b) => b, Err(_) => return false };
+    let y_bytes = match B64.decode(&jwk.y) { Ok(b) => b, Err(_) => return false };
+    let sig_bytes = match B64.decode(sig_b64) { Ok(b) => b, Err(_) => return false };
+
+    let point = EncodedPoint::from_affine_coordinates(
+        generic_array_from_slice(&x_bytes),
+        generic_array_from_slice(&y_bytes),
+        false,
+    );
+    let pk = match PublicKey::from_encoded_point(&point).into_option() {
+        Some(k) => k,
+        None => return false,
+    };
+    let vk = VerifyingKey::from(&pk);
+    let sig = match Signature::from_slice(&sig_bytes) { Ok(s) => s, Err(_) => return false };
+    let msg = format!("{}.{}", protected_b64, payload_b64);
+    vk.verify(msg.as_bytes(), &sig).is_ok()
+}
+
+#[allow(deprecated)]
+fn generic_array_from_slice(bytes: &[u8]) -> &p256::FieldBytes {
+    p256::FieldBytes::from_slice(bytes)
+}
+
 fn verify_rsa_jws(protected_b64: &str, payload_b64: &str, sig_b64: &str, jwk: &AcmeRsaJwk, alg: &str) -> bool {
     use rsa::signature::Verifier;
     use rsa::BigUint;
@@ -213,20 +254,35 @@ async fn validate_jws(
     };
 
     if has_jwk {
-        // Extract RSA JWK
         let jwk_val = &protected_json["jwk"];
+        let kty = jwk_val.get("kty").and_then(|v| v.as_str()).unwrap_or("");
         let jwk = AcmeRsaJwk {
-            kty: jwk_val.get("kty").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            n: jwk_val.get("n").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            e: jwk_val.get("e").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            kty: kty.to_string(),
+            n:   jwk_val.get("n").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            e:   jwk_val.get("e").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            crv: jwk_val.get("crv").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            x:   jwk_val.get("x").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            y:   jwk_val.get("y").and_then(|v| v.as_str()).unwrap_or("").to_string(),
         };
-        if jwk.kty != "RSA" || jwk.n.is_empty() || jwk.e.is_empty() {
-            return Err(acme_error(StatusCode::BAD_REQUEST, "badPublicKey", "only RSA JWK is currently supported"));
-        }
-        if !verify_rsa_jws(&jws.protected_b64, &jws.payload_b64, &jws.signature_b64, &jwk, alg) {
+        let valid = match kty {
+            "RSA" => {
+                if jwk.n.is_empty() || jwk.e.is_empty() {
+                    return Err(acme_error(StatusCode::BAD_REQUEST, "badPublicKey", "RSA JWK missing n or e"));
+                }
+                verify_rsa_jws(&jws.protected_b64, &jws.payload_b64, &jws.signature_b64, &jwk, alg)
+            }
+            "EC" => {
+                if jwk.x.is_empty() || jwk.y.is_empty() {
+                    return Err(acme_error(StatusCode::BAD_REQUEST, "badPublicKey", "EC JWK missing x or y"));
+                }
+                verify_ec_jws(&jws.protected_b64, &jws.payload_b64, &jws.signature_b64, &jwk)
+            }
+            _ => return Err(acme_error(StatusCode::BAD_REQUEST, "badPublicKey", "unsupported JWK kty; expected RSA or EC")),
+        };
+        if !valid {
             return Err(acme_error(StatusCode::BAD_REQUEST, "badSignatureAlgorithm", "invalid JWS signature or unsupported algorithm"));
         }
-        let thumbprint = rsa_jwk_thumbprint(&jwk);
+        let thumbprint = jwk_thumbprint(&jwk);
         return Ok(JwsContext { protected_header: protected_json, payload, account_id: None, account: None, jwk: Some(jwk), jwk_thumbprint: Some(thumbprint) });
     }
 
@@ -251,7 +307,12 @@ async fn validate_jws(
         }
     }
 
-    if !verify_rsa_jws(&jws.protected_b64, &jws.payload_b64, &jws.signature_b64, &account.public_jwk, alg) {
+    let sig_valid = if account.public_jwk.kty == "EC" {
+        verify_ec_jws(&jws.protected_b64, &jws.payload_b64, &jws.signature_b64, &account.public_jwk)
+    } else {
+        verify_rsa_jws(&jws.protected_b64, &jws.payload_b64, &jws.signature_b64, &account.public_jwk, alg)
+    };
+    if !sig_valid {
         return Err(acme_error(StatusCode::BAD_REQUEST, "badSignatureAlgorithm", "invalid JWS signature or unsupported algorithm"));
     }
 
@@ -455,11 +516,11 @@ pub async fn new_order(
 
     let validation_method = payload.get("validationMethod")
         .and_then(|v| v.as_str())
-        .unwrap_or("dns-01");
+        .unwrap_or("none-01");
     let validation_method = match validation_method.trim().to_lowercase().as_str() {
         "http-01" => "http-01",
-        "none-01" => "none-01",
-        _ => "dns-01",
+        "dns-01"  => "dns-01",
+        _         => "none-01",
     };
 
     let order_id = {
@@ -493,7 +554,9 @@ pub async fn new_order(
             id: chall_id.clone(),
             authz_id: authz_id.clone(),
             order_id: order_id.clone(),
-            challenge_type: validation_method.to_string(),
+            // none-01 is an internal auto-validate signal; report http-01 so
+            // standard ACME clients (e.g. instant-acme) can deserialize the type.
+            challenge_type: if validation_method == "none-01" { "http-01" } else { validation_method }.to_string(),
             status: chall_status.to_string(),
             token: random_token(),
         };

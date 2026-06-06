@@ -355,9 +355,9 @@ main() {
   local CORGI_EXEC="$CORGI_DIR/corgi"
 
   # Step 1: Vigil
-  printf '\nStep 1/4: Starting vigil in bootstrap mode...\n'
+  printf '\nStep 1/5: Starting vigil in bootstrap mode...\n'
   local _vpid
-  _vpid=$(start_service "$VIGIL_EXEC" "$VIGIL_LOG" bootstrap)
+  _vpid=$(VIGIL_CONFIG_PATH="$VIGIL_DIR/vigil.config.json" start_service "$VIGIL_EXEC" "$VIGIL_LOG" bootstrap)
   track_pid "$_vpid"
   local VIGIL_SECRET=""
   capture_from_log "$VIGIL_LOG" 60 \
@@ -365,9 +365,9 @@ main() {
   printf '  Vigil secret captured.\n'
 
   # Step 2: Shepherd
-  printf '\nStep 2/4: Starting shepherd in bootstrap mode...\n'
+  printf '\nStep 2/5: Starting shepherd in bootstrap mode...\n'
   local _spid
-  _spid=$(start_service "$SHEPHERD_EXEC" "$SHEPHERD_LOG" bootstrap --vigil-secret "$VIGIL_SECRET")
+  _spid=$(SHEPHERD_CONFIG_PATH="$SHEPHERD_DIR/shepherd.config.json" start_service "$SHEPHERD_EXEC" "$SHEPHERD_LOG" bootstrap server --vigil-secret "$VIGIL_SECRET")
   track_pid "$_spid"
   local ADMIN_TOKEN=""
   capture_from_log "$SHEPHERD_LOG" 60 \
@@ -375,9 +375,9 @@ main() {
   printf '  Admin token captured.\n'
 
   # Step 3: Corgi
-  printf '\nStep 3/4: Starting corgi in bootstrap mode...\n'
+  printf '\nStep 3/5: Starting corgi in bootstrap mode...\n'
   local _cpid
-  _cpid=$(start_service "$CORGI_EXEC" "$CORGI_BOOT_LOG" bootstrap)
+  _cpid=$(CORGI_CONFIG_PATH="$CORGI_DIR/corgi.config.json" start_service "$CORGI_EXEC" "$CORGI_BOOT_LOG" bootstrap)
   track_pid "$_cpid"
   local CORGI_TOKEN="" CORGI_FINGERPRINT="" CORGI_BOOT_READY=""
   capture_from_log "$CORGI_BOOT_LOG" 60 \
@@ -390,8 +390,8 @@ main() {
   collect_admin_answers
 
   # Step 4: Register admin
-  printf '\nStep 4/4: Registering admin account...\n'
-  run_command "$SHEPHERD_EXEC" \
+  printf '\nStep 4/5: Registering admin account...\n'
+  SHEPHERD_CONFIG_PATH="$SHEPHERD_DIR/shepherd.config.json" run_command "$SHEPHERD_EXEC" \
     bootstrap admin \
     --admin-token    "$ADMIN_TOKEN" \
     --identity-uri   "$ADMIN_IDENTITY_URI" \
@@ -401,7 +401,7 @@ main() {
 
   # Enroll corgi
   printf '\nEnrolling corgi node...\n'
-  run_command "$SHEPHERD_EXEC" \
+  SHEPHERD_CONFIG_PATH="$SHEPHERD_DIR/shepherd.config.json" run_command "$SHEPHERD_EXEC" \
     bootstrap corgi \
     --admin-token    "$ADMIN_TOKEN" \
     --name           "$CORGI_NAME" \
@@ -410,8 +410,9 @@ main() {
     --identity-uri   "$CORGI_IDENTITY_URI" \
     --corgi-url      "https://$CORGI_HOSTNAME:$CORGI_BOOTSTRAP_PORT"
 
-  # Switch corgi to server mode
-  printf '\nRestarting corgi in server mode...\n'
+  # Step 5: Restart corgi in server mode, wait for cert issuance, then
+  # restart vigil and shepherd with their production TLS certs.
+  printf '\nStep 5/5: Restarting corgi in server mode...\n'
   printf '  vigil    → %s\n' "$VIGIL_LOG"
   printf '  shepherd → %s\n' "$SHEPHERD_LOG"
   printf '  corgi    → %s\n' "$CORGI_LOG"
@@ -420,16 +421,22 @@ main() {
   local _corgi_restarted_at
   _corgi_restarted_at=$(date +%s)
   local _cpid2
-  _cpid2=$(start_service "$CORGI_EXEC" "$CORGI_LOG" server start)
+  _cpid2=$(CORGI_CONFIG_PATH="$CORGI_DIR/corgi.config.json" start_service "$CORGI_EXEC" "$CORGI_LOG" server start)
   track_pid "$_cpid2"
 
   # Tail all three logs while waiting for certs
   printf '\nWaiting for corgi to issue certificates (this may take up to 5 minutes)...\n'
-  printf '--- service logs ---\n'
+  printf '%s\n' '--- service logs ---'
+
+
   local _vt _st _ct
+
   _vt=$(tail_log_start "$VIGIL_LOG"    vigil)
   _st=$(tail_log_start "$SHEPHERD_LOG" shepherd)
   _ct=$(tail_log_start "$CORGI_LOG"    corgi)
+  track_pid "$_vt"
+  track_pid "$_st"
+  track_pid "$_ct"
 
   local _corgi_live="$CORGI_DIR/store/live"
   wait_for_certs "$_corgi_restarted_at" \
@@ -440,7 +447,31 @@ main() {
   tail_log_stop "$_vt"
   tail_log_stop "$_st"
   tail_log_stop "$_ct"
-  printf '---\n'
+  printf '%s\n' '---'
+
+  # Kill bootstrap vigil and shepherd; restart in production server mode
+  # using the freshly-issued TLS certs.
+  printf '\nRestarting vigil and shepherd in server mode...\n'
+  kill "$_vpid" 2>/dev/null || true
+  kill "$_spid" 2>/dev/null || true
+  sleep 0.3
+
+  VIGIL_CONFIG_PATH="$VIGIL_DIR/vigil.config.json" \
+    "$VIGIL_EXEC" server start >> "$VIGIL_LOG" 2>&1 &
+  local _vpid_prod=$!
+  printf '  vigil    running (pid %d) → %s\n' "$_vpid_prod" "$VIGIL_LOG"
+
+  SHEPHERD_CONFIG_PATH="$SHEPHERD_DIR/shepherd.config.json" \
+    "$SHEPHERD_EXEC" server start >> "$SHEPHERD_LOG" 2>&1 &
+  local _spid_prod=$!
+  printf '  shepherd running (pid %d) → %s\n' "$_spid_prod" "$SHEPHERD_LOG"
+
+  printf '  corgi    running (pid %d) → %s\n' "$_cpid2" "$CORGI_LOG"
+
+  # Write the production pids for future cleanup runs, then clear the
+  # tracking array so the exit trap does not stop the running services.
+  printf '[%d,%d,%d]\n' "$_vpid_prod" "$_spid_prod" "$_cpid2" > "$PIDS_FILE"
+  TRACKED_PIDS=()
 
   printf '\n%s\n' "========================================"
   printf 'Bootstrap complete!\n\n'
@@ -452,8 +483,9 @@ main() {
   printf 'Admin cert: %s\n' "$ADMIN_OUT_CERT"
   printf 'Admin key:  %s\n' "$ADMIN_OUT_KEY"
   printf '\n'
-  printf 'All bootstrap services are being stopped.\n'
-  printf 'Start vigil, shepherd, and corgi via your process manager to go live.\n'
+  printf 'All three services are now running in production mode.\n'
+  printf 'Hand them off to your process manager (systemd, launchd, etc.) to\n'
+  printf 'keep them running across reboots.\n'
   printf 'Add service restart hooks to corgi.config.json → serviceHooks once\n'
   printf 'your process manager is configured.\n'
   exit 0

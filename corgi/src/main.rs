@@ -1,31 +1,12 @@
-// Suppress dead_code warnings for fields/methods that are part of the protocol
-// surface but not yet consumed internally (e.g. `monitor`, `dns_override`,
-// `display_name`) — these exist for protocol parity with the TypeScript version.
 #![allow(dead_code)]
-
-mod archive;
-mod assignments;
-mod auth;
-mod bootstrap;
-mod cert_ops;
-mod config;
-mod error;
-mod hooks;
-mod log_middleware;
-mod routes;
-mod server;
-mod shepherd;
-mod state;
-mod sync;
-mod types;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
 use tokio_rustls::TlsAcceptor;
 
-use config::load_config;
-use state::AppState;
+use corgi::config::load_config;
+use corgi::state::AppState;
 
 // ---------------------------------------------------------------------------
 // CLI structure
@@ -93,11 +74,11 @@ async fn cmd_bootstrap(_out: Option<String>, dry_run: bool) -> Result<()> {
         println!("Dry run: would start bootstrap server on {}:{}", config.bind, config.bootstrap_port);
         println!("  Node ID:     {}", config.node_id);
         println!("  Common name: {}", config.common_name);
-        println!("  Key path:    {}", config.tls.key_path.display());
+        println!("  Key path:    {}", config.tls.cert_path.display());
         return Ok(());
     }
 
-    bootstrap::run_bootstrap(Arc::new(config)).await?;
+    corgi::bootstrap::run_bootstrap(Arc::new(config)).await?;
     println!("Bootstrap complete. Restart Corgi: corgi server start");
     Ok(())
 }
@@ -117,18 +98,16 @@ async fn cmd_server_start() -> Result<()> {
         "Corgi starting"
     );
 
-    hooks::validate_hooks(&config);
+    corgi::hooks::validate_hooks(&config);
 
     let state = AppState::new(config.clone());
 
-    // Build TLS config for control API
-    let tls_config = server::build_server_tls(&config)
+    let tls_config = corgi::server::build_server_tls(&config)
         .context("Building mTLS server config")?;
     let acceptor = TlsAcceptor::from(tls_config);
 
-    // Bind listeners
     let control_listener =
-        server::bind_tcp(&config.bind, config.mtls_port)
+        corgi::server::bind_tcp(&config.bind, config.mtls_port)
             .await
             .with_context(|| format!("Binding control API on {}:{}", config.bind, config.mtls_port))?;
 
@@ -138,9 +117,8 @@ async fn cmd_server_start() -> Result<()> {
         "Control API listening"
     );
 
-    // Challenge listener (optional)
     let challenge_listener = if config.http_challenge.enabled {
-        let l = server::bind_tcp(&config.http_challenge.bind, config.http_challenge.port)
+        let l = corgi::server::bind_tcp(&config.http_challenge.bind, config.http_challenge.port)
             .await
             .with_context(|| {
                 format!(
@@ -157,26 +135,22 @@ async fn cmd_server_start() -> Result<()> {
         None
     };
 
-    // Build routers
-    let control_router = server::build_control_router(state.clone());
-    let challenge_router = server::build_challenge_router(state.clone());
+    let control_router = corgi::server::build_control_router(state.clone());
+    let challenge_router = corgi::server::build_challenge_router(state.clone());
 
-    // Start sync loop in background
     let sync_state = state.clone();
     tokio::spawn(async move {
-        sync::run_sync_loop(sync_state).await;
+        corgi::sync::run_sync_loop(sync_state).await;
     });
 
-    // Start challenge server if enabled
     if let Some(cl) = challenge_listener {
         let cr = challenge_router.clone();
         tokio::spawn(async move {
-            server::serve_http(cl, cr).await;
+            corgi::server::serve_http(cl, cr).await;
         });
     }
 
-    // Run control API (blocks)
-    server::serve_tls(control_listener, acceptor, control_router).await;
+    corgi::server::serve_tls(control_listener, acceptor, control_router).await;
 
     Ok(())
 }
@@ -205,10 +179,9 @@ async fn cmd_check_config() -> Result<()> {
     println!("  Flock entries: {}", config.flock.len());
     println!();
 
-    // Check key paths
     for (label, path) in &[
         ("TLS cert", &config.tls.cert_path),
-        ("TLS key", &config.tls.key_path),
+        ("TLS key", &config.tls.cert_path),
         ("mTLS client cert", &config.mtls.cert_path),
         ("mTLS client key", &config.mtls.key_path),
     ] {
@@ -216,7 +189,6 @@ async fn cmd_check_config() -> Result<()> {
             println!("  [ok] {}: {}", label, path.display());
         } else {
             println!("  [missing] {}: {}", label, path.display());
-            // Missing keys are expected before bootstrap — warn but don't fail
         }
     }
 
@@ -230,7 +202,6 @@ async fn cmd_check_config() -> Result<()> {
 
     println!();
 
-    // Best-effort Shepherd connectivity check (ignore TLS errors like Node.js version does)
     println!("Checking Shepherd connectivity...");
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
@@ -266,7 +237,6 @@ async fn cmd_check_config() -> Result<()> {
 // Logging setup
 // ---------------------------------------------------------------------------
 
-fn init_logging(level: config::LogLevel) {
-    // Delegate to credo-lib; config::LogLevel maps to credo_lib::LogLevel by same values.
+fn init_logging(level: corgi::config::LogLevel) {
     credo_lib::log::init_logging(credo_lib::LogLevel::from_str(level.as_tracing_filter()));
 }

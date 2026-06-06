@@ -24,10 +24,16 @@ use crate::storage;
 // ---------------------------------------------------------------------------
 
 pub fn build_router(state: AppState) -> Router {
-    // ACME routes — no mTLS auth required (JWS handles their own auth)
-    let acme = Router::new()
-        .route("/acme/directory",         get(crate::acme::directory))
-        .route("/acme/new-nonce",         head(crate::acme::new_nonce_head).get(crate::acme::new_nonce_get))
+    // ACME routes — mTLS required; auth_middleware sets AuthUser for JWS handlers
+    // Directory and nonce are unauthenticated entry points; all others require a
+    // valid client cert matching rbacIdentities.
+    let acme_public = Router::new()
+        .route("/acme/directory", get(crate::acme::directory))
+        .route("/acme/new-nonce", head(crate::acme::new_nonce_head).get(crate::acme::new_nonce_get))
+        .layer(middleware::from_fn(log_middleware))
+        .with_state(state.clone());
+
+    let acme_protected = Router::new()
         .route("/acme/new-account",       post(crate::acme::new_account))
         .route("/acme/account/:id",       post(crate::acme::get_account))
         .route("/acme/new-order",         post(crate::acme::new_order))
@@ -38,6 +44,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/acme/cert/:id",          post(crate::acme::download_cert))
         .route("/acme/revoke-cert",       post(crate::acme::revoke_cert))
         .route("/acme/key-change",        post(crate::acme::key_change))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
         .layer(middleware::from_fn(log_middleware))
         .with_state(state.clone());
 
@@ -65,7 +72,8 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state.clone());
 
     Router::new()
-        .merge(acme)
+        .merge(acme_public)
+        .merge(acme_protected)
         .merge(bootstrap)
         .merge(protected)
 }

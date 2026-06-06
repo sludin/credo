@@ -34,20 +34,28 @@ pub struct AppState {
     pub in_progress:       Arc<Mutex<HashMap<String, Weak<Notify>>>>,
     /// mTLS client for proxying admin requests to Vigil (None if vigilUrl not configured)
     pub vigil_client:      Option<reqwest::Client>,
+    /// One-time admin token for bootstrap API endpoints (None in normal mode)
+    pub bootstrap_admin_token: Arc<Mutex<Option<String>>>,
 }
 
 impl AppState {
+    /// `cert_pem` / `key_pem`: shepherd's own cert+key as in-memory PEM strings.
+    /// Provided during bootstrap so the vigil client can be built without reading disk.
+    /// `admin_token`: one-time bootstrap token stored for the bootstrap API endpoints.
     pub fn new(
         config: ShepherdConfig,
         jwt_keys: JwtKeys,
         accounts: Vec<Account>,
         cas: HashMap<String, CaConfig>,
+        cert_pem: Option<String>,
+        key_pem: Option<String>,
+        admin_token: Option<String>,
     ) -> Self {
         let refresh_token_path = config.renewal_jobs_dir.as_ref()
             .map(|d| d.join("refresh-tokens.json"));
 
         let vigil_client = if config.vigil_url.is_some() {
-            match build_vigil_client(&config, &cas) {
+            match build_vigil_client(&config, &cas, cert_pem.as_deref(), key_pem.as_deref()) {
                 Ok(c) => Some(c),
                 Err(e) => { tracing::warn!("Failed to build Vigil client: {}", e); None }
             }
@@ -68,31 +76,45 @@ impl AppState {
             corgis_mtime: Arc::new(Mutex::new(None)),
             assignments_mtime: Arc::new(Mutex::new(None)),
             corgi_client_pool: Arc::new(RwLock::new(HashMap::new())),
-            acme_accounts: AcmeAccountCache::new(),
+            acme_accounts: match (cert_pem.as_deref(), key_pem.as_deref()) {
+                (Some(c), Some(k)) => AcmeAccountCache::with_identity(c, k),
+                _ => AcmeAccountCache::new(),
+            },
             in_progress: Arc::new(Mutex::new(HashMap::new())),
             vigil_client,
+            bootstrap_admin_token: Arc::new(Mutex::new(admin_token)),
         }
     }
 }
 
-fn build_vigil_client(config: &ShepherdConfig, cas: &HashMap<String, CaConfig>) -> anyhow::Result<reqwest::Client> {
-    // Prefer cert/key/ca from the vigil ACME CA config, fall back to shepherd's own TLS creds
+/// Build the Vigil mTLS reqwest client.
+/// Uses in-memory PEM strings when provided (bootstrap mode); falls back to disk paths.
+fn build_vigil_client(
+    config: &ShepherdConfig,
+    cas: &HashMap<String, CaConfig>,
+    cert_pem: Option<&str>,
+    key_pem: Option<&str>,
+) -> anyhow::Result<reqwest::Client> {
     let vigil_ca = cas.values().find(|ca| ca.provider == "vigil" && ca.protocol == "acme");
-
-    let cert_path = vigil_ca.and_then(|ca| ca.config.tls.as_ref()?.cert_path.clone())
-        .unwrap_or_else(|| config.tls.cert_path.clone());
-    let key_path = vigil_ca.and_then(|ca| ca.config.tls.as_ref()?.key_path.clone())
-        .unwrap_or_else(|| config.tls.key_path.clone());
-    let ca_path = vigil_ca.and_then(|ca| ca.config.tls.as_ref()?.ca_path.clone())
-        .unwrap_or_else(|| config.tls.client_ca_path.clone());
     let insecure = vigil_ca.map(|ca| ca.config.insecure_skip_verify).unwrap_or(false);
 
-    let cert_pem = std::fs::read(&cert_path)
-        .map_err(|e| anyhow::anyhow!("Reading Vigil client cert {}: {}", cert_path.display(), e))?;
-    let key_pem = std::fs::read(&key_path)
-        .map_err(|e| anyhow::anyhow!("Reading Vigil client key {}: {}", key_path.display(), e))?;
-    let mut identity_pem = cert_pem;
-    identity_pem.extend_from_slice(&key_pem);
+    // Cert + key: prefer in-memory PEM (bootstrap mode), else read from disk.
+    let identity_pem: Vec<u8> = if let (Some(c), Some(k)) = (cert_pem, key_pem) {
+        let mut v = c.as_bytes().to_vec();
+        v.extend_from_slice(k.as_bytes());
+        v
+    } else {
+        let cert_path = vigil_ca.and_then(|ca| ca.config.tls.as_ref()?.cert_path.clone())
+            .unwrap_or_else(|| config.tls.cert_path.clone());
+        let key_path = vigil_ca.and_then(|ca| ca.config.tls.as_ref()?.key_path.clone())
+            .unwrap_or_else(|| config.tls.key_path.clone());
+        let mut v = std::fs::read(&cert_path)
+            .map_err(|e| anyhow::anyhow!("Reading Vigil client cert {}: {}", cert_path.display(), e))?;
+        v.extend_from_slice(&std::fs::read(&key_path)
+            .map_err(|e| anyhow::anyhow!("Reading Vigil client key {}: {}", key_path.display(), e))?);
+        v
+    };
+
     let identity = reqwest::Identity::from_pem(&identity_pem)
         .map_err(|e| anyhow::anyhow!("Building Vigil mTLS identity: {}", e))?;
 
@@ -103,6 +125,8 @@ fn build_vigil_client(config: &ShepherdConfig, cas: &HashMap<String, CaConfig>) 
     if insecure {
         builder = builder.danger_accept_invalid_certs(true);
     } else {
+        let ca_path = vigil_ca.and_then(|ca| ca.config.tls.as_ref()?.ca_path.clone())
+            .unwrap_or_else(|| config.tls.client_ca_path.clone());
         let ca_pem = std::fs::read(&ca_path)
             .map_err(|e| anyhow::anyhow!("Reading Vigil CA cert {}: {}", ca_path.display(), e))?;
         let ca_cert = reqwest::Certificate::from_pem(&ca_pem)

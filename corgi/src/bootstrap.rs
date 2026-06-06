@@ -8,14 +8,15 @@ use axum::{Json, Router};
 use hyper::server::conn::http1;
 use hyper_util::rt::TokioIo;
 use rand::Rng;
+use sha2::Digest;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex};
 
 use crate::archive::set_permissions;
 use crate::cert_ops::{
-    fingerprint_display, generate_bootstrap_cert, generate_key_and_csr, install_certificate,
-    pem_cert_to_der,
+    fingerprint_display, generate_bootstrap_cert, generate_key_and_csr,
+    install_certificate, pem_cert_to_der,
 };
 use crate::config::CorgiConfig;
 use crate::server::bind_tcp;
@@ -58,6 +59,18 @@ fn unauthorized() -> (StatusCode, Json<Value>) {
 }
 
 // ---------------------------------------------------------------------------
+// Bootstrap directory helpers
+// ---------------------------------------------------------------------------
+
+fn bootstrap_dir(config: &CorgiConfig) -> std::path::PathBuf {
+    config
+        .config_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("bootstrap")
+}
+
+// ---------------------------------------------------------------------------
 // Bootstrap route handlers
 // ---------------------------------------------------------------------------
 
@@ -77,13 +90,20 @@ async fn bs_csr(
         return unauthorized().into_response();
     }
 
-    let entry = node_identity_entry(&state.config);
+    let bs_dir = bootstrap_dir(&state.config);
+    if let Err(e) = std::fs::create_dir_all(&bs_dir) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response();
+    }
+
+    let mut entry = node_identity_entry(&state.config);
+    entry.csr_path = Some(bs_dir.join("csr.pem"));
+    let key_path = bs_dir.join("key.pem");
     let csr_req = CsrRequest::default();
     let config_identity_uri = state.config.identity_uri.as_deref();
 
-    match generate_key_and_csr(&entry, &csr_req, config_identity_uri) {
+    match generate_key_and_csr(&entry, &key_path, &csr_req, config_identity_uri) {
         Ok(csr_pem) => {
-            tracing::info!(key_path = %entry.key_path.display(), "Bootstrap: ECDSA key + CSR generated");
+            tracing::info!(key_path = %key_path.display(), "Bootstrap: ECDSA key + CSR generated");
             (StatusCode::OK, Json(json!({ "csrPem": csr_pem }))).into_response()
         }
         Err(e) => (
@@ -110,16 +130,9 @@ async fn bs_ca(
         }
     };
 
-    let ca_path = match &state.config.mtls.ca_path {
-        Some(p) => p.clone(),
-        None => {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "mtls.caPath not configured" }))).into_response()
-        }
-    };
-
-    if let Some(parent) = ca_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
+    let bs_dir = bootstrap_dir(&state.config);
+    let _ = std::fs::create_dir_all(&bs_dir);
+    let ca_path = bs_dir.join("ca.pem");
 
     match std::fs::write(&ca_path, &ca_pem) {
         Ok(()) => {
@@ -147,38 +160,59 @@ async fn bs_cert(
         }
     };
 
-    if !state.config.tls.key_path.exists() {
+    let bs_dir = bootstrap_dir(&state.config);
+    let key_path = bs_dir.join("key.pem");
+    if !key_path.exists() {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "Private key not found. Call GET /bootstrap/csr first." })),
         ).into_response();
     }
 
-    let entry = node_identity_entry(&state.config);
-    let install_req = InstallRequest {
-        cert_pem: Some(cert_pem),
-        chain_pem: body.get("chainPem").and_then(|v| v.as_str()).map(str::to_string),
-        fullchain_pem: body.get("fullchainPem").and_then(|v| v.as_str()).map(str::to_string),
-        key_pem: None,
-        restart: Some(false),
+    let key_pem = match std::fs::read_to_string(&key_path) {
+        Ok(k) => k,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
     };
 
-    match install_certificate(&entry, &state.config.cert_store_dir, &install_req) {
-        Ok(result) => {
-            tracing::info!(
-                cert_path = %state.config.tls.cert_path.display(),
-                changed = result.changed,
-                fingerprint256 = %result.next_fingerprint,
-                "Bootstrap: cert installed"
-            );
-            (StatusCode::OK, Json(json!({
-                "installed": true,
-                "changed": result.changed,
-                "fingerprint256": result.next_fingerprint,
-            }))).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+    let chain_pem = body.get("chainPem").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let fullchain_pem = body
+        .get("fullchainPem")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{}{}", cert_pem, chain_pem));
+
+    let fingerprint = match pem_cert_to_der(&cert_pem) {
+        Ok(der) => fingerprint_display(&der),
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))).into_response(),
+    };
+
+    let entry = node_identity_entry(&state.config);
+    let req = InstallRequest {
+        cert_pem: Some(cert_pem),
+        chain_pem: if chain_pem.is_empty() { None } else { Some(chain_pem) },
+        fullchain_pem: Some(fullchain_pem),
+        key_pem: Some(key_pem),
+        restart: None,
+    };
+
+    if let Err(e) = install_certificate(&entry, &state.config.cert_store_dir, &req) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response();
     }
+
+    // Key is now safely in archive; remove the bootstrap staging copy.
+    let _ = std::fs::remove_file(&key_path);
+
+    tracing::info!(
+        cert_store_dir = %state.config.cert_store_dir.display(),
+        name = %entry.name,
+        fingerprint256 = %fingerprint,
+        "Bootstrap: cert installed to cert store"
+    );
+    (StatusCode::OK, Json(json!({
+        "installed": true,
+        "changed": true,
+        "fingerprint256": fingerprint,
+    }))).into_response()
 }
 
 async fn bs_finalize(
@@ -198,6 +232,33 @@ async fn bs_finalize(
 }
 
 // ---------------------------------------------------------------------------
+// Test-accessible router builder (no TLS wrapping)
+// ---------------------------------------------------------------------------
+
+/// Build the bootstrap Axum router with the given token, without TLS.
+/// Returns the router and a receiver that fires when POST /bootstrap/finalize is called.
+/// Used by integration tests to serve the bootstrap handlers over plain HTTP on a random port.
+pub fn build_bootstrap_router(
+    config: Arc<CorgiConfig>,
+    token: Arc<String>,
+) -> (Router, oneshot::Receiver<()>) {
+    let (done_tx, done_rx) = oneshot::channel::<()>();
+    let state = BsState {
+        config,
+        token,
+        done_tx: Arc::new(Mutex::new(Some(done_tx))),
+    };
+    let router = Router::new()
+        .route("/bootstrap/status",   get(bs_status))
+        .route("/bootstrap/csr",      get(bs_csr))
+        .route("/bootstrap/ca",       post(bs_ca))
+        .route("/bootstrap/cert",     post(bs_cert))
+        .route("/bootstrap/finalize", post(bs_finalize))
+        .with_state(state);
+    (router, done_rx)
+}
+
+// ---------------------------------------------------------------------------
 // Bootstrap server entry point
 // ---------------------------------------------------------------------------
 
@@ -208,20 +269,20 @@ pub async fn run_bootstrap(config: Arc<CorgiConfig>) -> Result<()> {
             .context("Generating bootstrap cert")?;
 
     let der = pem_cert_to_der(&bs_cert_pem)?;
-    let fingerprint = fingerprint_display(&der);
-    let token: String = rand::thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
-        .take(48)
-        .map(char::from)
-        .collect();
+    // Use bare lowercase hex (no colons) so the bootstrap wizard can capture with a simple regex.
+    // fingerprint_display is reserved for the colon format that the dashboard expects.
+    let fingerprint = hex::encode(sha2::Sha256::digest(&der));
+    let mut token_bytes = [0u8; 32];
+    rand::thread_rng().fill(&mut token_bytes);
+    let token = hex::encode(token_bytes);
 
     println!();
     println!("  Node ID:               {}", config.node_id);
     println!("  Common name:           {}", config.common_name);
     println!("  Bootstrap port:        {}", config.bootstrap_port);
     println!();
-    println!("  Bootstrap fingerprint: {}", fingerprint);
-    println!("  Bootstrap token:       {}", token);
+    println!("  Corgi bootstrap fingerprint: {}", fingerprint);
+    println!("  Corgi bootstrap token:       {}", token);
     println!();
 
     let tls_config = build_ephemeral_tls(&bs_cert_pem, &bs_key_pem)?;
@@ -233,7 +294,7 @@ pub async fn run_bootstrap(config: Arc<CorgiConfig>) -> Result<()> {
 
     tracing::info!(
         port = config.bootstrap_port,
-        "Bootstrap server listening"
+        "Bootstrap HTTPS server listening"
     );
 
     let (done_tx, done_rx) = oneshot::channel::<()>();
@@ -314,10 +375,10 @@ fn node_identity_entry(config: &CorgiConfig) -> crate::config::FlockEntry {
     config
         .flock
         .iter()
-        .find(|e| e.name == "node-identity")
+        .find(|e| e.name == "node-identity" || e.name == config.common_name)
         .cloned()
         .unwrap_or_else(|| crate::config::FlockEntry {
-            name: "node-identity".to_string(),
+            name: config.common_name.clone(),
             path: config.tls.cert_path.clone(),
             key_path: config.tls.key_path.clone(),
             chain_path: config.chain_path.clone(),

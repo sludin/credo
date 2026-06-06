@@ -53,6 +53,20 @@ fn fingerprint_der(der: &[u8]) -> String {
     hex::encode(Sha256::digest(der))
 }
 
+/// Returns days remaining until the cert at `cert_path` expires, or None if unreadable.
+pub fn cert_days_remaining(cert_path: &Path) -> Option<i64> {
+    use x509_parser::prelude::*;
+    let pem_str = std::fs::read_to_string(cert_path).ok()?;
+    let der = pem_cert_to_der(&pem_str).ok()?;
+    let (_, cert) = X509Certificate::from_der(&der).ok()?;
+    let na = cert.validity().not_after.timestamp();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    Some((na - now) / 86400)
+}
+
 /// Read the leaf certificate from `cert_path` and return its display fingerprint.
 pub fn read_cert_fingerprint(cert_path: &Path) -> Option<String> {
     let pem_str = std::fs::read_to_string(cert_path).ok()?;
@@ -212,36 +226,41 @@ fn build_params(
     params
 }
 
-/// Generate a new ECDSA P-256 key + CSR. Writes the key to `entry.key_path` (mode 0600).
+/// Generate a new ECDSA P-256 key + CSR.
+/// The key is written to `key_path` (mode 0600), which must be the pending staging
+/// path (`archive::pending_key_path`), never a path inside `live/`.
+/// `install_to_archive` moves it to `archive/` and creates the `live/` symlink when
+/// the signed cert arrives.
 pub fn generate_key_and_csr(
     entry: &FlockEntry,
+    key_path: &Path,
     req: &CsrRequest,
     config_identity_uri: Option<&str>,
 ) -> Result<String> {
     let params = build_params(entry, req, config_identity_uri);
-    // No key_pair set → rcgen generates a new ECDSA P-256 key
     let cert = Certificate::from_params(params).context("Building CSR params")?;
     let key_pem = cert.serialize_private_key_pem();
 
-    ensure_parent(&entry.key_path)?;
-    std::fs::write(&entry.key_path, &key_pem)
-        .with_context(|| format!("Writing key to {}", entry.key_path.display()))?;
-    set_permissions(&entry.key_path, 0o600)?;
+    ensure_parent(key_path)?;
+    std::fs::write(key_path, &key_pem)
+        .with_context(|| format!("Writing key to {}", key_path.display()))?;
+    set_permissions(key_path, 0o600)?;
 
     let csr_pem = cert.serialize_request_pem().context("Serializing CSR PEM")?;
     save_csr(entry, &csr_pem)?;
     Ok(csr_pem)
 }
 
-/// Generate a CSR using the existing key at `entry.key_path`.
-/// If the key doesn't exist or is not ECDSA, generates a new key first.
+/// Generate a CSR reusing the existing key at `entry.key_path`, or generating a
+/// new key there if none exists. Callers should prefer `generate_key_and_csr` with
+/// an explicit pending staging path instead of writing into `live/` directly.
 pub fn generate_csr(
     entry: &FlockEntry,
     req: &CsrRequest,
     config_identity_uri: Option<&str>,
 ) -> Result<String> {
     if !entry.key_path.exists() || !is_ecdsa_key(&entry.key_path) {
-        return generate_key_and_csr(entry, req, config_identity_uri);
+        return generate_key_and_csr(entry, &entry.key_path.clone(), req, config_identity_uri);
     }
 
     let key_pem = load_key_pem(&entry.key_path)?;
@@ -416,7 +435,7 @@ pub fn to_flock_summary(entry: &FlockEntry) -> crate::types::FlockSummary {
 
     struct CertFields {
         valid_to: Option<String>,
-        lifetime_days: f64,
+        lifetime_days: Option<f64>,
         san_names: Vec<String>,
     }
 
@@ -442,10 +461,10 @@ pub fn to_flock_summary(entry: &FlockEntry) -> crate::types::FlockSummary {
                         }
                     }
                 }
-                CertFields { valid_to, lifetime_days, san_names }
+                CertFields { valid_to, lifetime_days: Some(lifetime_days), san_names }
             })
         })
-        .unwrap_or(CertFields { valid_to: None, lifetime_days: f64::NEG_INFINITY, san_names: vec![] });
+        .unwrap_or(CertFields { valid_to: None, lifetime_days: None, san_names: vec![] });
 
     let status = if fingerprint256.is_some() { "ok" } else { "not-ok" }.to_string();
 
@@ -457,6 +476,7 @@ pub fn to_flock_summary(entry: &FlockEntry) -> crate::types::FlockSummary {
         san_names: fields.san_names,
         domain: entry.domain.clone(),
         status,
+        key_exists: entry.key_path.exists(),
     }
 }
 

@@ -121,14 +121,15 @@ struct FlockResponse {
 #[serde(rename_all = "camelCase")]
 struct FlockEntry {
     name: String,
-    #[serde(default)]
-    lifetime_days: f64,
+    lifetime_days: Option<f64>,
     status: Option<String>,
     #[serde(default)]
     san_names: Vec<String>,
     fingerprint256: Option<String>,
     valid_to: Option<String>,
     domain: Option<String>,
+    #[serde(default)]
+    key_exists: bool,
 }
 
 async fn poll_flock(state: &AppState, node: &CorgiNodeConfig) {
@@ -138,11 +139,11 @@ async fn poll_flock(state: &AppState, node: &CorgiNodeConfig) {
                 name: e.name,
                 fingerprint256: e.fingerprint256,
                 valid_to: e.valid_to,
-                lifetime_days: Some(e.lifetime_days).filter(|d| d.is_finite()),
+                lifetime_days: e.lifetime_days.filter(|d| d.is_finite()),
                 status: e.status,
                 san_names: e.san_names,
+                key_exists: Some(e.key_exists),
             }).collect();
-            let ok = flock.iter().filter(|e| e.status.as_deref() == Some("ok")).count();
             let mut cs = state.corgi_state.write().await;
             let entry = cs.entry(node.name.clone()).or_insert_with(CorgiNodeState::new);
             entry.status = CorgiStatus::Reachable;
@@ -185,7 +186,11 @@ async fn fingerprint_sync_check(state: &AppState, node: &CorgiNodeConfig) {
                 .find(|f| f.name == a.cert_name)
                 .and_then(|f| f.fingerprint256.as_deref())
                 .map(|s| s.to_uppercase());
-            corgi_fp.as_deref() != Some(&expected)
+            // Only refresh when corgi *has* the cert but it differs from shepherd's.
+            // If corgi has no fingerprint (cert not yet installed) cert_maintenance owns
+            // the initial issuance via the CSR path and will push with the key in place.
+            // Triggering a pull sync before the CSR step installs the cert without a key.
+            corgi_fp.is_some() && corgi_fp.as_deref() != Some(&expected)
         });
     drop(assignments);
 
@@ -231,10 +236,22 @@ async fn cert_maintenance(
         .map(|d| d as f64)
         .unwrap_or(state.config.renew_before_days);
 
+    // Also renew when the cert exists in Shepherd's store but Corgi is missing the key.
+    // This happens when the corgi sync installs a cert via pull (Shepherd has no key to
+    // distribute) before cert_maintenance has had a chance to run the CSR→issue→push cycle.
+    let corgi_missing_key = {
+        let cs = state.corgi_state.read().await;
+        cs.get(&node.name)
+            .and_then(|s| s.flock.iter().find(|e| e.name == assignment.cert_name))
+            .and_then(|e| e.key_exists)
+            .map(|exists| !exists)
+            .unwrap_or(false)
+    };
+
     let needs_renewal = match &local_cert {
         None => true,
         Some(e) => e.expires_in_days.map(|d| d <= renew_before as i64).unwrap_or(true),
-    };
+    } || corgi_missing_key;
 
     if !needs_renewal {
         return Ok(());
@@ -307,7 +324,7 @@ async fn cert_maintenance(
 
     match result {
         Err(e) => {
-            let msg = e.to_string();
+            let msg = format!("{:#}", e);
             fail_job(&state.renewal_jobs, job_id, msg.clone()).await;
             anyhow::bail!("Renewal failed: {msg}");
         }
@@ -319,7 +336,11 @@ async fn cert_maintenance(
                 &state.corgi_client_pool,
                 node,
                 &format!("/flock/{}/install", urlencoded(&assignment.cert_name)),
-                &json!({ "certPem": issued.cert_pem }),
+                &json!({
+                    "certPem":      issued.cert_pem,
+                    "chainPem":     issued.chain_pem,
+                    "fullchainPem": issued.fullchain_pem,
+                }),
             ).await {
                 tracing::warn!(
                     corgi = %node.name,
@@ -334,6 +355,10 @@ async fn cert_maintenance(
                     fingerprint256 = %issued.fingerprint256,
                     "Renewed cert installed on corgi"
                 );
+                // The production cert is now in corgi's certstore.  Evict the cached
+                // mTLS client so the next connection rebuilds from the production cert
+                // instead of the bootstrap fallback.
+                crate::corgi_client::evict(&state.corgi_client_pool, &node.name).await;
             }
         }
     }

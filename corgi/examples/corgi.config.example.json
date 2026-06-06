@@ -13,10 +13,8 @@
   "certStoreDir": "${corgiRoot}/store",
 
   "filePolicy": {
-    "owner":    "root",
-    "group":    "ssl-cert",
-    "certMode": "0644",
-    "keyMode":  "0600"
+    "owner": "root",
+    "group": "ssl-cert"
   },
 
   "tls": {
@@ -34,7 +32,8 @@
   "bind":     "0.0.0.0",
 
   "auth": {
-    "mode": "mtls"
+    "mode":         "mtls",
+    "identityOnly": false
   },
 
   "rbacIdentities": [
@@ -59,21 +58,17 @@
     "bind":    "0.0.0.0"
   },
 
-  "_certHooksNote": "Per-cert hooks — use when different certs need different service reloads. For a single service on this node, use defaultHooks instead.",
-  "certHooks": {
-    "api.${vigilDomain}": ["nginx"]
-  },
-
-  "defaultHooks": [],
-
-  "_flockNote": "Flock entries are optional. Define one only to install a cert at a non-default path or to write extra files (chain, fullchain). Hooks and permissions come from certHooks/defaultHooks and filePolicy.",
   "flock": [
     {
-      "_comment": "Example: install to a custom path AND write a fullchain for nginx",
+      "_comment": "Example: nginx TLS cert managed by Shepherd",
       "name":          "api.${vigilDomain}",
       "path":          "/etc/ssl/certs/api.${vigilDomain}.pem",
       "keyPath":       "/etc/ssl/private/api.${vigilDomain}.key",
-      "fullchainPath": "/etc/ssl/certs/api.${vigilDomain}.fullchain.pem"
+      "fullchainPath": "/etc/ssl/certs/api.${vigilDomain}.fullchain.pem",
+      "hooks":         ["nginx"],
+      "monitor":       true,
+      "certMode":      "0644",
+      "keyMode":       "0600"
     }
   ],
 
@@ -86,6 +81,8 @@
       "args": { "container": { "type": "container-name" } }
     }
   },
+
+  "defaultHooks": [],
 
   "logLevel": "info"
 }

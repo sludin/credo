@@ -14,6 +14,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Start Vigil in bootstrap mode (ephemeral TLS cert + one-time enrollment secret)
+    Bootstrap,
     /// Server commands
     Server {
         #[command(subcommand)]
@@ -154,20 +156,8 @@ pub async fn run_server_start(bootstrap: bool) -> Result<()> {
 }
 
 fn build_bootstrap_tls(key_pem: &str, cert_pem: &str, config: &crate::config::VigilConfig) -> Result<std::sync::Arc<rustls::ServerConfig>> {
-    // Write ephemeral material to temp paths and use them
-    
-
-    let tmp_dir = std::env::temp_dir();
-    let key_path = tmp_dir.join("vigil_bootstrap.key.pem");
-    let cert_path = tmp_dir.join("vigil_bootstrap.cert.pem");
-    std::fs::write(&key_path, key_pem)?;
-    std::fs::write(&cert_path, cert_pem)?;
-
-    let mut tmp_config = config.clone();
-    tmp_config.tls.key_path = key_path;
-    tmp_config.tls.cert_path = cert_path;
-
-    crate::server::build_server_tls(&tmp_config)
+    credo_lib::tls::build_server_tls_from_pem(cert_pem, key_pem, Some(&config.tls.client_ca_path))
+        .context("Building bootstrap TLS config from in-memory PEM")
 }
 
 pub fn run_check_config() -> Result<()> {

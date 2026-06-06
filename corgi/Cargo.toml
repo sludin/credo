@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Corgi - distributed TLS certificate agent for the credo system"
 
+[lib]
+name = "corgi"
+path = "src/lib.rs"
+
 [[bin]]
 name = "corgi"
 path = "src/main.rs"
@@ -79,5 +83,10 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Random number generation for bootstrap token
 rand = "0.8"
+
+[dev-dependencies]
+credo-test = { path = "../credo-test" }
+tempfile   = "3"
+tokio      = { version = "1", features = ["full"] }
 
 # Release profile is set in the workspace root Cargo.toml

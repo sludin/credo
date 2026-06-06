@@ -93,7 +93,7 @@ _gen_shepherd_config() {
       commonName:    $hostname,
       identityUri:   $identityUri,
       vigilUrl:      ("https://" + $vigilHostname + ":" + ($vigilPort | tostring)),
-      caPath:        "${caTrustPath}",
+      shepherdCaPath: "${caTrustPath}",
       agentPort:     $agentPort,
       dashboardPort: $dashPort,
       bind:          "0.0.0.0",
@@ -107,11 +107,9 @@ _gen_shepherd_config() {
       assignmentsConfigPath: "${shepherdRoot}/shepherd.assignments.json",
       certStoreDir:          "${shepherdRoot}/store",
       accountsPath:          "${shepherdRoot}/shepherd.accounts.json",
-      fleetAccountsPath:     "${shepherdRoot}/shepherd.fleet-accounts.json",
       renewalJobsDir:        "${shepherdRoot}/renewal-jobs",
       logLevel: "info",
       auth: {
-        identityOnly:      true,
         jwtSigningKeyPath: "${shepherdRoot}/shepherd.jwt.key.pem"
       }
     }
@@ -160,9 +158,11 @@ _gen_shepherd_corgis_json() {
     --arg  corgiIdentityUri "$CORGI_IDENTITY_URI" \
     '{
       defaults: {
-        mtlsCert: ($corgiDir + "/store/live/" + $shepherdHostname + "/fullchain.pem"),
-        mtlsKey:  ($corgiDir + "/store/live/" + $shepherdHostname + "/privkey.pem"),
-        mtlsCa:   $caTrustPath
+        mtls: {
+          certPath: ($corgiDir + "/store/live/" + $shepherdHostname + "/fullchain.pem"),
+          keyPath:  ($corgiDir + "/store/live/" + $shepherdHostname + "/privkey.pem"),
+          caPath:   $caTrustPath
+        }
       },
       corgis: [
         {

@@ -1,11 +1,12 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::archive::pending_key_path;
 use crate::assignments::{load_assignments_cache, merge_assignments, save_assignments_cache};
-use crate::cert_ops::{install_certificate, read_cert_fingerprint};
+use crate::cert_ops::{cert_days_remaining, generate_key_and_csr, install_certificate, read_cert_fingerprint};
 use crate::hooks::run_hooks;
 use crate::shepherd::ShepherdClient;
 use crate::state::AppState;
-use crate::types::InstallRequest;
+use crate::types::{CsrRequest, InstallRequest};
 
 /// Perform a single reconciliation pass: pull assignments from Shepherd,
 /// compare fingerprints, fetch and install changed certs, run hooks.
@@ -64,8 +65,17 @@ pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
         let shepherd_fp = assignment.fingerprint256.as_deref();
 
         let needs_install = match (local_fp.as_deref(), shepherd_fp) {
-            (_, None) => false,
-            (None, Some(_)) => true,
+            // No local cert: try to fetch regardless of whether Shepherd reports a
+            // fingerprint. Shepherd may have issued the cert without propagating the
+            // fingerprint back into the assignment record. A failed fetch is just a
+            // warning — we skip and retry next cycle.
+            (None, _) => true,
+            // Have a local cert and Shepherd has no fingerprint: keep what we have
+            // unless the cert is expiring soon (e.g. a bootstrap temp cert with 1-day
+            // validity). Threshold of 30 days matches certbot's renewal window.
+            (Some(_), None) => cert_days_remaining(&entry.path)
+                .map(|days| days < 30)
+                .unwrap_or(false),
             (Some(local), Some(remote)) => {
                 // Normalize both sides: strip colons and lowercase so format
                 // differences between sources ("FD:5A:..." vs "fd5a...") don't
@@ -80,12 +90,16 @@ pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
             continue;
         }
 
-        tracing::info!(
-            cert_name = %assignment.cert_name,
-            local_fp = ?local_fp,
-            shepherd_fp = ?shepherd_fp,
-            "Fingerprint mismatch — fetching cert from Shepherd"
-        );
+        if local_fp.is_none() {
+            tracing::info!(cert_name = %assignment.cert_name, "No local cert — fetching from Shepherd");
+        } else {
+            tracing::info!(
+                cert_name = %assignment.cert_name,
+                local_fp = ?local_fp,
+                shepherd_fp = ?shepherd_fp,
+                "Fingerprint mismatch — fetching cert from Shepherd"
+            );
+        }
 
         // Fetch cert material
         let cert_response = match client.get_cert(&config.node_id, &assignment.cert_name).await {
@@ -99,6 +113,53 @@ pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
                 continue;
             }
         };
+
+        // Shepherd never stores private keys for CSR-issued certs, so key_pem is
+        // almost always None here.
+        //
+        // A key is "properly archived" only when entry.key_path is a SYMLINK into
+        // archive/.  A flat file at that path is a bootstrap temp key that belongs to
+        // the bootstrap cert, not the cert shepherd is distributing now.  Generate a
+        // new key whenever the key is absent or still a flat file.
+        //
+        // If a pending key already exists (written by a prior flock_csr call) a CSR is
+        // in flight; proceed with the install so install_to_archive can pick it up.
+        let key_is_archived = entry.key_path
+            .symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        let pending = pending_key_path(&config.cert_store_dir, &assignment.cert_name);
+        if cert_response.key_pem.is_none() && !key_is_archived && !pending.exists() {
+            let csr_req = CsrRequest {
+                sans: if assignment.sans.is_empty() { None } else { Some(assignment.sans.clone()) },
+                common_name: assignment.domain.clone(),
+                identity_uri: assignment.identity_uri.clone(),
+                csr_subject: assignment.csr_subject.clone(),
+            };
+            match generate_key_and_csr(entry, &pending, &csr_req, None) {
+                Ok(csr_pem) => {
+                    tracing::info!(
+                        cert_name = %assignment.cert_name,
+                        "No key on disk — generated key+CSR, requesting re-issue from Shepherd"
+                    );
+                    if let Err(e) = client.request_renew(&config.node_id, &assignment.cert_name, &csr_pem).await {
+                        tracing::warn!(
+                            cert_name = %assignment.cert_name,
+                            error = %e,
+                            "Re-issue request failed; will retry next sync cycle"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        cert_name = %assignment.cert_name,
+                        error = %e,
+                        "Failed to generate key+CSR for missing-key cert"
+                    );
+                }
+            }
+            continue;
+        }
 
         // Install
         let install_req = InstallRequest {

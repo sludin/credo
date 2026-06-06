@@ -25,10 +25,24 @@ pub type CorgiClientPool = HashMap<String, reqwest::Client>;
 // ---------------------------------------------------------------------------
 
 fn build_client(node: &CorgiNodeConfig) -> Result<reqwest::Client> {
-    let cert_bytes = std::fs::read(&node.mtls.cert_path)
-        .with_context(|| format!("Reading corgi mTLS cert: {}", node.mtls.cert_path.display()))?;
-    let key_bytes = std::fs::read(&node.mtls.key_path)
-        .with_context(|| format!("Reading corgi mTLS key: {}", node.mtls.key_path.display()))?;
+    // During the bootstrap window the production cert hasn't been issued yet.
+    // Use the bootstrap cert (shepherdRoot/bootstrap/) as a fallback until the
+    // production cert appears in the corgi certstore live/ directory.
+    let (cert_path, key_path) =
+        if node.mtls.cert_path.exists() {
+            (&node.mtls.cert_path, &node.mtls.key_path)
+        } else if let (Some(bc), Some(bk)) =
+            (&node.mtls.bootstrap_cert_path, &node.mtls.bootstrap_key_path)
+        {
+            (bc, bk)
+        } else {
+            (&node.mtls.cert_path, &node.mtls.key_path)
+        };
+
+    let cert_bytes = std::fs::read(cert_path)
+        .with_context(|| format!("Reading corgi mTLS cert: {}", cert_path.display()))?;
+    let key_bytes = std::fs::read(key_path)
+        .with_context(|| format!("Reading corgi mTLS key: {}", key_path.display()))?;
 
     // reqwest accepts cert + key PEM concatenated
     let mut identity_pem = cert_bytes;
@@ -63,6 +77,13 @@ async fn get_or_create(pool: &Arc<RwLock<CorgiClientPool>>, node: &CorgiNodeConf
     let client = build_client(node)?;
     pool.write().await.insert(node.name.clone(), client.clone());
     Ok(client)
+}
+
+/// Evict a cached client for `node_name` so the next request rebuilds it.
+/// Call this after the production cert lands in the certstore so the client
+/// switches from the bootstrap fallback to the production credential.
+pub async fn evict(pool: &Arc<RwLock<CorgiClientPool>>, node_name: &str) {
+    pool.write().await.remove(node_name);
 }
 
 // ---------------------------------------------------------------------------

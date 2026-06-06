@@ -28,6 +28,12 @@ pub async fn auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Result<Response, AppError> {
+    // Test bypass: if a caller already injected an AuthUser (e.g. via
+    // `.layer(Extension(AuthUser(...)))` in a test), skip the real cert check.
+    if req.extensions().get::<AuthUser>().is_some() {
+        return Ok(next.run(req).await);
+    }
+
     let peer_cert = req.extensions().get::<PeerCertDer>().map(|p| p.0.clone());
 
     let Some(der) = peer_cert else {

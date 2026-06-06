@@ -48,6 +48,12 @@ pub fn live_dir(cert_store_dir: &Path, cert_name: &str) -> PathBuf {
     cert_store_dir.join("live").join(cert_name)
 }
 
+/// Staging path for a private key while its CSR is in flight.
+/// Keyed by cert name; cleared when the cert arrives via install_to_archive.
+pub fn pending_key_path(cert_store_dir: &Path, cert_name: &str) -> PathBuf {
+    cert_store_dir.join("pending").join(format!("{}.pem", cert_name))
+}
+
 pub fn ensure_parent(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -155,10 +161,10 @@ pub fn install_to_archive(
     let live_cert = live.join("cert.pem");
     let rel_cert = pathdiff(&cert_archive_path, &live_cert);
     replace_symlink(&live_cert, &rel_cert)?;
-    // Also update the canonical cert path from config
+    // Also update the canonical cert path from config (always use relative path)
     if entry.path != live_cert {
         ensure_parent(&entry.path)?;
-        replace_symlink(&entry.path, &cert_archive_path)?;
+        replace_symlink(&entry.path, &pathdiff(&cert_archive_path, &entry.path))?;
     }
 
     // Write fullchain
@@ -178,7 +184,7 @@ pub fn install_to_archive(
         if let Some(ref configured) = entry.fullchain_path {
             if configured != &live_fc {
                 ensure_parent(configured)?;
-                replace_symlink(configured, fc_path)?;
+                replace_symlink(configured, &pathdiff(fc_path, configured))?;
             }
         }
     }
@@ -197,20 +203,37 @@ pub fn install_to_archive(
         if let Some(ref configured) = entry.chain_path {
             if configured != &live_ch {
                 ensure_parent(configured)?;
-                replace_symlink(configured, ch_path)?;
+                replace_symlink(configured, &pathdiff(ch_path, configured))?;
             }
         }
     }
 
-    // Write key
-    let key_archive_path = key_pem.map(|k| {
+    // Write key — either provided directly by the caller, or picked up from the
+    // pending staging area where generate_key_and_csr wrote it while the CSR was
+    // in flight.  All real key files live in archive/; live/ only ever holds symlinks.
+    let key_archive_path = if let Some(k) = key_pem {
         let p = archive.join(format!("privkey-{}.pem", sfx));
-        write_file(&p, k.as_bytes(), entry.key_mode.unwrap_or(0o640)).ok();
+        write_file(&p, k.as_bytes(), entry.key_mode.unwrap_or(0o640))?;
         if entry.key_owner.is_some() || entry.key_group.is_some() {
             set_owner(&p, entry.key_owner.as_deref(), entry.key_group.as_deref()).ok();
         }
-        p
-    });
+        Some(p)
+    } else {
+        let pending = pending_key_path(cert_store_dir, &entry.name);
+        if pending.exists() {
+            let key_bytes = fs::read(&pending)
+                .with_context(|| format!("Reading pending key {}", pending.display()))?;
+            let p = archive.join(format!("privkey-{}.pem", sfx));
+            write_file(&p, &key_bytes, entry.key_mode.unwrap_or(0o640))?;
+            if entry.key_owner.is_some() || entry.key_group.is_some() {
+                set_owner(&p, entry.key_owner.as_deref(), entry.key_group.as_deref()).ok();
+            }
+            let _ = fs::remove_file(&pending); // key is now safely in archive
+            Some(p)
+        } else {
+            None
+        }
+    };
 
     if let Some(ref key_path) = key_archive_path {
         let live_key = live.join("privkey.pem");
@@ -218,7 +241,7 @@ pub fn install_to_archive(
         replace_symlink(&live_key, &rel)?;
         if entry.key_path != live_key {
             ensure_parent(&entry.key_path)?;
-            replace_symlink(&entry.key_path, key_path)?;
+            replace_symlink(&entry.key_path, &pathdiff(key_path, &entry.key_path))?;
         }
         // Key permissions
         set_permissions(&entry.key_path, entry.key_mode.unwrap_or(0o640))?;

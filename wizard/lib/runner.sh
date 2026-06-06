@@ -58,7 +58,7 @@ start_service() {
   local exec_path="$1" log_file="$2"
   shift 2
   mkdir -p "$(dirname "$log_file")"
-  touch "$log_file"
+  : > "$log_file"
   "$exec_path" "$@" >> "$log_file" 2>&1 &
   echo $!
 }
@@ -117,7 +117,10 @@ capture_from_log() {
 # Start a background tail -f that labels each line; prints PID to stdout.
 tail_log_start() {
   local log_file="$1" label="$2"
-  tail -f -n 0 "$log_file" 2>/dev/null | sed "s/^/  [$label] /" &
+  # Redirect to /dev/tty so the pipeline does not inherit the command-substitution
+  # pipe that the caller uses to capture the PID.  Without this redirect, bash
+  # waits for sed (which never exits) to close the pipe, hanging the $(...) call.
+  tail -f -n 0 "$log_file" 2>/dev/null | sed "s/^/  [$label] /" > /dev/tty &
   echo $!
 }
 
@@ -140,7 +143,7 @@ wait_for_certs() {
   local issued_after="$1"
   shift
   local timeout_sec=300
-
+  
   declare -A _pending=()
   local _arg
   for _arg in "$@"; do

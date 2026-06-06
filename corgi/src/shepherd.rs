@@ -106,6 +106,33 @@ impl ShepherdClient {
             .context("Parsing cert response")
     }
 
+    /// POST /agents/:id/renew/:name — submit a CSR for async re-issuance.
+    /// Shepherd issues the cert from the provided CSR and pushes it to corgi
+    /// via /flock/<name>/install when done.
+    pub async fn request_renew(&self, corgi_id: &str, cert_name: &str, csr_pem: &str) -> Result<()> {
+        let url = format!("{}/agents/{}/renew/{}", self.base_url, corgi_id, urlencoded(cert_name));
+        let resp = self
+            .client
+            .post(&url)
+            .json(&serde_json::json!({ "csrPem": csr_pem }))
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .context("POST renew")?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "Shepherd returned {} for renew {}: {}",
+                status,
+                cert_name,
+                body.trim()
+            ));
+        }
+        Ok(())
+    }
+
     pub async fn health_check(&self) -> Result<()> {
         let url = format!("{}/health", self.base_url);
         self.client
@@ -116,4 +143,8 @@ impl ShepherdClient {
             .context("Shepherd health check")?;
         Ok(())
     }
+}
+
+fn urlencoded(s: &str) -> String {
+    s.replace('/', "%2F")
 }

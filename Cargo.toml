@@ -1,5 +1,5 @@
 [workspace]
-members  = ["credo-lib", "corgi", "vigil", "shepherd"]
+members  = ["credo-lib", "corgi", "vigil", "shepherd", "credo-test", "tools/gen-fixtures"]
 resolver = "2"
 
 [profile.release]

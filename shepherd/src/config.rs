@@ -64,6 +64,9 @@ pub struct TlsConfig {
     pub cert_path: PathBuf,
     pub key_path: PathBuf,
     pub client_ca_path: PathBuf,
+    /// Written by bootstrap; never inside the corgi certstore.
+    pub bootstrap_cert_path: Option<PathBuf>,
+    pub bootstrap_key_path:  Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -148,6 +151,9 @@ struct RawTls {
     // Compat names inside the tls block
     ca: Option<String>,
     ca_path: Option<String>,
+    // Bootstrap cert written to shepherdRoot/bootstrap/, NOT to the corgi certstore
+    bootstrap_cert_path: Option<String>,
+    bootstrap_key_path:  Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -269,6 +275,12 @@ fn build_config(raw: RawShepherdConfig, base_dir: PathBuf, config_path: PathBuf)
             cert_path:      resolve_path(b, tls_cert_path),
             key_path:       resolve_path(b, tls_key_path),
             client_ca_path: resolve_path(b, client_ca_path),
+            bootstrap_cert_path: raw.tls.as_ref()
+                .and_then(|t| t.bootstrap_cert_path.as_deref())
+                .map(|s| resolve_path(b, s)),
+            bootstrap_key_path: raw.tls.as_ref()
+                .and_then(|t| t.bootstrap_key_path.as_deref())
+                .map(|s| resolve_path(b, s)),
         },
         jwt_signing_key_path: resolve_path(b, jwt_signing_key_path),
         corgis_config_path: resolve_path_or(b, raw.corgis_config_path.as_deref(), "shepherd.corgis.json"),

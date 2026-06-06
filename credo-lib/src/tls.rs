@@ -46,17 +46,23 @@ pub fn load_private_key(path: &Path) -> Result<PrivateKeyDer<'static>> {
 // Server TLS config
 // ---------------------------------------------------------------------------
 
-/// Build a rustls `ServerConfig` that requests (but does not require) a client cert.
-/// `client_ca_path`: if `Some`, loads the CA bundle for client cert chain validation;
-/// if `None`, allows any client cert (or none) — corgi uses this when no CA is configured.
-pub fn build_server_tls(
-    cert_path: &Path,
-    key_path: &Path,
+fn parse_certs_pem(pem: &str) -> Result<Vec<CertificateDer<'static>>> {
+    rustls_pemfile::certs(&mut BufReader::new(pem.as_bytes()))
+        .collect::<Result<Vec<_>, _>>()
+        .context("Parsing certificate PEM")
+}
+
+fn parse_private_key_pem(pem: &str) -> Result<PrivateKeyDer<'static>> {
+    rustls_pemfile::private_key(&mut BufReader::new(pem.as_bytes()))
+        .context("Parsing private key PEM")?
+        .ok_or_else(|| anyhow::anyhow!("No private key found in PEM"))
+}
+
+fn build_server_tls_inner(
+    certs: Vec<CertificateDer<'static>>,
+    key: PrivateKeyDer<'static>,
     client_ca_path: Option<&Path>,
 ) -> Result<Arc<ServerConfig>> {
-    let certs = load_certs(cert_path)?;
-    let key   = load_private_key(key_path)?;
-
     let client_verifier = match client_ca_path {
         Some(ca_path) => {
             let ca_file = std::fs::File::open(ca_path)
@@ -84,6 +90,30 @@ pub fn build_server_tls(
             .with_single_cert(certs, key)
             .context("Building TLS server config")?,
     ))
+}
+
+/// Build a rustls `ServerConfig` from in-memory PEM strings.
+pub fn build_server_tls_from_pem(
+    cert_pem: &str,
+    key_pem: &str,
+    client_ca_path: Option<&Path>,
+) -> Result<Arc<ServerConfig>> {
+    let certs = parse_certs_pem(cert_pem)?;
+    let key   = parse_private_key_pem(key_pem)?;
+    build_server_tls_inner(certs, key, client_ca_path)
+}
+
+/// Build a rustls `ServerConfig` that requests (but does not require) a client cert.
+/// `client_ca_path`: if `Some`, loads the CA bundle for client cert chain validation;
+/// if `None`, allows any client cert (or none) — corgi uses this when no CA is configured.
+pub fn build_server_tls(
+    cert_path: &Path,
+    key_path: &Path,
+    client_ca_path: Option<&Path>,
+) -> Result<Arc<ServerConfig>> {
+    let certs = load_certs(cert_path)?;
+    let key   = load_private_key(key_path)?;
+    build_server_tls_inner(certs, key, client_ca_path)
 }
 
 // ---------------------------------------------------------------------------

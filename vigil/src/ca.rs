@@ -479,7 +479,7 @@ pub fn sign_csr(
     let ca_der = pem::parse(cert_pem.trim())
         .context("Parsing CA cert PEM")?
         .into_contents();
-    let issuer_der = extract_issuer_subject_der(&ca_der)?;
+    let issuer_der = extract_subject_der(&ca_der)?;
 
     // Serial: read from OpenSSL DB if available, else random
     let ca_dir = config.ca_ecdsa_intermediate_cert_path
@@ -592,25 +592,27 @@ pub fn sign_csr(
     })
 }
 
-/// Extract the issuer Subject DER bytes from a CA cert DER blob.
-/// Certificate structure: SEQUENCE { TBSCertificate, AlgorithmIdentifier, BIT STRING }
-/// TBSCertificate: SEQUENCE { [0]version, INTEGER serial, AlgId, SEQUENCE issuer, ... }
-fn extract_issuer_subject_der(cert_der: &[u8]) -> Result<Vec<u8>> {
+/// Extract the subject DER bytes from a CA cert — used as the issuer field in certs signed by that CA.
+/// TBSCertificate: [0]version, INTEGER serial, AlgId, SEQUENCE issuer, SEQUENCE validity, SEQUENCE subject
+fn extract_subject_der(cert_der: &[u8]) -> Result<Vec<u8>> {
     let (cert_content, _) = der_read_sequence(cert_der)
         .ok_or_else(|| anyhow::anyhow!("Cert: outer SEQUENCE parse failed"))?;
     let (tbs_content, _) = der_read_sequence(cert_content)
         .ok_or_else(|| anyhow::anyhow!("Cert: TBS SEQUENCE parse failed"))?;
-    // TBS: [0]version, INTEGER serial, AlgorithmIdentifier, SEQUENCE issuer
     let after_version = der_skip_tlv(tbs_content)
         .ok_or_else(|| anyhow::anyhow!("Cert: skip version failed"))?;
     let after_serial = der_skip_tlv(after_version)
         .ok_or_else(|| anyhow::anyhow!("Cert: skip serial failed"))?;
     let after_alg = der_skip_tlv(after_serial)
         .ok_or_else(|| anyhow::anyhow!("Cert: skip algorithm failed"))?;
-    // Now at issuer (SEQUENCE)
-    let (issuer_bytes, _) = der_read_tlv(after_alg)
-        .ok_or_else(|| anyhow::anyhow!("Cert: issuer TLV parse failed"))?;
-    Ok(issuer_bytes.to_vec())
+    let after_issuer = der_skip_tlv(after_alg)
+        .ok_or_else(|| anyhow::anyhow!("Cert: skip issuer failed"))?;
+    let after_validity = der_skip_tlv(after_issuer)
+        .ok_or_else(|| anyhow::anyhow!("Cert: skip validity failed"))?;
+    // Now at subject (SEQUENCE)
+    let (subject_bytes, _) = der_read_tlv(after_validity)
+        .ok_or_else(|| anyhow::anyhow!("Cert: subject TLV parse failed"))?;
+    Ok(subject_bytes.to_vec())
 }
 
 // ---------------------------------------------------------------------------

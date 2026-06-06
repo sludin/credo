@@ -10,6 +10,9 @@ struct RawMtls {
     cert_path: Option<String>,
     key_path:  Option<String>,
     ca_path:   Option<String>,
+    // Bootstrap cert fallback: used when cert_path doesn't exist yet
+    bootstrap_cert_path: Option<String>,
+    bootstrap_key_path:  Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,6 +64,10 @@ pub fn load_corgis(path: &Path) -> Result<Vec<CorgiNodeConfig>> {
             .with_context(|| format!("Corgi '{}': missing mtls.keyPath", raw.name))?;
         let ca_str = raw.mtls.ca_path.as_deref()
             .or_else(|| defaults.and_then(|d| d.mtls.ca_path.as_deref()));
+        let bs_cert_str = raw.mtls.bootstrap_cert_path.as_deref()
+            .or_else(|| defaults.and_then(|d| d.mtls.bootstrap_cert_path.as_deref()));
+        let bs_key_str = raw.mtls.bootstrap_key_path.as_deref()
+            .or_else(|| defaults.and_then(|d| d.mtls.bootstrap_key_path.as_deref()));
 
         let resolve = |s: &str| -> PathBuf {
             let p = Path::new(s);
@@ -72,9 +79,11 @@ pub fn load_corgis(path: &Path) -> Result<Vec<CorgiNodeConfig>> {
             url:          raw.url.clone(),
             identity_uri: raw.identity_uri.clone(),
             mtls: CorgiMtlsConfig {
-                cert_path: resolve(cert_str),
-                key_path:  resolve(key_str),
-                ca_path:   ca_str.map(resolve),
+                cert_path:           resolve(cert_str),
+                key_path:            resolve(key_str),
+                ca_path:             ca_str.map(resolve),
+                bootstrap_cert_path: bs_cert_str.map(resolve),
+                bootstrap_key_path:  bs_key_str.map(resolve),
             },
             insecure_skip_verify: raw.insecure_skip_verify
                 .or_else(|| defaults.and_then(|d| d.insecure_skip_verify))

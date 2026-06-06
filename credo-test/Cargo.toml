@@ -1,0 +1,30 @@
+[package]
+name = "credo-test"
+version = "0.1.0"
+edition = "2021"
+description = "Integration test harness for the credo system (vigil, shepherd, corgi)"
+
+[lib]
+name = "credo_test"
+path = "src/lib.rs"
+
+[dependencies]
+vigil   = { path = "../vigil" }
+shepherd = { path = "../shepherd" }
+corgi   = { path = "../corgi" }
+
+tokio      = { version = "1", features = ["full"] }
+axum       = { version = "0.7" }
+reqwest    = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tempfile   = "3"
+anyhow     = "1"
+serde_json = "1"
+rcgen      = { version = "0.12", features = ["pem"] }
+time       = { version = "0.3", features = ["std"] }
+hex          = "0.4"
+sha2         = "0.10"
+x509-parser  = "0.16"
+pem          = "3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }

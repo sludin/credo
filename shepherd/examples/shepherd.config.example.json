@@ -16,12 +16,13 @@
   "shepherdCaPath": "${caTrustPath}",
 
   "tls": {
-    "certPath":     "${corgiRoot}/store/live/shepherd.${vigilDomain}/fullchain.pem",
-    "keyPath":      "${corgiRoot}/store/live/shepherd.${vigilDomain}/privkey.pem",
+    "certPath":     "${shepherdRoot}/certs/fullchain.pem",
+    "keyPath":      "${shepherdRoot}/certs/privkey.pem",
     "clientCaPath": "${caTrustPath}"
   },
 
   "auth": {
+    "identityOnly":      true,
     "jwtSigningKeyPath": "./shepherd.jwt.key.pem"
   },
 

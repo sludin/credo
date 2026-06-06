@@ -4,12 +4,10 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde_json::{json, Value};
 
+use crate::archive::pending_key_path;
 use crate::assignments::find_flock_entry;
 use crate::auth::check_min_role;
-use crate::cert_ops::{
-    generate_csr_with_keypair, install_certificate,
-    is_ecdsa_key, load_key_pem, read_cert_status, to_flock_summary,
-};
+use crate::cert_ops::{generate_key_and_csr, install_certificate, read_cert_status, to_flock_summary};
 use crate::error::AppError;
 use crate::hooks::run_hooks;
 use crate::state::AppState;
@@ -100,18 +98,12 @@ pub async fn flock_csr(
 
     tracing::info!(cert_name = %name, phase = "csr", "Renewal started");
 
-    let csr_pem = if !entry.key_path.exists() || !is_ecdsa_key(&entry.key_path) {
-        tracing::info!(cert_name = %name, "Generating new ECDSA key before CSR");
-        crate::cert_ops::generate_key_and_csr(&entry, &csr_req, config_identity_uri)
-            .map_err(|e| AppError::BadRequest(e.to_string()))?
-    } else {
-        let key_pem = load_key_pem(&entry.key_path)
-            .map_err(anyhow::Error::from)?;
-        let key_pair = rcgen::KeyPair::from_pem(&key_pem)
-            .map_err(|e| AppError::BadRequest(format!("Loading key: {}", e)))?;
-        generate_csr_with_keypair(&entry, &csr_req, config_identity_uri, key_pair)
-            .map_err(|e| AppError::BadRequest(e.to_string()))?
-    };
+    // Always generate a fresh key and stage it in pending/.
+    // install_to_archive moves it to archive/ and creates the live/ symlink when the
+    // signed cert arrives via /flock/<name>/install.  No real files ever land in live/.
+    let pending = pending_key_path(&state.config.cert_store_dir, &name);
+    let csr_pem = generate_key_and_csr(&entry, &pending, &csr_req, config_identity_uri)
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
     tracing::info!(cert_name = %name, phase = "csr-ready", "CSR generated");
     Ok(Json(json!({ "name": name, "csrPem": csr_pem })))

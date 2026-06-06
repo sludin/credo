@@ -38,6 +38,11 @@ pub async fn auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Result<Response, AppError> {
+    // Test bypass: if a Role is already injected (e.g. via test layer), skip real auth.
+    if req.extensions().get::<Role>().is_some() {
+        return Ok(next.run(req).await);
+    }
+
     let config = &state.config;
 
     let identity = match config.auth.mode {

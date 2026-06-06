@@ -1,0 +1,14 @@
+[package]
+name = "gen-fixtures"
+version = "0.1.0"
+edition = "2021"
+description = "One-shot generator for test PKI fixtures (run once, commit output)"
+
+[[bin]]
+name = "gen-fixtures"
+path = "src/main.rs"
+
+[dependencies]
+rcgen = { version = "0.12", features = ["pem"] }
+time = { version = "0.3", features = ["std"] }
+anyhow = "1"

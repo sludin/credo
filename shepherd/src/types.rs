@@ -52,6 +52,9 @@ pub struct CorgiMtlsConfig {
     pub cert_path: PathBuf,
     pub key_path: PathBuf,
     pub ca_path: Option<PathBuf>,
+    /// Fallback used when cert_path doesn't exist yet (bootstrap window).
+    pub bootstrap_cert_path: Option<PathBuf>,
+    pub bootstrap_key_path:  Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -199,6 +202,7 @@ pub struct CorgiFlockEntry {
     pub status: Option<String>,
     #[serde(default)]
     pub san_names: Vec<String>,
+    pub key_exists: Option<bool>,
 }
 
 #[derive(Debug, Clone)]

@@ -25,6 +25,11 @@ pub async fn corgi_auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Result<Response, AppError> {
+    // Test bypass: if a CorgiNodeConfig is already injected (e.g. via test layer), use it.
+    if req.extensions().get::<CorgiNodeConfig>().is_some() {
+        return Ok(next.run(req).await);
+    }
+
     let cert_der = req
         .extensions()
         .get::<credo_lib::PeerCertDer>()
@@ -72,6 +77,11 @@ pub async fn api_auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Result<Response, AppError> {
+    // Test bypass: if an AuthenticatedUser is already injected (e.g. via test layer), use it.
+    if req.extensions().get::<AuthenticatedUser>().is_some() {
+        return Ok(next.run(req).await);
+    }
+
     // --- Step 1: Try JWT Bearer token ---
     if let Some(auth_header) = req.headers().get("authorization") {
         if let Ok(value) = auth_header.to_str() {

@@ -11,6 +11,7 @@ use crate::auth::{api_auth_middleware, corgi_auth_middleware};
 use crate::config::ShepherdConfig;
 use crate::log_middleware::{agent_log_middleware, api_log_middleware};
 use crate::routes_api as api;
+use crate::routes_bootstrap as bootstrap;
 use crate::routes_corgi as corgi;
 use crate::state::AppState;
 
@@ -73,7 +74,12 @@ pub fn build_api_router(state: AppState) -> Router {
         .route("/admin/reload-assignments",         post(api::reload_assignments))
         .layer(middleware::from_fn_with_state(state.clone(), api_auth_middleware));
 
-    public.merge(authenticated)
+    // Bootstrap routes — authenticated by one-time token, not JWT
+    let bootstrap_routes = Router::new()
+        .route("/bootstrap/admin-cert", post(bootstrap::bootstrap_admin_cert))
+        .route("/bootstrap/corgi",      post(bootstrap::bootstrap_corgi));
+
+    public.merge(authenticated).merge(bootstrap_routes)
         .fallback(api_fallback)
         .layer(middleware::from_fn(api_log_middleware))
         .with_state(state)
@@ -88,11 +94,8 @@ async fn api_fallback(req: Request) -> impl IntoResponse {
     StatusCode::NOT_FOUND
 }
 
-pub async fn run(state: AppState) -> Result<()> {
+pub async fn run(state: AppState, tls_config: Arc<rustls::ServerConfig>) -> Result<()> {
     let config = state.config.clone();
-
-    let tls_config = build_server_tls(&config)
-        .context("Building mTLS server TLS config")?;
 
     let agent_listener = bind_tcp(&config.bind, config.agent_port)
         .await
