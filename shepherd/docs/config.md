@@ -178,38 +178,68 @@ Defines the certificate authorities Shepherd uses for ACME issuance. Each entry 
 
 ### `shepherd.accounts.json`
 
-RBAC identity registry. Maps Vigil URI SANs or certificate fingerprints to roles (`admin`, `operator`, `readonly`).
+RBAC identity registry. Each account maps one or more Vigil URI SANs to a role (`admin`, `operator`, `readonly`).
 
 ```json
 {
   "accounts": [
     {
+      "id":          "acct-001",
       "name":        "alice",
-      "identityUri": "vigil://credo/dev/admin/alice",
-      "role":        "admin"
+      "displayName": "Alice Admin",
+      "role":        "admin",
+      "active":      true,
+      "identities":  ["vigil://credo/dev/admin/alice"],
+      "notes":       ""
     },
     {
-      "name":        "ci-reader",
-      "fingerprint": "abcd1234...",
-      "role":        "readonly"
+      "id":          "acct-002",
+      "name":        "dashboard",
+      "displayName": "Dashboard Service",
+      "role":        "operator",
+      "active":      true,
+      "identities":  ["vigil://credo/prod/service/dashboard"],
+      "notes":       ""
     }
   ]
 }
 ```
 
+| Field | Required | Description |
+|-------|----------|-------------|
+| `id` | yes | Unique account identifier |
+| `name` | yes | Short machine-readable name |
+| `displayName` | yes | Human-readable label |
+| `role` | yes | `"admin"`, `"operator"`, or `"readonly"` |
+| `active` | no (default `true`) | Inactive accounts are rejected at auth time |
+| `identities` | no | URI SANs that map to this account |
+| `notes` | no | Free-text operator notes |
+
 ### `shepherd.assignments.json`
 
-Managed certificate assignments. Each entry maps a certificate name to a Corgi node and CA.
+Managed certificate assignments. Each entry maps a certificate name to a Corgi node and CA. The `certName` field defaults to the value of `domain` when omitted.
 
 ```json
 {
   "assignments": [
     {
-      "name":    "api.example.com",
-      "corgi":   "corgi-01",
-      "ca":      "vigil",
-      "domains": ["api.example.com"]
+      "certName":    "api.example.com",
+      "corgi":       "corgi-01",
+      "ca":          "vigil",
+      "domain":      "api.example.com",
+      "identityUri": "vigil://credo/prod/service/api"
     }
   ]
 }
 ```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `certName` | no | Certificate name. Defaults to `domain` when omitted |
+| `corgi` | no | Corgi node name from `shepherd.corgis.json`. Omit for operator-managed (non-corgi) certs |
+| `ca` | yes | CA name from `shepherd.ca.json` |
+| `domain` | no | Primary domain for ACME ordering and the default cert name |
+| `sans` | no | Additional DNS SANs beyond `domain` |
+| `identityUri` | no | URI SAN to embed in the certificate |
+| `days` | no | Certificate validity in days (overrides CA default) |
+| `renewBeforeDays` | no | Renewal threshold in days (overrides CA default) |

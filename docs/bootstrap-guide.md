@@ -197,10 +197,18 @@ Key points:
 
 Before starting shepherd, create three config files.
 
-**`shepherd.corgis.json`** — you can start with an empty inventory; `shepherd bootstrap corgi` will populate it. Alternatively you can populate it manually to simplify the bootstrap command line.
+**`shepherd.corgis.json`** — add one entry per corgi. Each entry must have `name`, `url`, and `identityUri`. The `shepherd bootstrap corgi` command does not modify this file; the operator must add entries manually.
 
 ```json
-{ "corgis": [] }
+{
+  "corgis": [
+    {
+      "name":        "corgi-01",
+      "url":         "https://192.0.2.10:7001",
+      "identityUri": "vigil://credo/dev/node/corgi-01"
+    }
+  ]
+}
 ```
 
 **`shepherd.ca.json`** — configure shepherd's CA backends. For a vigil-backed ACME setup:
@@ -260,7 +268,7 @@ Before starting shepherd, create three config files.
 ### 3.3 — Start shepherd in bootstrap mode
 
 ```bash
-./shepherd bootstrap --vigil-secret a3f2b1c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5e6f7a8b9c0d1e2
+./shepherd bootstrap server --vigil-secret a3f2b1c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5e6f7a8b9c0d1e2
 ```
 
 What shepherd does:
@@ -311,17 +319,17 @@ What this does:
 
 ### 4.2 — Verify admin access
 
-EDIT: As it is, the shepherd tries to go to loclhoat and of course gets a cert error.  To fix that you have to pass in the --url switch.  That is not good.  We should probably define the shepherd hostname in the shopherd config
-
 ```bash
-shepherd server status \
-  --mtls-cert ~/.vigil/admin.pem \
-  --mtls-key  ~/.vigil/admin.key
+curl -s \
+  --cert ~/.vigil/admin.pem \
+  --key  ~/.vigil/admin.key \
+  --cacert /var/apps/credo/ca/credo-catrust.pem \
+  https://shepherd.example.com:7011/accounts/me | jq
 ```
 
-You should see shepherd's health summary. Shepherd's logs will show `identity-based` auth — no fingerprint fallback.
+You should see your identity URI and role. Shepherd's logs will show `identity-based` auth — no fingerprint fallback.
 
-After confirming access, shepherd no longer needs the bootstrap admin token for day-to-day CLI use.
+After confirming access, shepherd no longer needs the bootstrap admin token for day-to-day API access. Use the cert and key for all subsequent admin CLI calls.
 
 ---
 
@@ -386,8 +394,12 @@ On corgi's machine:
 Corgi prints:
 
 ```
-Corgi bootstrap token:       d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2
-Corgi bootstrap fingerprint: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2
+  Node ID:               corgi-01
+  Common name:           corgi-01.example.com
+  Bootstrap port:        7001
+
+  Corgi bootstrap fingerprint: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2
+  Corgi bootstrap token:       d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2
 ```
 
 **Copy both values.** The token authenticates shepherd's enrollment call. The fingerprint lets shepherd pin to corgi's ephemeral self-signed cert (preventing MITM during enrollment).
@@ -398,28 +410,22 @@ Corgi bootstrap fingerprint: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b
 shepherd bootstrap corgi \
   --name         corgi-01 \
   --corgi-url    https://192.0.2.10:7001 \
-  --cert-name    corgi-01.example.com \
   --identity-uri vigil://credo/dev/node/corgi-01 \
   --token        d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2 \
   --fingerprint  a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2 \
   --admin-token  3a4b5c6d7e8f9a0b1c2d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5e6f7a8b9c0d1e2f
 ```
 
-`--identity-uri` is required. `--corgi-url`, `--cert-name`, and `--vigil-ca` are optional: when omitted, they are auto-derived from `shepherd.corgis.json`, `shepherd.assignments.json`, and `config.tls.clientCaPath` respectively. If any required value cannot be resolved, the command exits with an error.
-
-EDIT: The default behavior should be to update the corgi stanza if the passed in info is different. We should have a switch to tell is not to do that.  A common case will be they typo it the first time and then run again.  
-
-EDIT: We should add the mtlsCA line as well into the stanza.  Pull the trust from the shepherd config.
+All flags are required. This command does **not** modify `shepherd.corgis.json` or `shepherd.assignments.json` — those must be pre-populated (see Section 3.2).
 
 What shepherd does:
 
-1. Adds corgi-A to `shepherd.corgis.json` and corgi-A-identity to `shepherd.assignments.json`
-2. Connects to corgi's bootstrap server, pinning to the fingerprint, authenticating with the token
-3. Fetches corgi's CSR (`GET /bootstrap/csr`) — corgi generates its ECDSA key pair + CSR with URI SAN; private key stays on corgi's machine
-4. Issues a 1-day cert from vigil via ACME, using shepherd's in-memory cert for mTLS
-5. Pushes `vigil-catrust.pem` to corgi (`POST /bootstrap/ca`) — corgi writes it to `mtls.caPath`
-6. Pushes the signed cert to corgi (`POST /bootstrap/cert`) — corgi validates it matches its key, installs to `certStoreDir/live/<certName>/`
-7. Finalizes (`POST /bootstrap/finalize`) — corgi invalidates the token and exits
+1. Connects to corgi's bootstrap server, pinning to the fingerprint, authenticating with the token
+2. Fetches corgi's CSR (`GET /bootstrap/csr`) — corgi generates its ECDSA key pair + CSR with URI SAN; private key stays on corgi's machine
+3. Issues a 1-day cert from Vigil, using shepherd's in-memory cert for mTLS
+4. Pushes the CA trust bundle to corgi (`POST /bootstrap/ca`) — corgi writes it to `mtls.caPath`
+5. Pushes the signed cert to corgi (`POST /bootstrap/cert`) — corgi validates it matches its key, installs to `certStoreDir/live/<commonName>/`
+6. Finalizes (`POST /bootstrap/finalize`) — corgi invalidates the token and exits bootstrap mode
 
 ### 5.4 — Restart corgi in normal mode
 
@@ -489,16 +495,18 @@ openssl x509 -in /etc/shepherd/certs/fullchain.pem -noout -dates -subject
 
 ```bash
 # Confirm corgi is connected and pulling assignments
-curl -sk https://localhost:3001/health | jq
+curl -sk https://localhost:7001/health | jq
 ```
 
-**From shepherd's API:**
+**From shepherd's dashboard API (use the admin cert from Phase 4):**
 
 ```bash
-# Confirm all corgis are healthy (use the admin cert from Phase 4)
-shepherd flock \
-  --mtls-cert ~/.vigil/admin.pem \
-  --mtls-key  ~/.vigil/admin.key
+# List all corgis and their health status
+curl -s \
+  --cert ~/.vigil/admin.pem \
+  --key  ~/.vigil/admin.key \
+  --cacert /var/apps/credo/ca/credo-catrust.pem \
+  https://shepherd.example.com:7011/flock | jq
 ```
 
 ---
@@ -511,11 +519,11 @@ Restart vigil with `./vigil bootstrap` — a new ephemeral cert and secret are g
 
 ### Shepherd crashes before corgi-B issues it a production cert
 
-Restart vigil with `./vigil bootstrap` and shepherd with `./shepherd bootstrap --vigil-secret <new-secret>`. Vigil generates a new secret; shepherd enrolls again. Corgis that already have production certs are unaffected.
+Restart vigil with `./vigil bootstrap` and shepherd with `./shepherd bootstrap server --vigil-secret <new-secret>`. Vigil generates a new secret; shepherd enrolls again. Corgis that already have production certs are unaffected.
 
 ### Corgi crashes before receiving its cert from shepherd
 
-Restart corgi with `./corgi bootstrap`. Run `shepherd bootstrap corgi` again. The previous `bootstrap corgi` run registered corgi in `shepherd.corgis.json` — if corgi-A is already registered, pass `--force` or remove the entry and re-run.
+Restart corgi with `./corgi bootstrap` (a new token and fingerprint are generated). Run `shepherd bootstrap corgi` again with the new token and fingerprint values. `shepherd.corgis.json` and `shepherd.assignments.json` do not need to change — the enrollment sequence only issues and installs the cert.
 
 ### The 1-day bootstrap cert expired before rotation completed
 
@@ -549,8 +557,8 @@ All services still need to be running for rotation to complete. Restart any serv
 | `tls.certPath`     | Production TLS cert path (read on normal startup; written by corgi-B)                  |
 | `tls.keyPath`      | Production TLS key path (read on normal startup; written by corgi-B)                   |
 | `tls.clientCaPath` | CA bundle to verify vigil's server cert and validate inbound corgi client certs        |
-| `agentPort`        | Port for the corgi-facing agent server (default: 7000)                                 |
-| `dashboardPort`    | Port for the dashboard/admin API server (default: 7443)                                |
+| `agentPort`        | Port for the corgi-facing agent server (default: 7010)                                 |
+| `dashboardPort`    | Port for the dashboard/admin API server (default: 7011)                                |
 | `adminCertDays`    | Validity period for admin certs issued via `bootstrap admin` (default: 365)            |
 
 ### Corgi (`corgi.config.json`)
@@ -569,6 +577,42 @@ All services still need to be running for rotation to complete. Restart any serv
 | `certStoreDir`   | Root directory for all cert material managed by corgi                                           |
 | `bootstrapPort`  | Port for the temporary bootstrap HTTPS server                                                   |
 | `shepherdUrl`    | Shepherd's agent port URL; used to pull assignments in normal mode                              |
+
+---
+
+## Bootstrap CLI Reference
+
+### Vigil
+
+| Command | Description |
+|---------|-------------|
+| `vigil bootstrap` | Start in bootstrap mode — generates an ephemeral TLS cert using the intermediate CA, prints a one-time secret, and listens for one enrollment request |
+| `vigil server start` | Start in normal mode — reads `tls.certPath` / `tls.keyPath` from config |
+| `vigil server check-config` | Validate config and CA key material; exit 1 if anything is missing |
+| `vigil server status` | Print CA fingerprint, validity, and certificate statistics |
+| `vigil ca add-user --id <id> --name <name> --public-key-pem-file <path>` | Register a new mTLS user in the users registry |
+| `vigil ca export-crl [--out <path>] [--format json\|pem\|der]` | Export the current CRL |
+| `vigil ca ocsp-check [--id <id>] [--serial <hex>]` | Check revocation status of a certificate |
+
+### Shepherd
+
+| Command | Description |
+|---------|-------------|
+| `shepherd bootstrap server --vigil-secret <secret>` | Start in bootstrap mode — enrolls shepherd with Vigil using the secret, starts both API ports with an in-memory cert, and prints a one-time admin token |
+| `shepherd bootstrap admin --admin-token <token> --identity-uri <uri> --out-cert <path> --out-key <path> --domain <domain>` | Issue a personal admin certificate and register it in `shepherd.accounts.json`. The private key is generated locally and never sent over the wire |
+| `shepherd bootstrap corgi --admin-token <token> --name <name> --corgi-url <url> --identity-uri <uri> --token <corgi-token> --fingerprint <hex>` | Enroll a Corgi node — fetches its CSR, signs it via Vigil, and installs the cert and CA bundle on the Corgi |
+| `shepherd server start` | Start in normal mode — reads `tls.certPath` / `tls.keyPath` from config |
+| `shepherd server check-config` | Validate config paths and JWT key; exit 1 if anything is missing |
+| `shepherd cert store` | List all entries in the cert store |
+| `shepherd cert inspect <certName>` | Show metadata for one cert store entry |
+
+### Corgi
+
+| Command | Description |
+|---------|-------------|
+| `corgi bootstrap [--out <path>] [--dry-run]` | Start in bootstrap mode — generates an ephemeral self-signed cert, prints a token and fingerprint, and waits for Shepherd to enroll it |
+| `corgi server start` | Start in normal mode — reads `tls.certPath` / `tls.keyPath` from config |
+| `corgi server check-config` | Validate config, check cert paths, and probe Shepherd connectivity |
 
 ---
 

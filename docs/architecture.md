@@ -6,7 +6,7 @@ This document describes how credo works at a conceptual level — the certificat
 
 ## System Topology
 
-Credo is a hub-and-spoke certificate management system. Shepherd is the single control plane; Corgi agents run on every managed node and are the only component that needs a routable network path to Shepherd, assuming the dashboard runs on the same machien as Shepherd.
+Credo is a hub-and-spoke certificate management system. Shepherd is the single control plane; Corgi agents run on every managed node and are the only component that needs a routable network path to Shepherd, assuming the dashboard runs on the same machine as Shepherd.
 
 ```
                       ┌──────────────────────────────────┐
@@ -32,7 +32,7 @@ Credo is a hub-and-spoke certificate management system. Shepherd is the single c
 **Component roles:**
 
 - **Shepherd** — holds assignment records (which cert goes where), runs ACME issuance against a CA, distributes non-private cert material to Corgi agents on demand.
-- **Corgi** — runs on every managed node. Periodically pulls its assignments from Shepherd, compares certificate fingerprints, fetches updated material when needed, installs certs atomically, and runs service hooks.  Creates certificat esigning requests (CSR) and private keys.
+- **Corgi** — runs on every managed node. Periodically pulls its assignments from Shepherd, compares certificate fingerprints, fetches updated material when needed, installs certs atomically, and runs service hooks. Creates certificate signing requests (CSR) and private keys.
 - **Vigil** — ACME-compatible private CA used internally. Signs certs for all services and for end-entity certificates when configured. Shepherd talks to Vigil as an ACME client.
 - **Ceremony scripts** — offline shell scripts for generating the root CA and intermediate CA. Run once, air-gapped.
 - **Dashboard** — React + Vite SPA served by an Express BFF. Provides a UI for managing assignments, accounts, and viewing cert status. Talks only to Shepherd's dashboard API port (7011).
@@ -116,7 +116,7 @@ Corgi starts in bootstrap mode when it has no valid TLS certificate:
 1. Generates an ephemeral self-signed cert and a 48-character random token.
 2. Starts a bootstrap HTTPS server on its bootstrap port (default 7002) and prints the server fingerprint and token to stdout.
 3. An operator (or Shepherd's `bootstrap corgi` CLI command) verifies the fingerprint out-of-band, then POSTs a request with the token to:
-   - `POST /bootstrap/csr` — Corgi generates an ECDSA key + CSR and returns the CSR PEM.
+   - `GET /bootstrap/csr` — Corgi generates an ECDSA key + CSR and returns the CSR PEM.
    - `POST /bootstrap/ca` — installs the CA trust bundle.
    - `POST /bootstrap/cert` — installs the signed certificate.
    - `POST /bootstrap/finalize` — Corgi exits bootstrap mode and starts the main mTLS server.

@@ -130,9 +130,19 @@ async fn bs_ca(
         }
     };
 
-    let bs_dir = bootstrap_dir(&state.config);
-    let _ = std::fs::create_dir_all(&bs_dir);
-    let ca_path = bs_dir.join("ca.pem");
+    // Write to the configured mtls.ca_path so it is available on normal-mode restart.
+    let ca_path = match &state.config.mtls.ca_path {
+        Some(p) => p.clone(),
+        None => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "mtls.caPath is not configured" }))).into_response()
+        }
+    };
+
+    if let Some(parent) = ca_path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response();
+        }
+    }
 
     match std::fs::write(&ca_path, &ca_pem) {
         Ok(()) => {
