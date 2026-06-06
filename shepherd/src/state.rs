@@ -75,7 +75,12 @@ impl AppState {
             cas: Arc::new(cas),
             corgis_mtime: Arc::new(Mutex::new(None)),
             assignments_mtime: Arc::new(Mutex::new(None)),
-            corgi_client_pool: Arc::new(RwLock::new(HashMap::new())),
+            corgi_client_pool: Arc::new(RwLock::new(
+                match (cert_pem.as_deref(), key_pem.as_deref()) {
+                    (Some(c), Some(k)) => CorgiClientPool::with_bootstrap_identity(c, k),
+                    _ => CorgiClientPool::new(),
+                }
+            )),
             acme_accounts: match (cert_pem.as_deref(), key_pem.as_deref()) {
                 (Some(c), Some(k)) => AcmeAccountCache::with_identity(c, k),
                 _ => AcmeAccountCache::new(),

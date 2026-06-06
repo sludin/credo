@@ -43,6 +43,21 @@ kill_stale_pids() {
   fi
 }
 
+purge_runtime_data() {
+  local vigil_dir="$1" shepherd_dir="$2" corgi_dir="$3"
+  printf 'Purging runtime data from previous run...\n'
+  rm -rf  "$vigil_dir/data"
+  rm -rf  "$vigil_dir/logs"
+  rm -rf  "$shepherd_dir/store"
+  rm -rf  "$shepherd_dir/renewal-jobs"
+  rm -f   "$shepherd_dir/shepherd.accounts.json"
+  rm -f   "$shepherd_dir/shepherd.jwt.key.pem"
+  rm -f   "$shepherd_dir"/vigil-account.key.pem*
+  rm -rf  "$corgi_dir/store"
+  rm -f   "$corgi_dir/corgi.assignments.cache.json"
+  printf '  done.\n'
+}
+
 kill_tracked_pids() {
   local pid
   for pid in "${TRACKED_PIDS[@]}"; do

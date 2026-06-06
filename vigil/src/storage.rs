@@ -53,8 +53,11 @@ fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> Result<T> {
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     ensure_parent(path)?;
     let json = serde_json::to_string_pretty(value)? + "\n";
-    std::fs::write(path, json)
-        .with_context(|| format!("Writing {}", path.display()))
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, &json)
+        .with_context(|| format!("Writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("Renaming {} to {}", tmp.display(), path.display()))
 }
 
 pub fn normalize_pem(pem: &str) -> String {

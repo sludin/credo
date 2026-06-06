@@ -18,35 +18,45 @@ fn url_hostname(url: &str) -> String {
         .to_string()
 }
 
-pub type CorgiClientPool = HashMap<String, reqwest::Client>;
+/// Per-corgi mTLS reqwest client cache.
+///
+/// In bootstrap mode, carries the in-memory cert+key PEM (Shepherd's own identity,
+/// Vigil-signed, never written to disk). `build_client` uses it directly as the
+/// mTLS client identity so the poll loop can reach Corgi before production certs exist.
+/// In normal server mode the pool is empty and clients are built from disk paths.
+pub struct CorgiClientPool {
+    clients: HashMap<String, reqwest::Client>,
+    bootstrap_identity_pem: Option<Vec<u8>>,
+}
+
+impl CorgiClientPool {
+    pub fn new() -> Self {
+        Self { clients: HashMap::new(), bootstrap_identity_pem: None }
+    }
+
+    pub fn with_bootstrap_identity(cert_pem: &str, key_pem: &str) -> Self {
+        let mut pem = cert_pem.as_bytes().to_vec();
+        pem.extend_from_slice(key_pem.as_bytes());
+        Self { clients: HashMap::new(), bootstrap_identity_pem: Some(pem) }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Client construction
 // ---------------------------------------------------------------------------
 
-fn build_client(node: &CorgiNodeConfig) -> Result<reqwest::Client> {
-    // During the bootstrap window the production cert hasn't been issued yet.
-    // Use the bootstrap cert (shepherdRoot/bootstrap/) as a fallback until the
-    // production cert appears in the corgi certstore live/ directory.
-    let (cert_path, key_path) =
-        if node.mtls.cert_path.exists() {
-            (&node.mtls.cert_path, &node.mtls.key_path)
-        } else if let (Some(bc), Some(bk)) =
-            (&node.mtls.bootstrap_cert_path, &node.mtls.bootstrap_key_path)
-        {
-            (bc, bk)
-        } else {
-            (&node.mtls.cert_path, &node.mtls.key_path)
-        };
+fn build_client(node: &CorgiNodeConfig, bootstrap_identity_pem: Option<&[u8]>) -> Result<reqwest::Client> {
+    let identity_pem: Vec<u8> = if let Some(pem) = bootstrap_identity_pem {
+        // Bootstrap mode: use the in-memory identity exclusively — no disk reads.
+        pem.to_vec()
+    } else {
+        let mut cert = std::fs::read(&node.mtls.cert_path)
+            .with_context(|| format!("Reading corgi mTLS cert: {}", node.mtls.cert_path.display()))?;
+        cert.extend_from_slice(&std::fs::read(&node.mtls.key_path)
+            .with_context(|| format!("Reading corgi mTLS key: {}", node.mtls.key_path.display()))?);
+        cert
+    };
 
-    let cert_bytes = std::fs::read(cert_path)
-        .with_context(|| format!("Reading corgi mTLS cert: {}", cert_path.display()))?;
-    let key_bytes = std::fs::read(key_path)
-        .with_context(|| format!("Reading corgi mTLS key: {}", key_path.display()))?;
-
-    // reqwest accepts cert + key PEM concatenated
-    let mut identity_pem = cert_bytes;
-    identity_pem.extend_from_slice(&key_bytes);
     let identity = reqwest::Identity::from_pem(&identity_pem)
         .context("Building mTLS client identity")?;
 
@@ -70,20 +80,21 @@ fn build_client(node: &CorgiNodeConfig) -> Result<reqwest::Client> {
 async fn get_or_create(pool: &Arc<RwLock<CorgiClientPool>>, node: &CorgiNodeConfig) -> Result<reqwest::Client> {
     {
         let r = pool.read().await;
-        if let Some(client) = r.get(&node.name) {
+        if let Some(client) = r.clients.get(&node.name) {
             return Ok(client.clone());
         }
     }
-    let client = build_client(node)?;
-    pool.write().await.insert(node.name.clone(), client.clone());
+    let bootstrap_pem = pool.read().await.bootstrap_identity_pem.clone();
+    let client = build_client(node, bootstrap_pem.as_deref())?;
+    pool.write().await.clients.insert(node.name.clone(), client.clone());
     Ok(client)
 }
 
 /// Evict a cached client for `node_name` so the next request rebuilds it.
-/// Call this after the production cert lands in the certstore so the client
-/// switches from the bootstrap fallback to the production credential.
+/// Called after the production cert is installed on corgi; the next connection
+/// will build a fresh client (from disk in normal mode, still in-memory in bootstrap mode).
 pub async fn evict(pool: &Arc<RwLock<CorgiClientPool>>, node_name: &str) {
-    pool.write().await.remove(node_name);
+    pool.write().await.clients.remove(node_name);
 }
 
 // ---------------------------------------------------------------------------

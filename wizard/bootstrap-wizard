@@ -45,6 +45,7 @@ DEFAULTS_SAVE_PATH=""
 ORIG_DEFAULTS=""       # original file content cached in memory before any saves
 AUTO=false
 DRY_RUN=false
+PURGE_DATA=true
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -282,6 +283,7 @@ Options:
   --defaults <file>   Load defaults from a JSON file; prompts with pre-filled values
   --auto              Non-interactive; use defaults file values, fail on any missing
   --dry-run           Generate config files only, do not start services
+  --preserve-data     Keep runtime data from a previous run (cert DB, stores, accounts)
   --help              Show this help
 
 Examples:
@@ -306,9 +308,10 @@ main() {
   while (( $# > 0 )); do
     case "$1" in
       --help|-h)    print_help; exit 0 ;;
-      --defaults)   DEFAULTS_FILE="$2"; shift 2 ;;
-      --auto)       AUTO=true; shift ;;
-      --dry-run)    DRY_RUN=true; shift ;;
+      --defaults)       DEFAULTS_FILE="$2"; shift 2 ;;
+      --auto)           AUTO=true; shift ;;
+      --dry-run)        DRY_RUN=true; shift ;;
+      --preserve-data)  PURGE_DATA=false; shift ;;
       *)            die "Unknown option: $1" ;;
     esac
   done
@@ -328,8 +331,9 @@ main() {
 
   printf 'Credo Bootstrap Wizard\n'
   printf '%s\n' "========================================"
-  if $DRY_RUN; then printf '(dry-run mode — config files will be written, services will not start)\n'; fi
-  if $AUTO;    then printf '(auto mode — using defaults file, no interactive prompts)\n'; fi
+  if $DRY_RUN;      then printf '(dry-run mode — config files will be written, services will not start)\n'; fi
+  if $AUTO;         then printf '(auto mode — using defaults file, no interactive prompts)\n'; fi
+  if ! $PURGE_DATA; then printf '(preserve-data — keeping runtime data from previous run)\n'; fi
 
   collect_answers
 
@@ -343,6 +347,10 @@ main() {
   # Kill any services from a previous interrupted run, then let the OS release ports
   kill_stale_pids
   sleep 0.3
+
+  if $PURGE_DATA; then
+    purge_runtime_data "$VIGIL_DIR" "$SHEPHERD_DIR" "$CORGI_DIR"
+  fi
 
   # Log file paths — written to service dirs so they survive the wizard process
   local VIGIL_LOG="$VIGIL_DIR/vigil.log"
