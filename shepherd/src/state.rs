@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::SystemTime;
+use arc_swap::ArcSwap;
 use tokio::sync::{Notify, RwLock};
 use uuid::Uuid;
 
@@ -13,7 +14,8 @@ use crate::types::{Account, CaConfig, CorgiNodeConfig, CorgiNodeState, ManagedAs
 
 #[derive(Clone)]
 pub struct AppState {
-    pub config:            Arc<ShepherdConfig>,
+    /// Main config — hot-swappable on SIGHUP via ArcSwap (lock-free reads).
+    pub config:            Arc<ArcSwap<ShepherdConfig>>,
     pub jwt_keys:          Arc<JwtKeys>,
     pub corgi_state:       Arc<RwLock<HashMap<String, CorgiNodeState>>>,
     pub renewal_jobs:      Arc<RwLock<HashMap<Uuid, RenewalJob>>>,
@@ -21,11 +23,13 @@ pub struct AppState {
     pub refresh_tokens:    Arc<RefreshTokenStore>,
     pub assignments:       Arc<RwLock<Vec<ManagedAssignment>>>,
     pub corgis:            Arc<RwLock<Vec<CorgiNodeConfig>>>,
-    /// Loaded CA configs keyed by CA name
-    pub cas:               Arc<HashMap<String, CaConfig>>,
+    /// Loaded CA configs keyed by CA name — hot-reloaded on mtime change.
+    pub cas:               Arc<RwLock<HashMap<String, CaConfig>>>,
     /// Last-seen mtimes for hot-reload detection
     pub corgis_mtime:      Arc<Mutex<Option<SystemTime>>>,
     pub assignments_mtime: Arc<Mutex<Option<SystemTime>>>,
+    pub accounts_mtime:    Arc<Mutex<Option<SystemTime>>>,
+    pub ca_mtime:          Arc<Mutex<Option<SystemTime>>>,
     /// Per-corgi mTLS reqwest client pool (keyed by corgi name)
     pub corgi_client_pool: Arc<RwLock<CorgiClientPool>>,
     /// ACME account cache (avoids re-creating accounts on each renewal)
@@ -33,7 +37,7 @@ pub struct AppState {
     /// In-progress issuance deduplication: key = "{ca}:{cert_name}"
     pub in_progress:       Arc<Mutex<HashMap<String, Weak<Notify>>>>,
     /// mTLS client for proxying admin requests to Vigil (None if vigilUrl not configured)
-    pub vigil_client:      Option<reqwest::Client>,
+    pub vigil_client:      Arc<RwLock<Option<reqwest::Client>>>,
     /// One-time admin token for bootstrap API endpoints (None in normal mode)
     pub bootstrap_admin_token: Arc<Mutex<Option<String>>>,
 }
@@ -64,7 +68,7 @@ impl AppState {
         };
 
         Self {
-            config: Arc::new(config),
+            config: Arc::new(ArcSwap::from_pointee(config)),
             jwt_keys: Arc::new(jwt_keys),
             corgi_state: Arc::new(RwLock::new(HashMap::new())),
             renewal_jobs: Arc::new(RwLock::new(HashMap::new())),
@@ -72,9 +76,11 @@ impl AppState {
             refresh_tokens: Arc::new(RefreshTokenStore::new(refresh_token_path)),
             assignments: Arc::new(RwLock::new(vec![])),
             corgis: Arc::new(RwLock::new(vec![])),
-            cas: Arc::new(cas),
+            cas: Arc::new(RwLock::new(cas)),
             corgis_mtime: Arc::new(Mutex::new(None)),
             assignments_mtime: Arc::new(Mutex::new(None)),
+            accounts_mtime: Arc::new(Mutex::new(None)),
+            ca_mtime: Arc::new(Mutex::new(None)),
             corgi_client_pool: Arc::new(RwLock::new(
                 match (cert_pem.as_deref(), key_pem.as_deref()) {
                     (Some(c), Some(k)) => CorgiClientPool::with_bootstrap_identity(c, k),
@@ -86,7 +92,7 @@ impl AppState {
                 _ => AcmeAccountCache::new(),
             },
             in_progress: Arc::new(Mutex::new(HashMap::new())),
-            vigil_client,
+            vigil_client: Arc::new(RwLock::new(vigil_client)),
             bootstrap_admin_token: Arc::new(Mutex::new(admin_token)),
         }
     }

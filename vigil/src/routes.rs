@@ -160,7 +160,7 @@ async fn ocsp_der(
         ).into_response();
     }
     let config = state.config();
-    match build_ocsp_response_from_request(&body, config.ca.ocsp_max_age_seconds, config) {
+    match build_ocsp_response_from_request(&body, config.ca.ocsp_max_age_seconds, &config) {
         Ok(resp) => {
             let _ = crate::ctlog::append_ct_log(
                 &config.ct_log_path, "certificate.ocsp.der.checked", &auth_user.id,
@@ -193,7 +193,7 @@ async fn crl_der(
     axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
 ) -> impl IntoResponse {
     let config = state.config();
-    match build_signed_crl_der(state.ca_metadata(), config.ca.crl_next_update_hours, config) {
+    match build_signed_crl_der(state.ca_metadata(), config.ca.crl_next_update_hours, &config) {
         Ok(der) => {
             let _ = crate::ctlog::append_ct_log(
                 &config.ct_log_path, "certificate.crl.der.downloaded", &auth_user.id,
@@ -213,7 +213,7 @@ async fn crl_pem(
     axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
 ) -> impl IntoResponse {
     let config = state.config();
-    match build_signed_crl_pem(state.ca_metadata(), config.ca.crl_next_update_hours, config) {
+    match build_signed_crl_pem(state.ca_metadata(), config.ca.crl_next_update_hours, &config) {
         Ok(pem) => {
             let _ = crate::ctlog::append_ct_log(
                 &config.ct_log_path, "certificate.crl.pem.downloaded", &auth_user.id,
@@ -254,7 +254,7 @@ async fn sign_certificate(
     crate::issuance_policy::validate_issuance_policy(&csr_pem, &extra_sans, &state.config().issuance_policy)
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
-    let signed = crate::ca::sign_csr(&csr_pem, days, if extra_sans.is_empty() { None } else { Some(&extra_sans) }, state.config())
+    let signed = crate::ca::sign_csr(&csr_pem, days, if extra_sans.is_empty() { None } else { Some(&extra_sans) }, &state.config())
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
     let config = state.config();

@@ -11,8 +11,9 @@ use crate::types::{CsrRequest, InstallRequest};
 /// Perform a single reconciliation pass: pull assignments from Shepherd,
 /// compare fingerprints, fetch and install changed certs, run hooks.
 pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
-    let config = &state.config;
-    let client = ShepherdClient::new(config)?;
+    let config = state.config.load_full();
+    let http_client = state.shepherd_client.read().await.clone();
+    let client = ShepherdClient::from_client(http_client, &config.shepherd_url);
 
     let response = client.get_assignments(&config.node_id).await?;
     let assignments = response.assignments.clone();
@@ -29,7 +30,7 @@ pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
     }
 
     // Save to cache for fail-stale
-    save_assignments_cache(config, &assignments);
+    save_assignments_cache(&config, &assignments);
 
     // Update stored assignments
     {
@@ -38,7 +39,7 @@ pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
     }
 
     // Merge assignments with config flock
-    let active_flock = merge_assignments(&config.flock, &assignments, config);
+    let active_flock = merge_assignments(&config.flock, &assignments, &config);
 
     // Update active flock in state
     {
@@ -180,7 +181,7 @@ pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
                 );
 
                 if result.changed {
-                    let hook_results = run_hooks(entry, config).await;
+                    let hook_results = run_hooks(entry, &config).await;
                     for hr in &hook_results {
                         tracing::info!(
                             cert_name = %assignment.cert_name,
@@ -207,14 +208,13 @@ pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
 /// Run the periodic Shepherd sync loop. Calls `reconcile_once` on each tick.
 /// On failure, logs and continues (fail-open with cached assignments).
 pub async fn run_sync_loop(state: AppState) {
-    let config = state.config.clone();
+    let config = state.config.load_full();
     if !config.shepherd_sync.enabled {
         tracing::info!("Shepherd sync disabled by config");
         return;
     }
 
-    let interval_secs = config.shepherd_sync.interval_seconds;
-    tracing::info!(interval_seconds = interval_secs, "Starting Shepherd sync loop");
+    tracing::info!(interval_seconds = config.shepherd_sync.interval_seconds, "Starting Shepherd sync loop");
 
     // Load from cache immediately before first sync
     if let Some(cached) = load_assignments_cache(&config) {
@@ -225,7 +225,7 @@ pub async fn run_sync_loop(state: AppState) {
         *stored = cached;
     }
 
-    let mut ticker = tokio::time::interval(Duration::from_secs(interval_secs));
+    let mut ticker = tokio::time::interval(Duration::from_secs(config.shepherd_sync.interval_seconds));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {

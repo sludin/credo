@@ -43,11 +43,11 @@ pub async fn auth_middleware(
         return Ok(next.run(req).await);
     }
 
-    let config = &state.config;
+    let config = state.config.load_full();
 
     let identity = match config.auth.mode {
         AuthMode::Mtls => extract_mtls_identity(&req)?,
-        AuthMode::ProxyHeaders => extract_proxy_identity(&req, config)?,
+        AuthMode::ProxyHeaders => extract_proxy_identity(&req, &config)?,
     };
 
     let identity_name = if identity.is_anonymous() {
@@ -55,7 +55,7 @@ pub async fn auth_middleware(
     } else {
         Some(identity.display_name().to_string())
     };
-    let role = resolve_role(&identity, config);
+    let role = resolve_role(&identity, &config);
     req.extensions_mut().insert(identity);
     if let Some(r) = role {
         req.extensions_mut().insert(r);

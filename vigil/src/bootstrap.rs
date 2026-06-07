@@ -59,7 +59,7 @@ pub async fn handle_bootstrap(
     validate_issuance_policy(&csr_pem, &extra_sans, &state.config().issuance_policy)
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
-    let signed = sign_csr(&csr_pem, 1, if extra_sans.is_empty() { None } else { Some(&extra_sans) }, state.config())
+    let signed = sign_csr(&csr_pem, 1, if extra_sans.is_empty() { None } else { Some(&extra_sans) }, &state.config())
         .map_err(|e| AppError::Internal(e))?;
 
     // Deactivate after first successful use

@@ -87,6 +87,9 @@ dotenvy = "0.15"
 # Random number generation for bootstrap token
 rand = "0.8"
 
+# Lock-free config hot-swap
+arc-swap = "1"
+
 [dev-dependencies]
 credo-test = { path = "../credo-test" }
 tempfile   = "3"

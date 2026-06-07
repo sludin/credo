@@ -72,6 +72,8 @@ pub fn build_api_router(state: AppState) -> Router {
         .route("/accounts/:id",                     delete(api::delete_account))
         .route("/admin/reload-corgis",              post(api::reload_corgis))
         .route("/admin/reload-assignments",         post(api::reload_assignments))
+        .route("/admin/reload-accounts",            post(api::reload_accounts))
+        .route("/admin/reload-cas",                 post(api::reload_cas))
         .layer(middleware::from_fn_with_state(state.clone(), api_auth_middleware));
 
     // Bootstrap routes — authenticated by one-time token, not JWT
@@ -94,8 +96,12 @@ async fn api_fallback(req: Request) -> impl IntoResponse {
     StatusCode::NOT_FOUND
 }
 
-pub async fn run(state: AppState, tls_config: Arc<rustls::ServerConfig>) -> Result<()> {
-    let config = state.config.clone();
+pub async fn run(
+    state: AppState,
+    tls_config: Arc<rustls::ServerConfig>,
+    shutdown: tokio::sync::watch::Receiver<bool>,
+) -> Result<()> {
+    let config = state.config.load_full();
 
     let agent_listener = bind_tcp(&config.bind, config.agent_port)
         .await
@@ -123,8 +129,8 @@ pub async fn run(state: AppState, tls_config: Arc<rustls::ServerConfig>) -> Resu
     let api_acceptor   = TlsAcceptor::from(tls_config);
 
     tokio::join!(
-        serve_tls(agent_listener, agent_acceptor, agent_router),
-        serve_tls(api_listener, api_acceptor, api_router),
+        serve_tls(agent_listener, agent_acceptor, agent_router, shutdown.clone()),
+        serve_tls(api_listener, api_acceptor, api_router, shutdown),
     );
 
     Ok(())

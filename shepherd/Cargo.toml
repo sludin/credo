@@ -77,9 +77,10 @@ time   = { version = "0.3", features = ["std"] }
 dotenvy = "0.15"
 
 # Misc
-rand  = "0.8"
-rcgen = { version = "0.12", features = ["pem"] }
-uuid = { version = "1", features = ["v4", "serde"] }
+rand      = "0.8"
+rcgen     = { version = "0.12", features = ["pem"] }
+uuid      = { version = "1", features = ["v4", "serde"] }
+arc-swap  = "1"
 
 [dev-dependencies]
 credo-test = { path = "../credo-test" }

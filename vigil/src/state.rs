@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use arc_swap::ArcSwap;
 use tokio::sync::{Mutex, RwLock};
 
 use crate::config::VigilConfig;
@@ -11,11 +12,12 @@ use crate::types::{AcmeAccountRecord, AcmeAuthz, AcmeChallenge, AcmeOrder, RootC
 
 #[derive(Clone)]
 pub struct AppState {
+    /// Main config — hot-swappable on SIGHUP via ArcSwap (lock-free reads).
+    pub config: Arc<ArcSwap<VigilConfig>>,
     pub inner: Arc<StateInner>,
 }
 
 pub struct StateInner {
-    pub config: VigilConfig,
     pub ca_metadata: RootCAMetadata,
 
     // File-backed storage (protected by Mutex for write serialization)
@@ -38,8 +40,8 @@ pub struct StateInner {
 impl AppState {
     pub fn new(config: VigilConfig, ca_metadata: RootCAMetadata, bootstrap_secret: Option<String>) -> Self {
         AppState {
+            config: Arc::new(ArcSwap::from_pointee(config)),
             inner: Arc::new(StateInner {
-                config,
                 ca_metadata,
                 storage_lock: Mutex::new(()),
                 acme_accounts: RwLock::new(HashMap::new()),
@@ -53,8 +55,9 @@ impl AppState {
         }
     }
 
-    pub fn config(&self) -> &VigilConfig {
-        &self.inner.config
+    /// Load the current config (lock-free).
+    pub fn config(&self) -> arc_swap::Guard<Arc<VigilConfig>> {
+        self.config.load()
     }
 
     pub fn ca_metadata(&self) -> &RootCAMetadata {

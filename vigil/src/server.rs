@@ -20,10 +20,11 @@ pub async fn run(
     config: &VigilConfig,
     router: Router,
     tls_config: Arc<rustls::ServerConfig>,
+    shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
     let listener = bind_tcp(&config.bind, config.port).await?;
     tracing::info!(addr = %format!("{}:{}", config.bind, config.port), "Vigil listening with mTLS");
     let acceptor = TlsAcceptor::from(tls_config);
-    serve_tls(listener, acceptor, router).await;
+    serve_tls(listener, acceptor, router, shutdown).await;
     Ok(())
 }

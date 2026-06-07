@@ -140,7 +140,7 @@ impl TestCorgi {
         let cert_store = tmp.join("certstore");
 
         let config = build_corgi_config(&tmp, &cert_store);
-        let state = AppState::new(config);
+        let state = AppState::new(config)?;
 
         let base_control_router = corgi::server::build_control_router(state.clone());
         let control_router = if inject_admin {

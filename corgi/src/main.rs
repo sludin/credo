@@ -89,6 +89,8 @@ async fn cmd_bootstrap(_out: Option<String>, dry_run: bool) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 async fn cmd_server_start() -> Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+
     let config = load_config().context("Loading config")?;
     init_logging(config.log_level);
 
@@ -101,59 +103,90 @@ async fn cmd_server_start() -> Result<()> {
 
     corgi::hooks::validate_hooks(&config);
 
-    let state = AppState::new(config.clone());
+    let state = AppState::new(config).context("Building AppState")?;
 
-    let tls_config = corgi::server::build_server_tls(&config)
-        .context("Building mTLS server config")?;
-    let acceptor = TlsAcceptor::from(tls_config);
+    tokio::spawn(corgi::sync::run_sync_loop(state.clone()));
 
-    let control_listener =
-        corgi::server::bind_tcp(&config.bind, config.mtls_port)
-            .await
-            .with_context(|| format!("Binding control API on {}:{}", config.bind, config.mtls_port))?;
-
-    tracing::info!(
-        addr = format!("{}:{}", config.bind, config.mtls_port),
-        mode = ?config.auth.mode,
-        "Control API listening"
-    );
-
-    let challenge_listener = if config.http_challenge.enabled {
-        let l = corgi::server::bind_tcp(&config.http_challenge.bind, config.http_challenge.port)
-            .await
-            .with_context(|| {
-                format!(
-                    "Binding challenge server on {}:{}",
-                    config.http_challenge.bind, config.http_challenge.port
-                )
-            })?;
-        tracing::info!(
-            addr = format!("{}:{}", config.http_challenge.bind, config.http_challenge.port),
-            "HTTP-01 challenge listener active"
-        );
-        Some(l)
-    } else {
-        None
+    let mut hup = signal(SignalKind::hangup()).context("Registering SIGHUP handler")?;
+    let mut tls_config = {
+        let cfg = state.config.load_full();
+        corgi::server::build_server_tls(&cfg).context("Building mTLS server config")?
     };
 
-    let control_router = corgi::server::build_control_router(state.clone());
-    let challenge_router = corgi::server::build_challenge_router(state.clone());
+    loop {
+        let cfg = state.config.load_full();
+        let acceptor = TlsAcceptor::from(tls_config.clone());
 
-    let sync_state = state.clone();
-    tokio::spawn(async move {
-        corgi::sync::run_sync_loop(sync_state).await;
-    });
+        let control_listener = corgi::server::bind_tcp(&cfg.bind, cfg.mtls_port)
+            .await
+            .with_context(|| format!("Binding control API on {}:{}", cfg.bind, cfg.mtls_port))?;
 
-    if let Some(cl) = challenge_listener {
-        let cr = challenge_router.clone();
-        tokio::spawn(async move {
-            corgi::server::serve_http(cl, cr).await;
+        tracing::info!(
+            addr = format!("{}:{}", cfg.bind, cfg.mtls_port),
+            mode = ?cfg.auth.mode,
+            "Control API listening"
+        );
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        let challenge_handle = if cfg.http_challenge.enabled {
+            let l = corgi::server::bind_tcp(&cfg.http_challenge.bind, cfg.http_challenge.port)
+                .await
+                .with_context(|| format!(
+                    "Binding challenge server on {}:{}",
+                    cfg.http_challenge.bind, cfg.http_challenge.port
+                ))?;
+            tracing::info!(
+                addr = format!("{}:{}", cfg.http_challenge.bind, cfg.http_challenge.port),
+                "HTTP-01 challenge listener active"
+            );
+            let cr = corgi::server::build_challenge_router(state.clone());
+            let rx = shutdown_rx.clone();
+            Some(tokio::spawn(async move {
+                corgi::server::serve_http(l, cr, rx).await;
+            }))
+        } else {
+            None
+        };
+
+        let control_router = corgi::server::build_control_router(state.clone());
+        let mut control_handle = tokio::spawn(async move {
+            corgi::server::serve_tls(control_listener, acceptor, control_router, shutdown_rx).await;
         });
+
+        tokio::select! {
+            _ = hup.recv() => {
+                tracing::info!("SIGHUP received — reloading config");
+                match load_config() {
+                    Ok(new_cfg) => {
+                        match corgi::server::build_server_tls(&new_cfg) {
+                            Ok(new_tls) => { tls_config = new_tls; }
+                            Err(e) => tracing::warn!(error=%e, "TLS rebuild failed; keeping current TLS config"),
+                        }
+                        // Rebuild shepherd client with new mTLS credentials
+                        match corgi::shepherd::build_shepherd_client(&new_cfg) {
+                            Ok(new_client) => { *state.shepherd_client.write().await = new_client; }
+                            Err(e) => tracing::warn!(error=%e, "Shepherd client rebuild failed"),
+                        }
+                        tracing::info!(
+                            node_id = %new_cfg.node_id,
+                            mtls_port = new_cfg.mtls_port,
+                            "Config reloaded"
+                        );
+                        state.config.store(std::sync::Arc::new(new_cfg));
+                    }
+                    Err(e) => tracing::warn!(error=%e, "Config reload failed; keeping current config"),
+                }
+                let _ = shutdown_tx.send(true);
+                let _ = (&mut control_handle).await;
+                if let Some(h) = challenge_handle { let _ = h.await; }
+            }
+            _ = &mut control_handle => {
+                if let Some(h) = challenge_handle { let _ = h.await; }
+                return Ok(());
+            }
+        }
     }
-
-    corgi::server::serve_tls(control_listener, acceptor, control_router).await;
-
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

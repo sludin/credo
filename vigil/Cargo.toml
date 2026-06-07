@@ -78,8 +78,9 @@ time = { version = "0.3", features = ["std"] }   # required by rcgen
 dotenvy = "0.15"
 
 # Misc
-rand = "0.8"
-uuid = { version = "1", features = ["v4"] }
+rand     = "0.8"
+uuid     = { version = "1", features = ["v4"] }
+arc-swap = "1"
 
 [dev-dependencies]
 credo-test = { path = "../credo-test" }

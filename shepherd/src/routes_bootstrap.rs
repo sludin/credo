@@ -61,14 +61,16 @@ pub async fn bootstrap_admin_cert(
     if !check_bootstrap_token(&headers, &state) {
         return unauthorized().into_response();
     }
-    let Some(client) = &state.vigil_client else {
+    let vc = state.vigil_client.read().await.clone();
+    let Some(client) = vc else {
         return vigil_unavailable().into_response();
     };
-    let Some(vigil_url) = state.config.vigil_url.as_deref() else {
+    let config = state.config.load_full();
+    let Some(vigil_url) = config.vigil_url.as_deref() else {
         return vigil_unavailable().into_response();
     };
 
-    match sign_csr_via_vigil(client, vigil_url, &body.csr_pem, body.days.unwrap_or(365)).await {
+    match sign_csr_via_vigil(&client, vigil_url, &body.csr_pem, body.days.unwrap_or(365)).await {
         Ok(cert_pem) => (StatusCode::OK, Json(serde_json::json!({ "certPem": cert_pem }))).into_response(),
         Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
     }
@@ -103,14 +105,16 @@ pub async fn bootstrap_corgi(
     if !check_bootstrap_token(&headers, &state) {
         return unauthorized().into_response();
     }
-    let Some(vigil_client) = &state.vigil_client else {
+    let vc = state.vigil_client.read().await.clone();
+    let Some(vigil_client) = vc else {
         return vigil_unavailable().into_response();
     };
-    let Some(vigil_url) = state.config.vigil_url.as_deref() else {
+    let config = state.config.load_full();
+    let Some(vigil_url) = config.vigil_url.as_deref() else {
         return vigil_unavailable().into_response();
     };
 
-    match enroll_corgi(&state, vigil_client, vigil_url, &body).await {
+    match enroll_corgi(&state, &vigil_client, vigil_url, &body).await {
         Ok(()) => {
             tracing::info!(name = %body.name, identity_uri = %body.identity_uri, "Corgi enrolled");
             (StatusCode::OK, Json(serde_json::json!({ "enrolled": true }))).into_response()
@@ -148,8 +152,9 @@ async fn enroll_corgi(
         .context("Signing corgi CSR via Vigil")?;
     let (leaf_pem, chain_pem, _) = crate::issuance::split_cert_chain(&fullchain_pem);
 
-    let ca_path = state.config.shepherd_ca_path.as_ref()
-        .unwrap_or(&state.config.tls.client_ca_path);
+    let config = state.config.load_full();
+    let ca_path = config.shepherd_ca_path.as_ref()
+        .unwrap_or(&config.tls.client_ca_path);
     let ca_pem = std::fs::read_to_string(ca_path)
         .with_context(|| format!("Reading CA bundle: {}", ca_path.display()))?;
 

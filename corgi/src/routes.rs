@@ -51,8 +51,8 @@ pub async fn control_health(
     Ok(Json(json!({
         "status": "healthy",
         "service": "corgi",
-        "nodeId": state.config.node_id,
-        "shepherdUrl": state.config.shepherd_url,
+        "nodeId": state.config.load().node_id,
+        "shepherdUrl": state.config.load().shepherd_url,
         "flockSize": flock_size,
     })))
 }
@@ -101,7 +101,7 @@ pub async fn flock_csr(
     // Always generate a fresh key and stage it in pending/.
     // install_to_archive moves it to archive/ and creates the live/ symlink when the
     // signed cert arrives via /flock/<name>/install.  No real files ever land in live/.
-    let pending = pending_key_path(&state.config.cert_store_dir, &name);
+    let pending = pending_key_path(&state.config.load().cert_store_dir, &name);
     let csr_pem = generate_key_and_csr(&entry, &pending, &csr_req, config_identity_uri)
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
@@ -122,12 +122,13 @@ pub async fn flock_install(
 
     tracing::info!(cert_name = %name, phase = "install-start", "Install request received");
 
-    let result = install_certificate(&entry, &state.config.cert_store_dir, &body)
+    let config = state.config.load_full();
+    let result = install_certificate(&entry, &config.cert_store_dir, &body)
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
     let should_restart = result.changed && body.restart.unwrap_or(true);
     let hook_results: Vec<Value> = if should_restart {
-        run_hooks(&entry, &state.config)
+        run_hooks(&entry, &config)
             .await
             .iter()
             .map(|hr| json!({ "hook": hr.hook, "command": hr.command, "stdout": hr.stdout, "stderr": hr.stderr }))
@@ -162,7 +163,7 @@ pub async fn flock_restart(
         .await
         .ok_or_else(|| AppError::NotFound(format!("Certificate '{}' not found", name)))?;
 
-    let results: Vec<Value> = run_hooks(&entry, &state.config)
+    let results: Vec<Value> = run_hooks(&entry, &state.config.load_full())
         .await
         .iter()
         .map(|hr| json!({ "hook": hr.hook, "command": hr.command, "stdout": hr.stdout, "stderr": hr.stderr }))

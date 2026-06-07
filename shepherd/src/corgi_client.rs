@@ -110,8 +110,17 @@ pub async fn corgi_get<T: DeserializeOwned>(
     let url = format!("{}{}", node.url.trim_end_matches('/'), path);
     let host = url_hostname(&url);
     let start = Instant::now();
-    let resp = client.get(&url).send().await
-        .with_context(|| format!("GET {url}"))?;
+    let resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            RequestLogEntry {
+                code: "F", direction: "<", status: 0, method: "GET", path,
+                host: &host, peer_ip: "-", identity: Some(node.name.as_str()),
+                duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+            }.log();
+            return Err(anyhow::anyhow!("GET {url}: {e}"));
+        }
+    };
     let status = resp.status();
     RequestLogEntry {
         code: "F",
@@ -144,8 +153,17 @@ pub async fn corgi_post<T: DeserializeOwned>(
     let url = format!("{}{}", node.url.trim_end_matches('/'), path);
     let host = url_hostname(&url);
     let start = Instant::now();
-    let resp = client.post(&url).json(body).send().await
-        .with_context(|| format!("POST {url}"))?;
+    let resp = match client.post(&url).json(body).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            RequestLogEntry {
+                code: "F", direction: "<", status: 0, method: "POST", path,
+                host: &host, peer_ip: "-", identity: Some(node.name.as_str()),
+                duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+            }.log();
+            return Err(anyhow::anyhow!("POST {url}: {e}"));
+        }
+    };
     let status = resp.status();
     RequestLogEntry {
         code: "F",

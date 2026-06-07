@@ -1,9 +1,11 @@
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
-use tokio::time::{interval, Duration};
+use tokio::time::Duration;
 
+use crate::accounts::load_accounts;
 use crate::assignments::{file_mtime, load_assignments};
+use crate::cas::load_cas;
 use crate::cert_store::read_cert_store_entry;
 use crate::corgi_client::{corgi_get, corgi_post};
 use crate::corgis::load_corgis;
@@ -17,21 +19,17 @@ use crate::types::{CorgiFlockEntry, CorgiNodeConfig, CorgiNodeState, CorgiStatus
 // ---------------------------------------------------------------------------
 
 pub async fn run_health_check_loop(state: AppState) {
-    let secs = state.config.corgi_health_check_interval_seconds;
-    let mut ticker = interval(Duration::from_secs(secs));
-    ticker.tick().await; // skip the immediate first tick
     loop {
-        ticker.tick().await;
+        let secs = state.config.load().corgi_health_check_interval_seconds;
+        tokio::time::sleep(Duration::from_secs(secs)).await;
         health_check_cycle(&state).await;
     }
 }
 
 pub async fn run_poll_loop(state: AppState) {
-    let secs = state.config.poll_interval_seconds;
-    let mut ticker = interval(Duration::from_secs(secs));
-    ticker.tick().await; // skip the immediate first tick
     loop {
-        ticker.tick().await;
+        let secs = state.config.load().poll_interval_seconds;
+        tokio::time::sleep(Duration::from_secs(secs)).await;
         poll_cycle(&state).await;
     }
 }
@@ -42,6 +40,8 @@ pub async fn run_poll_loop(state: AppState) {
 
 async fn health_check_cycle(state: &AppState) {
     maybe_reload_corgis(state).await;
+    maybe_reload_accounts(state).await;
+    maybe_reload_cas(state).await;
     let corgis = state.corgis.read().await.clone();
     for node in &corgis {
         ping_health(state, node).await;
@@ -74,6 +74,8 @@ async fn ping_health(state: &AppState, node: &CorgiNodeConfig) {
 async fn poll_cycle(state: &AppState) {
     maybe_reload_corgis(state).await;
     maybe_reload_assignments(state).await;
+    maybe_reload_accounts(state).await;
+    maybe_reload_cas(state).await;
 
     let corgis = state.corgis.read().await.clone();
 
@@ -174,7 +176,8 @@ async fn fingerprint_sync_check(state: &AppState, node: &CorgiNodeConfig) {
     drop(cs);
 
     let assignments = state.assignments.read().await;
-    let store_dir = &state.config.cert_store_dir;
+    let config = state.config.load_full();
+    let store_dir = &config.cert_store_dir;
 
     let needs_refresh = assignments.iter()
         .filter(|a| a.corgi.as_deref() == Some(node.name.as_str()))
@@ -230,11 +233,12 @@ async fn cert_maintenance(
         }
     }
 
-    let store_dir = &state.config.cert_store_dir;
+    let config = state.config.load_full();
+    let store_dir = &config.cert_store_dir;
     let local_cert = read_cert_store_entry(store_dir, &assignment.cert_name);
     let renew_before: f64 = assignment.renew_before_days
         .map(|d| d as f64)
-        .unwrap_or(state.config.renew_before_days);
+        .unwrap_or(config.renew_before_days);
 
     // Also renew when the cert exists in Shepherd's store but Corgi is missing the key.
     // This happens when the corgi sync installs a cert via pull (Shepherd has no key to
@@ -257,10 +261,17 @@ async fn cert_maintenance(
         return Ok(());
     }
 
+    let renewal_reason = if local_cert.is_none() {
+        "no cert in store"
+    } else if corgi_missing_key {
+        "corgi missing key"
+    } else {
+        "expiry threshold reached"
+    };
     tracing::info!(
         corgi = %node.name,
         cert = %assignment.cert_name,
-        reason = if local_cert.is_none() { "no cert in store" } else { "expiry threshold reached" },
+        reason = renewal_reason,
         expires_in_days = local_cert.as_ref().and_then(|e| e.expires_in_days).unwrap_or(0),
         threshold = renew_before,
         "Certificate needs renewal"
@@ -301,8 +312,8 @@ async fn cert_maintenance(
     update_phase(&state.renewal_jobs, job_id, RenewalPhase::SubmittingOrder).await;
 
     // Issue via ACME
-    let ca_config = match state.cas.get(&assignment.ca) {
-        Some(ca) => ca.config.clone(),
+    let ca_config = match state.cas.read().await.get(&assignment.ca).map(|ca| ca.config.clone()) {
+        Some(cfg) => cfg,
         None => {
             fail_job(&state.renewal_jobs, job_id, format!("CA '{}' not configured", assignment.ca)).await;
             anyhow::bail!("CA '{}' not configured", assignment.ca);
@@ -313,7 +324,7 @@ async fn cert_maintenance(
         &ca_config,
         &assignment.ca,
         &assignment.cert_name,
-        &state.config.cert_store_dir,
+        store_dir,
         &domains,
         &csr_pem,
         assignment,
@@ -371,12 +382,11 @@ async fn cert_maintenance(
 // ---------------------------------------------------------------------------
 
 async fn maybe_reload_corgis(state: &AppState) {
-    let path = &state.config.corgis_config_path;
-    let new_mtime = file_mtime(path);
-    // Drop the MutexGuard before any await points
+    let path = state.config.load().corgis_config_path.clone();
+    let new_mtime = file_mtime(&path);
     let needs = { *state.corgis_mtime.lock().unwrap() != new_mtime };
     if needs {
-        match load_corgis(path) {
+        match load_corgis(&path) {
             Ok(list) => {
                 tracing::info!(count = list.len(), "Reloaded corgis config");
                 *state.corgis.write().await = list;
@@ -388,11 +398,11 @@ async fn maybe_reload_corgis(state: &AppState) {
 }
 
 async fn maybe_reload_assignments(state: &AppState) {
-    let path = &state.config.assignments_config_path;
-    let new_mtime = file_mtime(path);
+    let path = state.config.load().assignments_config_path.clone();
+    let new_mtime = file_mtime(&path);
     let needs = { *state.assignments_mtime.lock().unwrap() != new_mtime };
     if needs {
-        match load_assignments(path) {
+        match load_assignments(&path) {
             Ok(list) => {
                 tracing::info!(count = list.len(), "Reloaded assignments config");
                 *state.assignments.write().await = list;
@@ -403,20 +413,111 @@ async fn maybe_reload_assignments(state: &AppState) {
     }
 }
 
+pub async fn maybe_reload_accounts(state: &AppState) {
+    let path = state.config.load().accounts_path.clone();
+    let new_mtime = file_mtime(&path);
+    let needs = { *state.accounts_mtime.lock().unwrap() != new_mtime };
+    if needs {
+        match load_accounts(&path) {
+            Ok(list) => {
+                tracing::info!(count = list.len(), "Reloaded accounts");
+                *state.accounts.write().await = list;
+                *state.accounts_mtime.lock().unwrap() = new_mtime;
+            }
+            Err(e) => tracing::warn!(error = %e, "Failed to reload accounts"),
+        }
+    }
+}
+
+pub async fn maybe_reload_cas(state: &AppState) {
+    let path = state.config.load().ca_config_path.clone();
+    let new_mtime = file_mtime(&path);
+    let needs = { *state.ca_mtime.lock().unwrap() != new_mtime };
+    if needs {
+        match load_cas(&path) {
+            Ok(map) => {
+                tracing::info!(count = map.len(), "Reloaded CA config");
+                *state.cas.write().await = map;
+                *state.ca_mtime.lock().unwrap() = new_mtime;
+            }
+            Err(e) => tracing::warn!(error = %e, "Failed to reload CA config"),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
 
 fn build_domains(assignment: &ManagedAssignment) -> Vec<String> {
-    if !assignment.sans.is_empty() {
-        return assignment.sans.clone();
-    }
+    let mut domains = assignment.sans.clone();
     if let Some(d) = &assignment.domain {
-        return vec![d.clone()];
+        if !domains.contains(d) {
+            domains.insert(0, d.clone());
+        }
     }
-    vec![]
+    domains
 }
 
 fn urlencoded(s: &str) -> String {
     s.replace('/', "%2F")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::ManagedAssignment;
+
+    fn assignment(domain: Option<&str>, sans: &[&str]) -> ManagedAssignment {
+        ManagedAssignment {
+            cert_name: "test".into(),
+            corgi: None,
+            ca: "letsencrypt".into(),
+            domain: domain.map(String::from),
+            sans: sans.iter().map(|s| s.to_string()).collect(),
+            renew_before_days: None,
+            days: None,
+            identity_uri: None,
+            validation: None,
+            cert_mode: None,
+            key_mode: None,
+            cert_owner: None,
+            cert_group: None,
+            key_owner: None,
+            key_group: None,
+            key_algorithm: None,
+        }
+    }
+
+    #[test]
+    fn domain_only_returns_domain() {
+        let a = assignment(Some("origin.ludin.org"), &[]);
+        assert_eq!(build_domains(&a), vec!["origin.ludin.org"]);
+    }
+
+    #[test]
+    fn sans_only_returns_sans() {
+        let a = assignment(None, &["www.ludin.org", "api.ludin.org"]);
+        assert_eq!(build_domains(&a), vec!["www.ludin.org", "api.ludin.org"]);
+    }
+
+    #[test]
+    fn domain_and_sans_includes_domain_at_front() {
+        // Regression: previously returned only sans, dropping the domain, which
+        // caused Let's Encrypt to reject the CSR with an identifier mismatch.
+        let a = assignment(Some("origin.ludin.org"), &["www.ludin.org"]);
+        assert_eq!(build_domains(&a), vec!["origin.ludin.org", "www.ludin.org"]);
+    }
+
+    #[test]
+    fn domain_already_in_sans_not_duplicated() {
+        let a = assignment(Some("origin.ludin.org"), &["origin.ludin.org", "www.ludin.org"]);
+        assert_eq!(build_domains(&a), vec!["origin.ludin.org", "www.ludin.org"]);
+    }
+
+    #[test]
+    fn no_domain_no_sans_returns_empty() {
+        let a = assignment(None, &[]);
+        assert!(build_domains(&a).is_empty());
+    }
 }

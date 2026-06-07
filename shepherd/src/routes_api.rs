@@ -141,7 +141,7 @@ pub async fn token(
 
     if !tls_match {
         // No matching TLS cert — verify CA chain then verify PoP signature
-        verify_pop_cert(&cert_der, &state.config.tls.client_ca_path)
+        verify_pop_cert(&cert_der, &state.config.load().tls.client_ca_path)
             .map_err(|e| AppError::Unauthorized(format!("Certificate not signed by configured CA: {e}")))?;
 
         verify_pop_signature(&cert_der, challenge, identity_uri, issued_at_str, signature_b64)
@@ -236,7 +236,8 @@ pub async fn get_certstore(
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
-    let store_dir = &state.config.cert_store_dir;
+    let config = state.config.load_full();
+    let store_dir = &config.cert_store_dir;
     let names = cert_store::list_cert_store_entries(store_dir);
     let entries: Vec<_> = names.iter()
         .filter_map(|n| cert_store::read_cert_store_entry(store_dir, n))
@@ -250,7 +251,7 @@ pub async fn get_certstore_entry(
     Path(name): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
-    let entry = cert_store::read_cert_store_entry(&state.config.cert_store_dir, &name)
+    let entry = cert_store::read_cert_store_entry(&state.config.load().cert_store_dir, &name)
         .ok_or_else(|| AppError::NotFound(format!("Cert '{name}' not found")))?;
     Ok(Json(json!({ "entry": entry })))
 }
@@ -261,7 +262,7 @@ pub async fn get_certstore_pem(
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
-    let path = state.config.cert_store_dir.join("live").join(&name).join("cert.pem");
+    let path = state.config.load().cert_store_dir.join("live").join(&name).join("cert.pem");
     let pem = std::fs::read_to_string(&path)
         .map_err(|_| AppError::NotFound(format!("Certificate file not found for '{name}'")))?;
     Ok(([(header::CONTENT_TYPE, "text/plain")], pem))
@@ -273,7 +274,7 @@ pub async fn get_certstore_fullchain(
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
-    let path = state.config.cert_store_dir.join("live").join(&name).join("fullchain.pem");
+    let path = state.config.load().cert_store_dir.join("live").join(&name).join("fullchain.pem");
     let pem = std::fs::read_to_string(&path)
         .map_err(|_| AppError::NotFound(format!("Fullchain file not found for '{name}'")))?;
     Ok(([(header::CONTENT_TYPE, "text/plain")], pem))
@@ -360,7 +361,8 @@ pub async fn get_cas(
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
-    let cas: Vec<_> = state.cas.iter().map(|(_, ca)| {
+    let cas_guard = state.cas.read().await;
+    let cas: Vec<_> = cas_guard.iter().map(|(_, ca)| {
         json!({
             "name": ca.name,
             "protocol": ca.protocol,
@@ -378,9 +380,10 @@ pub async fn get_vigil_ca(
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
-    let url = state.config.vigil_url.as_ref()
+    let config = state.config.load_full();
+    let url = config.vigil_url.as_ref()
         .ok_or_else(|| AppError::BadRequest("Vigil not configured".to_string()))?;
-    let client = state.vigil_client.as_ref()
+    let client = state.vigil_client.read().await.clone()
         .ok_or_else(|| AppError::BadRequest("Vigil client unavailable".to_string()))?;
     let body: serde_json::Value = client.get(format!("{}/ca", url.trim_end_matches('/')))
         .send().await
@@ -395,9 +398,10 @@ pub async fn get_vigil_status(
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
-    let url = state.config.vigil_url.as_ref()
+    let config = state.config.load_full();
+    let url = config.vigil_url.as_ref()
         .ok_or_else(|| AppError::BadRequest("Vigil not configured".to_string()))?;
-    let client = state.vigil_client.as_ref()
+    let client = state.vigil_client.read().await.clone()
         .ok_or_else(|| AppError::BadRequest("Vigil client unavailable".to_string()))?;
     let body: serde_json::Value = client.get(format!("{}/health", url.trim_end_matches('/')))
         .send().await
@@ -412,8 +416,9 @@ pub async fn config_summary(
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
-    let config = &state.config;
-    let cas: Vec<_> = state.cas.iter().map(|(_, ca)| {
+    let config = state.config.load_full();
+    let cas_guard = state.cas.read().await;
+    let cas: Vec<_> = cas_guard.iter().map(|(_, ca)| {
         json!({
             "name": ca.name,
             "protocol": ca.protocol,
@@ -481,7 +486,7 @@ async fn admin_provision_or_renew(
         .ok_or_else(|| AppError::NotFound(format!("Corgi '{corgi_name}' not in config")))?
         .clone();
 
-    let ca_config = state.cas.get(&assignment.ca)
+    let ca_config = state.cas.read().await.get(&assignment.ca)
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("CA '{}' not configured", assignment.ca)))?
         .config.clone();
 
@@ -514,7 +519,7 @@ async fn admin_provision_or_renew(
             &ca_config,
             &assignment2.ca,
             &cert_name2,
-            &state2.config.cert_store_dir,
+            &state2.config.load().cert_store_dir,
             &domains,
             &csr.csr_pem,
             &assignment2,
@@ -575,7 +580,7 @@ pub async fn create_account(
     accounts.push(account.clone());
     drop(accounts);
     let all = state.accounts.read().await;
-    crate::accounts::save_accounts(&state.config.accounts_path, &all)
+    crate::accounts::save_accounts(&state.config.load().accounts_path, &all)
         .map_err(|e| AppError::Internal(e))?;
     Ok(Json(serde_json::to_value(&account).unwrap()))
 }
@@ -608,7 +613,7 @@ pub async fn update_account(
     let updated = account.clone();
     drop(accounts);
     let all = state.accounts.read().await;
-    crate::accounts::save_accounts(&state.config.accounts_path, &all)
+    crate::accounts::save_accounts(&state.config.load().accounts_path, &all)
         .map_err(|e| AppError::Internal(e))?;
     Ok(Json(serde_json::to_value(&updated).unwrap()))
 }
@@ -627,7 +632,7 @@ pub async fn delete_account(
     }
     drop(accounts);
     let all = state.accounts.read().await;
-    crate::accounts::save_accounts(&state.config.accounts_path, &all)
+    crate::accounts::save_accounts(&state.config.load().accounts_path, &all)
         .map_err(|e| AppError::Internal(e))?;
     Ok(Json(json!({ "deleted": true })))
 }
@@ -637,11 +642,11 @@ pub async fn reload_corgis(
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Admin)?;
-    let path = &state.config.corgis_config_path;
-    let list = load_corgis(path).map_err(AppError::Internal)?;
+    let path = state.config.load().corgis_config_path.clone();
+    let list = load_corgis(&path).map_err(AppError::Internal)?;
     let count = list.len();
     *state.corgis.write().await = list;
-    *state.corgis_mtime.lock().unwrap() = file_mtime(path);
+    *state.corgis_mtime.lock().unwrap() = file_mtime(&path);
     Ok(Json(json!({ "reloaded": true, "corgis": count, "corgisConfigPath": path })))
 }
 
@@ -650,12 +655,38 @@ pub async fn reload_assignments(
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Admin)?;
-    let path = &state.config.assignments_config_path;
-    let list = load_assignments(path).map_err(AppError::Internal)?;
+    let path = state.config.load().assignments_config_path.clone();
+    let list = load_assignments(&path).map_err(AppError::Internal)?;
     let count = list.len();
     *state.assignments.write().await = list;
-    *state.assignments_mtime.lock().unwrap() = file_mtime(path);
+    *state.assignments_mtime.lock().unwrap() = file_mtime(&path);
     Ok(Json(json!({ "reloaded": true, "assignments": count, "assignmentsConfigPath": path })))
+}
+
+pub async fn reload_accounts(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Admin)?;
+    let path = state.config.load().accounts_path.clone();
+    let list = crate::accounts::load_accounts(&path).map_err(AppError::Internal)?;
+    let count = list.len();
+    *state.accounts.write().await = list;
+    *state.accounts_mtime.lock().unwrap() = file_mtime(&path);
+    Ok(Json(json!({ "reloaded": true, "accounts": count, "accountsPath": path })))
+}
+
+pub async fn reload_cas(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Admin)?;
+    let path = state.config.load().ca_config_path.clone();
+    let map = crate::cas::load_cas(&path).map_err(AppError::Internal)?;
+    let count = map.len();
+    *state.cas.write().await = map;
+    *state.ca_mtime.lock().unwrap() = file_mtime(&path);
+    Ok(Json(json!({ "reloaded": true, "cas": count, "caConfigPath": path })))
 }
 
 fn urlencoded(s: &str) -> String {

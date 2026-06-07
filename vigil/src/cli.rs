@@ -97,6 +97,8 @@ pub enum AcmeCommands {
 // ---------------------------------------------------------------------------
 
 pub async fn run_server_start(bootstrap: bool) -> Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+
     let config = crate::config::load_config().context("Loading config")?;
     init_logging(config.log_level);
 
@@ -136,23 +138,53 @@ pub async fn run_server_start(bootstrap: bool) -> Result<()> {
         (key, cert, None)
     };
 
-    // Write ephemeral TLS key/cert to temp files if in bootstrap mode
-    // (rustls needs to read from paths or we build ServerConfig differently)
-    // For simplicity we always use the config paths when not in bootstrap mode.
-    // In bootstrap mode, we write to temp files.
-    let tls_config = if bootstrap {
+    let initial_tls_config = if bootstrap {
         build_bootstrap_tls(&tls_key_pem, &tls_cert_pem, &config)?
     } else {
         crate::server::build_server_tls(&config)?
     };
 
-    let state = crate::state::AppState::new(config.clone(), ca_metadata, bootstrap_secret);
+    let state = crate::state::AppState::new(config, ca_metadata, bootstrap_secret);
 
     // Restore persisted ACME accounts
     crate::acme::restore_accounts(&state).await?;
 
-    let router = crate::routes::build_router(state);
-    crate::server::run(&config, router, tls_config).await
+    let mut hup = signal(SignalKind::hangup()).context("Registering SIGHUP handler")?;
+    let mut tls_config = initial_tls_config;
+
+    loop {
+        let cfg = state.config.load_full();
+        let router = crate::routes::build_router(state.clone());
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+        let mut server = tokio::spawn({
+            let c = cfg.clone();
+            let t = tls_config.clone();
+            async move { crate::server::run(&c, router, t, shutdown_rx).await }
+        });
+
+        tokio::select! {
+            _ = hup.recv() => {
+                tracing::info!("SIGHUP received — reloading config");
+                match crate::config::load_config() {
+                    Ok(new_cfg) => {
+                        match crate::server::build_server_tls(&new_cfg) {
+                            Ok(new_tls) => { tls_config = new_tls; }
+                            Err(e) => tracing::warn!(error=%e, "TLS rebuild failed; keeping current TLS config"),
+                        }
+                        tracing::info!(port = new_cfg.port, "Config reloaded");
+                        state.config.store(std::sync::Arc::new(new_cfg));
+                    }
+                    Err(e) => tracing::warn!(error=%e, "Config reload failed; keeping current config"),
+                }
+                let _ = shutdown_tx.send(true);
+                let _ = (&mut server).await;
+            }
+            result = &mut server => {
+                return result.context("Server task panicked")?.context("Server error");
+            }
+        }
+    }
 }
 
 fn build_bootstrap_tls(key_pem: &str, cert_pem: &str, config: &crate::config::VigilConfig) -> Result<std::sync::Arc<rustls::ServerConfig>> {

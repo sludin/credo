@@ -141,11 +141,13 @@ async fn run_server(config: shepherd::config::ShepherdConfig) -> Result<()> {
 
 async fn run_server_with_tls(
     config: shepherd::config::ShepherdConfig,
-    tls_config: std::sync::Arc<rustls::ServerConfig>,
+    initial_tls_config: std::sync::Arc<rustls::ServerConfig>,
     cert_pem: Option<String>,
     key_pem: Option<String>,
     admin_token: Option<String>,
 ) -> Result<()> {
+    use tokio::signal::unix::{SignalKind, signal};
+
     init_logging(config.log_level);
 
     tracing::info!(
@@ -181,8 +183,46 @@ async fn run_server_with_tls(
     tokio::spawn(shepherd::poll::run_health_check_loop(state.clone()));
     tokio::spawn(shepherd::poll::run_poll_loop(state.clone()));
 
-    shepherd::server::run(state, tls_config).await?;
-    Ok(())
+    let mut hup = signal(SignalKind::hangup()).context("Registering SIGHUP handler")?;
+    let mut tls_config = initial_tls_config;
+
+    loop {
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let mut server = tokio::spawn({
+            let s = state.clone();
+            let tls = tls_config.clone();
+            let rx = shutdown_rx;
+            async move { shepherd::server::run(s, tls, rx).await }
+        });
+
+        tokio::select! {
+            _ = hup.recv() => {
+                tracing::info!("SIGHUP received — reloading config");
+                match shepherd::config::load_config() {
+                    Ok(new_cfg) => {
+                        // Rebuild TLS before swapping config so the new cert is ready
+                        match shepherd::server::build_server_tls(&new_cfg) {
+                            Ok(new_tls) => { tls_config = new_tls; }
+                            Err(e) => tracing::warn!(error=%e, "TLS rebuild failed; keeping current TLS config"),
+                        }
+                        tracing::info!(
+                            agent_port = new_cfg.agent_port,
+                            dashboard_port = new_cfg.dashboard_port,
+                            "Config reloaded"
+                        );
+                        state.config.store(std::sync::Arc::new(new_cfg));
+                    }
+                    Err(e) => tracing::warn!(error=%e, "Config reload failed; keeping current config"),
+                }
+                // Stop current servers; next loop iteration restarts them with new ports/TLS
+                let _ = shutdown_tx.send(true);
+                let _ = (&mut server).await;
+            }
+            result = &mut server => {
+                return result.context("Server task panicked")?.context("Server error");
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

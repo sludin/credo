@@ -57,7 +57,7 @@ pub async fn get_cert(
         .clone();
     drop(assignments);
 
-    let material = read_cert_material(&state.config.cert_store_dir, &cert_name)
+    let material = read_cert_material(&state.config.load().cert_store_dir, &cert_name)
         .ok_or_else(|| AppError::NotFound(
             format!("No certificate material for {corgi_id}/{cert_name}")
         ))?;
@@ -99,8 +99,9 @@ pub async fn provision_cert(
         .unwrap_or_default();
     let key_algorithm = assignment.key_algorithm.as_deref().unwrap_or("rsa");
 
-    let ca_config = state.cas.get(&assignment.ca)
-        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("CA '{}' not configured", assignment.ca)))?;
+    let ca_config = state.cas.read().await.get(&assignment.ca)
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("CA '{}' not configured", assignment.ca)))?
+        .config.clone();
 
     // Get CSR from corgi
     #[derive(serde::Deserialize)]
@@ -114,12 +115,13 @@ pub async fn provision_cert(
 
     let corgis = state.corgis.read().await.clone();
     let domains = build_domains(&assignment);
+    let store_dir = state.config.load().cert_store_dir.clone();
 
     let result = issue_cert(
-        &ca_config.config,
+        &ca_config,
         &assignment.ca,
         &cert_name,
-        &state.config.cert_store_dir,
+        &store_dir,
         &domains,
         &csr.csr_pem,
         &assignment,
@@ -198,7 +200,7 @@ pub async fn renew_cert(
         }
     }
 
-    let ca_config = state.cas.get(&assignment.ca)
+    let ca_config = state.cas.read().await.get(&assignment.ca)
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("CA '{}' not configured", assignment.ca)))?
         .config.clone();
     let domains = build_domains(&assignment);
@@ -212,11 +214,12 @@ pub async fn renew_cert(
     tokio::spawn(async move {
         update_phase(&state2.renewal_jobs, job_id, RenewalPhase::SubmittingOrder).await;
         let corgis = state2.corgis.read().await.clone();
+        let store_dir2 = state2.config.load().cert_store_dir.clone();
         match issue_cert(
             &ca_config,
             &assignment2.ca,
             &cert_name2,
-            &state2.config.cert_store_dir,
+            &store_dir2,
             &domains,
             &csr_pem,
             &assignment2,
@@ -311,15 +314,74 @@ fn renewal_job_response(job: &crate::types::RenewalJob) -> serde_json::Value {
 }
 
 pub fn build_domains(assignment: &ManagedAssignment) -> Vec<String> {
-    if !assignment.sans.is_empty() {
-        return assignment.sans.clone();
-    }
+    let mut domains = assignment.sans.clone();
     if let Some(d) = &assignment.domain {
-        return vec![d.clone()];
+        if !domains.contains(d) {
+            domains.insert(0, d.clone());
+        }
     }
-    vec![]
+    domains
 }
 
 fn urlencoded(s: &str) -> String {
     s.replace('/', "%2F")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::ManagedAssignment;
+
+    fn assignment(domain: Option<&str>, sans: &[&str]) -> ManagedAssignment {
+        ManagedAssignment {
+            cert_name: "test".into(),
+            corgi: None,
+            ca: "letsencrypt".into(),
+            domain: domain.map(String::from),
+            sans: sans.iter().map(|s| s.to_string()).collect(),
+            renew_before_days: None,
+            days: None,
+            identity_uri: None,
+            validation: None,
+            cert_mode: None,
+            key_mode: None,
+            cert_owner: None,
+            cert_group: None,
+            key_owner: None,
+            key_group: None,
+            key_algorithm: None,
+        }
+    }
+
+    #[test]
+    fn domain_only_returns_domain() {
+        let a = assignment(Some("origin.ludin.org"), &[]);
+        assert_eq!(build_domains(&a), vec!["origin.ludin.org"]);
+    }
+
+    #[test]
+    fn sans_only_returns_sans() {
+        let a = assignment(None, &["www.ludin.org", "api.ludin.org"]);
+        assert_eq!(build_domains(&a), vec!["www.ludin.org", "api.ludin.org"]);
+    }
+
+    #[test]
+    fn domain_and_sans_includes_domain_at_front() {
+        // Regression: previously returned only sans, dropping the domain, which
+        // caused Let's Encrypt to reject the CSR with an identifier mismatch.
+        let a = assignment(Some("origin.ludin.org"), &["www.ludin.org"]);
+        assert_eq!(build_domains(&a), vec!["origin.ludin.org", "www.ludin.org"]);
+    }
+
+    #[test]
+    fn domain_already_in_sans_not_duplicated() {
+        let a = assignment(Some("origin.ludin.org"), &["origin.ludin.org", "www.ludin.org"]);
+        assert_eq!(build_domains(&a), vec!["origin.ludin.org", "www.ludin.org"]);
+    }
+
+    #[test]
+    fn no_domain_no_sans_returns_empty() {
+        let a = assignment(None, &[]);
+        assert!(build_domains(&a).is_empty());
+    }
 }

@@ -52,6 +52,15 @@ impl ShepherdClient {
         })
     }
 
+    /// Construct from a pre-built (cached) reqwest client.  The `shepherd_url`
+    /// is taken from the current config so it picks up SIGHUP changes.
+    pub fn from_client(client: Client, shepherd_url: &str) -> Self {
+        Self {
+            client,
+            base_url: shepherd_url.trim_end_matches('/').to_string(),
+        }
+    }
+
     pub async fn get_assignments(&self, corgi_id: &str) -> Result<AssignmentsResponse> {
         let url = format!("{}/agents/{}/assignments", self.base_url, corgi_id);
         tracing::debug!(url = %url, "Fetching assignments from Shepherd");

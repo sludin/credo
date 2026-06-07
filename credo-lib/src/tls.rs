@@ -134,14 +134,30 @@ pub async fn bind_tcp(addr: &str, port: u16) -> Result<TcpListener> {
 // ---------------------------------------------------------------------------
 
 /// Accept TLS connections, inject `PeerCertDer` into request extensions, serve
-/// with the provided axum Router. Runs until the process exits.
-pub async fn serve_tls(listener: TcpListener, acceptor: TlsAcceptor, router: Router) {
+/// with the provided axum Router.
+///
+/// The `shutdown` watch receiver stops the accept loop when the sender sends `true`,
+/// allowing in-flight connections to drain naturally.  Pass a receiver that never
+/// fires (`tokio::sync::watch::channel(false).1`) to run until the process exits.
+pub async fn serve_tls(
+    listener: TcpListener,
+    acceptor: TlsAcceptor,
+    router: Router,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
     loop {
-        let (tcp_stream, peer_addr) = match listener.accept().await {
-            Ok(x) => x,
-            Err(e) => {
-                tracing::warn!(error = %e, "TCP accept error");
+        let (tcp_stream, peer_addr) = tokio::select! {
+            biased;
+            _ = shutdown.changed() => {
+                if *shutdown.borrow() { break; }
                 continue;
+            }
+            result = listener.accept() => match result {
+                Ok(x) => x,
+                Err(e) => {
+                    tracing::warn!(error = %e, "TCP accept error");
+                    continue;
+                }
             }
         };
 
@@ -193,13 +209,24 @@ pub async fn serve_tls(listener: TcpListener, acceptor: TlsAcceptor, router: Rou
 // Plain HTTP accept loop (ACME challenge listener — corgi)
 // ---------------------------------------------------------------------------
 
-pub async fn serve_http(listener: TcpListener, router: Router) {
+pub async fn serve_http(
+    listener: TcpListener,
+    router: Router,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
     loop {
-        let (tcp_stream, _peer_addr) = match listener.accept().await {
-            Ok(x) => x,
-            Err(e) => {
-                tracing::warn!(error = %e, "TCP accept error on HTTP server");
+        let (tcp_stream, _peer_addr) = tokio::select! {
+            biased;
+            _ = shutdown.changed() => {
+                if *shutdown.borrow() { break; }
                 continue;
+            }
+            result = listener.accept() => match result {
+                Ok(x) => x,
+                Err(e) => {
+                    tracing::warn!(error = %e, "TCP accept error on HTTP server");
+                    continue;
+                }
             }
         };
 

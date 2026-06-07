@@ -777,7 +777,7 @@ pub async fn finalize_order(
         return acme_error(StatusCode::BAD_REQUEST, "badCSR", &e.to_string());
     }
 
-    let signed = match sign_csr(&csr_pem, days, Some(&sans), state.config()) {
+    let signed = match sign_csr(&csr_pem, days, Some(&sans), &state.config()) {
         Ok(s) => s,
         Err(e) => return acme_error(StatusCode::BAD_REQUEST, "badCSR", &e.to_string()),
     };
