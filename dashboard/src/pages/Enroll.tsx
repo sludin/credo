@@ -17,7 +17,7 @@ export default function Enroll(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const cliCommand = `credo-enroll --cert vigil.pem --key vigil-key.pem --challenge ${token ?? '<token>'}`;
+  const cliCommand = `dashboard enroll --cert vigil.pem --key vigil-key.pem --challenge ${token ?? '<token>'}`;
 
   async function handleVerifyPop(): Promise<void> {
     setLoading(true);

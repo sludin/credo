@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-import { parseArgs } from 'util';
+import { Command } from 'commander';
+import { X509Certificate, createSign } from 'crypto';
+import fs from 'fs';
 import { loadConfig } from './config';
 import {
   initUsersStore,
@@ -23,172 +25,186 @@ function printTable(rows: Array<Record<string, string>>): void {
   }
 }
 
-function printHelp(): void {
-  process.stderr.write('Usage: dashboard <group> <command> [options]\n\n');
-  process.stderr.write('Groups:\n');
-  process.stderr.write('  server   Start the Dashboard BFF server\n');
-  process.stderr.write('  user     Manage dashboard users\n\n');
-  process.stderr.write('Run: dashboard <group> --help\n');
-}
+const program = new Command();
 
-function printGroupHelp(group: string): void {
-  if (group === 'server') {
-    process.stderr.write('Usage: dashboard server <command> [options]\n\n');
-    process.stderr.write('Commands:\n');
-    process.stderr.write('  start   Start the Dashboard BFF server in the foreground\n\n');
-    process.stderr.write('Run: dashboard server <command> --help\n');
-  } else if (group === 'user') {
-    process.stderr.write('Usage: dashboard user <command> [options]\n\n');
-    process.stderr.write('Commands:\n');
-    process.stderr.write('  create   Create a new dashboard user and generate an enrollment link\n');
-    process.stderr.write('  list     List all dashboard users\n');
-    process.stderr.write('  reset    Revoke all passkeys, update user fields, and generate a new enrollment link\n\n');
-    process.stderr.write('Run: dashboard user <command> --help\n');
-  }
-}
+program
+  .name('dashboard')
+  .description('Dashboard BFF management CLI')
+  .version('0.1.0');
 
-const groups: Record<string, Record<string, () => void>> = {
-  server: {
-    start: () => {
-      import('./index').catch((err) => {
-        process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
-        process.exitCode = 1;
-      });
-    },
-  },
+// ---------------------------------------------------------------------------
+// server
+// ---------------------------------------------------------------------------
 
-  user: {
-    create: () => {
-      const { values } = parseArgs({
-        args: process.argv.slice(4),
-        options: {
-          account: { type: 'string' },
-          email: { type: 'string' },
-          name: { type: 'string' },
-          identity: { type: 'string' },
-        },
-        strict: false,
-      });
+const server = program.command('server').description('Server commands');
 
-      if (!values.account || !values.email || !values.name) {
-        process.stderr.write('Usage: dashboard user create --account <shepherdAccountName> --email <email> --name <displayName> [--identity <vigil://uri>]\n');
+server
+  .command('start')
+  .description('Start the Dashboard BFF server in the foreground')
+  .action(() => {
+    import('./index').catch((err) => {
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exitCode = 1;
+    });
+  });
+
+// ---------------------------------------------------------------------------
+// user
+// ---------------------------------------------------------------------------
+
+const user = program.command('user').description('Manage dashboard users');
+
+user
+  .command('create')
+  .description('Create a new dashboard user and generate an enrollment link')
+  .requiredOption('--account <name>', 'Shepherd account name')
+  .requiredOption('--email <email>', 'User email address')
+  .requiredOption('--name <display>', 'User display name')
+  .requiredOption('--identity <uri>', 'Vigil identity URI (vigil://...)')
+  .action((opts: { account: string; email: string; name: string; identity: string }) => {
+    const config = loadConfig();
+    initUsersStore(config.auth.usersPath);
+    const { users } = loadUsers();
+
+    if (findUserByShepherdAccount(users, opts.account)) {
+      process.stderr.write(`Error: A user linked to shepherd account '${opts.account}' already exists.\n`);
+      process.exit(1);
+    }
+
+    const { user: newUser, rawToken } = createUser(
+      opts.account,
+      opts.name,
+      opts.email,
+      config.auth.enrollmentTokenTTLHours,
+      opts.identity,
+    );
+    users.push(newUser);
+    saveUsers({ users });
+
+    const enrollUrl = `${config.auth.origin}/enroll/${rawToken}`;
+    process.stdout.write(`Created user: ${newUser.displayName} (${newUser.shepherdAccount})\n`);
+    process.stdout.write(`Identity URI: ${newUser.identityUri}\n`);
+    process.stdout.write(`\nEnrollment URL (expires in ${config.auth.enrollmentTokenTTLHours}h):\n${enrollUrl}\n`);
+    process.stdout.write('\nSend this URL to the user. They will need their Vigil cert + key to complete enrollment.\n');
+  });
+
+user
+  .command('list')
+  .description('List all dashboard users')
+  .action(() => {
+    const config = loadConfig();
+    initUsersStore(config.auth.usersPath);
+    const { users } = loadUsers();
+
+    printTable(users.map((u) => ({
+      id: u.id,
+      shepherdAccount: u.shepherdAccount,
+      displayName: u.displayName,
+      email: u.email,
+      active: String(u.active),
+      passkeys: String(u.passkeys.length),
+      enrolled: u.pendingInvite === null ? 'yes' : 'pending',
+    })));
+  });
+
+user
+  .command('reset')
+  .description('Revoke all passkeys, update user fields, and generate a new enrollment link')
+  .requiredOption('--account <name>', 'Shepherd account name')
+  .option('--email <email>', 'Update email address')
+  .option('--name <display>', 'Update display name')
+  .option('--identity <uri>', 'Update Vigil identity URI')
+  .action((opts: { account: string; email?: string; name?: string; identity?: string }) => {
+    const config = loadConfig();
+    initUsersStore(config.auth.usersPath);
+    const { users } = loadUsers();
+    const idx = users.findIndex((u) => u.shepherdAccount === opts.account);
+
+    if (idx === -1) {
+      process.stderr.write(`Error: No user found with shepherd account '${opts.account}'.\n`);
+      process.exit(1);
+    }
+
+    const fieldUpdates: UserFieldUpdates = {};
+    if (opts.name) fieldUpdates.displayName = opts.name;
+    if (opts.email) fieldUpdates.email = opts.email;
+    if (opts.identity) fieldUpdates.identityUri = opts.identity;
+
+    const { user: updated, rawToken } = regenerateInvite(users[idx], config.auth.enrollmentTokenTTLHours, fieldUpdates);
+    users[idx] = updated;
+    saveUsers({ users });
+
+    const enrollUrl = `${config.auth.origin}/enroll/${rawToken}`;
+    process.stdout.write(`Reset user: ${updated.displayName} (${updated.shepherdAccount}) — all passkeys revoked.\n`);
+    if (updated.identityUri) {
+      process.stdout.write(`Identity URI: ${updated.identityUri}\n`);
+    }
+    process.stdout.write(`\nNew enrollment URL (expires in ${config.auth.enrollmentTokenTTLHours}h):\n${enrollUrl}\n`);
+  });
+
+// ---------------------------------------------------------------------------
+// enroll
+// ---------------------------------------------------------------------------
+
+program
+  .command('enroll')
+  .description('Generate a PoP token to paste into the browser enrollment page')
+  .requiredOption('--cert <path>', 'Path to Vigil client certificate PEM')
+  .requiredOption('--key <path>', 'Path to Vigil client private key PEM')
+  .requiredOption('--challenge <token>', 'Enrollment token from the /enroll/<token> URL')
+  .action((opts: { cert: string; key: string; challenge: string }) => {
+    let certPem: string;
+    let keyPem: string;
+    try {
+      certPem = fs.readFileSync(opts.cert, 'utf8');
+    } catch (err) {
+      process.stderr.write(`Error reading cert: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+    try {
+      keyPem = fs.readFileSync(opts.key, 'utf8');
+    } catch (err) {
+      process.stderr.write(`Error reading key: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+
+    let identityUri: string;
+    try {
+      const x509 = new X509Certificate(certPem);
+      const san = x509.subjectAltName ?? '';
+      const uriEntry = san
+        .split(',')
+        .map((s) => s.trim())
+        .find((s) => s.startsWith('URI:vigil://'));
+      if (!uriEntry) {
+        process.stderr.write('Error: Certificate has no vigil:// URI in Subject Alternative Names.\n');
         process.exit(1);
       }
+      identityUri = uriEntry.slice(4).trim();
+    } catch (err) {
+      process.stderr.write(`Error parsing certificate: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
 
-      const config = loadConfig();
-      initUsersStore(config.auth.usersPath);
-      const { users } = loadUsers();
+    const issuedAt = new Date().toISOString();
+    const message = Buffer.concat([
+      Buffer.from(opts.challenge, 'hex'),
+      Buffer.from(identityUri),
+      Buffer.from(issuedAt),
+    ]);
 
-      if (findUserByShepherdAccount(users, values.account as string)) {
-        process.stderr.write(`Error: A user linked to shepherd account '${values.account}' already exists.\n`);
-        process.exit(1);
-      }
+    let signature: string;
+    try {
+      const sign = createSign('SHA256');
+      sign.update(message);
+      signature = sign.sign(keyPem, 'base64url');
+    } catch (err) {
+      process.stderr.write(`Error signing: ${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
 
-      const { user, rawToken } = createUser(
-        values.account as string,
-        values.name as string,
-        values.email as string,
-        config.auth.enrollmentTokenTTLHours,
-        values.identity as string | undefined
-      );
-      users.push(user);
-      saveUsers({ users });
+    const pop = { cert: certPem, signature, challenge: opts.challenge, identityUri, issuedAt };
+    process.stdout.write(JSON.stringify(pop, null, 2) + '\n');
+  });
 
-      const enrollUrl = `${config.auth.origin}/enroll/${rawToken}`;
-      process.stdout.write(`Created user: ${user.displayName} (${user.shepherdAccount})\n`);
-      if (user.identityUri) {
-        process.stdout.write(`Identity URI: ${user.identityUri}\n`);
-      }
-      process.stdout.write(`\nEnrollment URL (expires in ${config.auth.enrollmentTokenTTLHours}h):\n${enrollUrl}\n`);
-      process.stdout.write('\nSend this URL to the user. They will need their Vigil cert + key to complete enrollment.\n');
-    },
-
-    list: () => {
-      const config = loadConfig();
-      initUsersStore(config.auth.usersPath);
-      const { users } = loadUsers();
-
-      printTable(users.map((u) => ({
-        id: u.id,
-        shepherdAccount: u.shepherdAccount,
-        displayName: u.displayName,
-        email: u.email,
-        active: String(u.active),
-        passkeys: String(u.passkeys.length),
-        enrolled: u.pendingInvite === null ? 'yes' : 'pending',
-      })));
-    },
-
-    reset: () => {
-      const { values } = parseArgs({
-        args: process.argv.slice(4),
-        options: {
-          account: { type: 'string' },
-          email: { type: 'string' },
-          name: { type: 'string' },
-          identity: { type: 'string' },
-        },
-        strict: false,
-      });
-
-      if (!values.account) {
-        process.stderr.write('Usage: dashboard user reset --account <shepherdAccountName> [--email <email>] [--name <displayName>] [--identity <vigil://uri>]\n');
-        process.exit(1);
-      }
-
-      const config = loadConfig();
-      initUsersStore(config.auth.usersPath);
-      const { users } = loadUsers();
-      const idx = users.findIndex((u) => u.shepherdAccount === values.account);
-
-      if (idx === -1) {
-        process.stderr.write(`Error: No user found with shepherd account '${values.account}'.\n`);
-        process.exit(1);
-      }
-
-      const fieldUpdates: UserFieldUpdates = {};
-      if (values.name) fieldUpdates.displayName = values.name as string;
-      if (values.email) fieldUpdates.email = values.email as string;
-      if (values.identity) fieldUpdates.identityUri = values.identity as string;
-
-      const { user: updated, rawToken } = regenerateInvite(users[idx], config.auth.enrollmentTokenTTLHours, fieldUpdates);
-      users[idx] = updated;
-      saveUsers({ users });
-
-      const enrollUrl = `${config.auth.origin}/enroll/${rawToken}`;
-      process.stdout.write(`Reset user: ${updated.displayName} (${updated.shepherdAccount}) — all passkeys revoked.\n`);
-      if (updated.identityUri) {
-        process.stdout.write(`Identity URI: ${updated.identityUri}\n`);
-      }
-      process.stdout.write(`\nNew enrollment URL (expires in ${config.auth.enrollmentTokenTTLHours}h):\n${enrollUrl}\n`);
-    },
-  },
-};
-
-const [group, subcommand] = process.argv.slice(2);
-
-if (!group || group === '--help' || group === '-h') {
-  printHelp();
-  process.exit(group ? 0 : 1);
-}
-
-const groupCmds = groups[group];
-if (!groupCmds) {
-  process.stderr.write(`Unknown group: ${group}\n\n`);
-  printHelp();
-  process.exit(1);
-}
-
-if (!subcommand || subcommand === '--help' || subcommand === '-h') {
-  printGroupHelp(group);
-  process.exit(subcommand ? 0 : 1);
-}
-
-const cmd = groupCmds[subcommand];
-if (!cmd) {
-  process.stderr.write(`Unknown command: ${group} ${subcommand}\n\n`);
-  printGroupHelp(group);
-  process.exit(1);
-}
-
-cmd();
+program.parse();
