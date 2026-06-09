@@ -1590,3 +1590,90 @@ pub async fn restore_accounts(state: &AppState) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Unit tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_dns_01, validate_http_01};
+    use axum::{extract::Path, routing::get, Router};
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::oneshot;
+
+    /// Start an HTTP server on a random port serving the challenge path.
+    /// The `challenge` Arc can be updated after the server starts to set the
+    /// expected (token, key_auth) pair. Returns (port, challenge, shutdown_tx).
+    async fn start_mock_server() -> (
+        u16,
+        Arc<Mutex<Option<(String, String)>>>,
+        oneshot::Sender<()>,
+    ) {
+        let challenge: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+        let (tx, rx) = oneshot::channel::<()>();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let c = challenge.clone();
+        let router = Router::new().route(
+            "/.well-known/acme-challenge/:tok",
+            get(move |Path(tok): Path<String>| {
+                let c = c.clone();
+                async move {
+                    let lock = c.lock().unwrap();
+                    match lock.as_ref() {
+                        Some((t, body)) if *t == tok => (axum::http::StatusCode::OK, body.clone()),
+                        _ => (axum::http::StatusCode::NOT_FOUND, String::new()),
+                    }
+                }
+            }),
+        );
+        tokio::spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(async {
+                    let _ = rx.await;
+                })
+                .await
+                .ok();
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        (port, challenge, tx)
+    }
+
+    #[tokio::test]
+    async fn http_01_correct_response_returns_true() {
+        let (port, challenge, _s) = start_mock_server().await;
+        *challenge.lock().unwrap() = Some(("tok1".to_string(), "tok1.thumbprint".to_string()));
+        assert!(validate_http_01(&format!("127.0.0.1:{}", port), "tok1", "tok1.thumbprint").await);
+    }
+
+    #[tokio::test]
+    async fn http_01_wrong_body_returns_false() {
+        let (port, challenge, _s) = start_mock_server().await;
+        *challenge.lock().unwrap() = Some(("tok2".to_string(), "wrong-key-auth".to_string()));
+        assert!(!validate_http_01(&format!("127.0.0.1:{}", port), "tok2", "tok2.thumbprint").await);
+    }
+
+    #[tokio::test]
+    async fn http_01_not_found_returns_false() {
+        let (port, _challenge, _s) = start_mock_server().await;
+        // challenge is None → server returns 404 for any token
+        assert!(!validate_http_01(&format!("127.0.0.1:{}", port), "tok3", "k").await);
+    }
+
+    #[tokio::test]
+    async fn http_01_connection_refused_returns_false() {
+        // Bind, get a port, then drop so nothing is listening
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        drop(l);
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        assert!(!validate_http_01(&format!("127.0.0.1:{}", port), "tok", "k").await);
+    }
+
+    #[tokio::test]
+    async fn dns_01_nonexistent_domain_returns_false() {
+        // RFC 2606 reserves .invalid for guaranteed NXDOMAIN
+        assert!(!validate_dns_01("nonexistent-credo-test.invalid", "fake-key-auth").await);
+    }
+}

@@ -25,19 +25,29 @@ impl TestVigil {
     /// Start vigil with no bootstrap secret (production-like mode).
     /// POST /bootstrap will return 404.
     pub async fn start() -> Result<Self> {
-        Self::start_inner(None, None).await
+        Self::start_inner(None, None, true).await
     }
 
     /// Start vigil with a bootstrap secret in memory.
     /// POST /bootstrap will accept this exact secret string.
     pub async fn start_with_bootstrap(secret: impl Into<String>) -> Result<Self> {
-        Self::start_inner(Some(secret.into()), None).await
+        Self::start_inner(Some(secret.into()), None, true).await
     }
 
     /// Start vigil with a pre-injected admin `AuthUser` so authenticated routes
     /// (sign, revoke, OCSP, CRL, health, CA info) can be called without mTLS.
     /// Used by vigil integration tests.
     pub async fn start_authed() -> Result<Self> {
+        Self::start_inner(None, Some(Self::test_admin()), true).await
+    }
+
+    /// Same as `start_authed` but with `allow_none_validation: false`.
+    /// Use this to test that none-01 challenges are rejected.
+    pub async fn start_authed_strict() -> Result<Self> {
+        Self::start_inner(None, Some(Self::test_admin()), false).await
+    }
+
+    fn test_admin() -> vigil::auth::AuthUser {
         use vigil::auth::AuthUser;
         use vigil::types::VigilUser;
         let admin = VigilUser {
@@ -48,19 +58,21 @@ impl TestVigil {
             public_key_pem: String::new(),
             public_key_fingerprint256: "test-fingerprint".to_string(),
         };
-        Self::start_inner(None, Some(AuthUser(admin))).await
+        AuthUser(admin)
     }
 
     async fn start_inner(
         bootstrap_secret: Option<String>,
         test_auth: Option<vigil::auth::AuthUser>,
+        allow_none_validation: bool,
     ) -> Result<Self> {
         let dir = make_test_dir("vigil")?;
         let tmp = dir.path().to_path_buf();
 
         std::fs::create_dir_all(tmp.join("certs")).ok();
 
-        let config = build_vigil_config(&tmp);
+        let mut config = build_vigil_config(&tmp);
+        config.allow_none_validation = allow_none_validation;
 
         vigil::storage::ensure_users_db(&config.users_db_path).context("ensure users db")?;
         vigil::storage::ensure_certs_db(&config.cert_db_path, &config.certs_dir)
