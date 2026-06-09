@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 
-use credo_lib::log::RequestLogEntry;
 use crate::types::CorgiNodeConfig;
+use credo_lib::log::RequestLogEntry;
 
 fn url_hostname(url: &str) -> String {
     url.split("://")
@@ -31,13 +31,19 @@ pub struct CorgiClientPool {
 
 impl CorgiClientPool {
     pub fn new() -> Self {
-        Self { clients: HashMap::new(), bootstrap_identity_pem: None }
+        Self {
+            clients: HashMap::new(),
+            bootstrap_identity_pem: None,
+        }
     }
 
     pub fn with_bootstrap_identity(cert_pem: &str, key_pem: &str) -> Self {
         let mut pem = cert_pem.as_bytes().to_vec();
         pem.extend_from_slice(key_pem.as_bytes());
-        Self { clients: HashMap::new(), bootstrap_identity_pem: Some(pem) }
+        Self {
+            clients: HashMap::new(),
+            bootstrap_identity_pem: Some(pem),
+        }
     }
 }
 
@@ -45,20 +51,25 @@ impl CorgiClientPool {
 // Client construction
 // ---------------------------------------------------------------------------
 
-fn build_client(node: &CorgiNodeConfig, bootstrap_identity_pem: Option<&[u8]>) -> Result<reqwest::Client> {
+fn build_client(
+    node: &CorgiNodeConfig,
+    bootstrap_identity_pem: Option<&[u8]>,
+) -> Result<reqwest::Client> {
     let identity_pem: Vec<u8> = if let Some(pem) = bootstrap_identity_pem {
         // Bootstrap mode: use the in-memory identity exclusively — no disk reads.
         pem.to_vec()
     } else {
-        let mut cert = std::fs::read(&node.mtls.cert_path)
-            .with_context(|| format!("Reading corgi mTLS cert: {}", node.mtls.cert_path.display()))?;
-        cert.extend_from_slice(&std::fs::read(&node.mtls.key_path)
-            .with_context(|| format!("Reading corgi mTLS key: {}", node.mtls.key_path.display()))?);
+        let mut cert = std::fs::read(&node.mtls.cert_path).with_context(|| {
+            format!("Reading corgi mTLS cert: {}", node.mtls.cert_path.display())
+        })?;
+        cert.extend_from_slice(&std::fs::read(&node.mtls.key_path).with_context(|| {
+            format!("Reading corgi mTLS key: {}", node.mtls.key_path.display())
+        })?);
         cert
     };
 
-    let identity = reqwest::Identity::from_pem(&identity_pem)
-        .context("Building mTLS client identity")?;
+    let identity =
+        reqwest::Identity::from_pem(&identity_pem).context("Building mTLS client identity")?;
 
     let mut builder = reqwest::ClientBuilder::new()
         .identity(identity)
@@ -69,15 +80,18 @@ fn build_client(node: &CorgiNodeConfig, bootstrap_identity_pem: Option<&[u8]>) -
     } else if let Some(ca_path) = &node.mtls.ca_path {
         let ca_bytes = std::fs::read(ca_path)
             .with_context(|| format!("Reading corgi CA: {}", ca_path.display()))?;
-        let ca = reqwest::Certificate::from_pem(&ca_bytes)
-            .context("Parsing corgi CA certificate")?;
+        let ca =
+            reqwest::Certificate::from_pem(&ca_bytes).context("Parsing corgi CA certificate")?;
         builder = builder.add_root_certificate(ca);
     }
 
     builder.build().context("Building corgi HTTP client")
 }
 
-async fn get_or_create(pool: &Arc<RwLock<CorgiClientPool>>, node: &CorgiNodeConfig) -> Result<reqwest::Client> {
+async fn get_or_create(
+    pool: &Arc<RwLock<CorgiClientPool>>,
+    node: &CorgiNodeConfig,
+) -> Result<reqwest::Client> {
     {
         let r = pool.read().await;
         if let Some(client) = r.clients.get(&node.name) {
@@ -86,7 +100,10 @@ async fn get_or_create(pool: &Arc<RwLock<CorgiClientPool>>, node: &CorgiNodeConf
     }
     let bootstrap_pem = pool.read().await.bootstrap_identity_pem.clone();
     let client = build_client(node, bootstrap_pem.as_deref())?;
-    pool.write().await.clients.insert(node.name.clone(), client.clone());
+    pool.write()
+        .await
+        .clients
+        .insert(node.name.clone(), client.clone());
     Ok(client)
 }
 
@@ -114,10 +131,17 @@ pub async fn corgi_get<T: DeserializeOwned>(
         Ok(r) => r,
         Err(e) => {
             RequestLogEntry {
-                code: "F", direction: "<", status: 0, method: "GET", path,
-                host: &host, peer_ip: "-", identity: Some(node.name.as_str()),
+                code: "F",
+                direction: "<",
+                status: 0,
+                method: "GET",
+                path,
+                host: &host,
+                peer_ip: "-",
+                identity: Some(node.name.as_str()),
                 duration_ms: start.elapsed().as_secs_f64() * 1000.0,
-            }.log();
+            }
+            .log();
             return Err(anyhow::anyhow!("GET {url}: {e}"));
         }
     };
@@ -132,15 +156,18 @@ pub async fn corgi_get<T: DeserializeOwned>(
         peer_ip: "-",
         identity: Some(node.name.as_str()),
         duration_ms: start.elapsed().as_secs_f64() * 1000.0,
-    }.log();
+    }
+    .log();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
         anyhow::bail!("GET {url} → {status}: {body}");
     }
-    let body = resp.text().await.with_context(|| format!("Reading response from {url}"))?;
+    let body = resp
+        .text()
+        .await
+        .with_context(|| format!("Reading response from {url}"))?;
     tracing::debug!(url = %url, body = %body, "Corgi GET response body");
-    serde_json::from_str::<T>(&body)
-        .with_context(|| format!("Parsing response from {url}"))
+    serde_json::from_str::<T>(&body).with_context(|| format!("Parsing response from {url}"))
 }
 
 pub async fn corgi_post<T: DeserializeOwned>(
@@ -157,10 +184,17 @@ pub async fn corgi_post<T: DeserializeOwned>(
         Ok(r) => r,
         Err(e) => {
             RequestLogEntry {
-                code: "F", direction: "<", status: 0, method: "POST", path,
-                host: &host, peer_ip: "-", identity: Some(node.name.as_str()),
+                code: "F",
+                direction: "<",
+                status: 0,
+                method: "POST",
+                path,
+                host: &host,
+                peer_ip: "-",
+                identity: Some(node.name.as_str()),
                 duration_ms: start.elapsed().as_secs_f64() * 1000.0,
-            }.log();
+            }
+            .log();
             return Err(anyhow::anyhow!("POST {url}: {e}"));
         }
     };
@@ -175,12 +209,12 @@ pub async fn corgi_post<T: DeserializeOwned>(
         peer_ip: "-",
         identity: Some(node.name.as_str()),
         duration_ms: start.elapsed().as_secs_f64() * 1000.0,
-    }.log();
+    }
+    .log();
     let resp_body = resp.text().await.unwrap_or_default();
     tracing::debug!(url = %url, status = %status, body = %resp_body, "Corgi POST response body");
     if !status.is_success() {
         anyhow::bail!("POST {url} → {status}: {resp_body}");
     }
-    serde_json::from_str::<T>(&resp_body)
-        .with_context(|| format!("Parsing response from {url}"))
+    serde_json::from_str::<T>(&resp_body).with_context(|| format!("Parsing response from {url}"))
 }

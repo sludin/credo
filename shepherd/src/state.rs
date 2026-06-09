@@ -1,7 +1,7 @@
+use arc_swap::ArcSwap;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::SystemTime;
-use arc_swap::ArcSwap;
 use tokio::sync::{Notify, RwLock};
 use uuid::Uuid;
 
@@ -10,34 +10,36 @@ use crate::config::ShepherdConfig;
 use crate::corgi_client::CorgiClientPool;
 use crate::jwt::JwtKeys;
 use crate::refresh_tokens::RefreshTokenStore;
-use crate::types::{Account, CaConfig, CorgiNodeConfig, CorgiNodeState, ManagedAssignment, RenewalJob};
+use crate::types::{
+    Account, CaConfig, CorgiNodeConfig, CorgiNodeState, ManagedAssignment, RenewalJob,
+};
 
 #[derive(Clone)]
 pub struct AppState {
     /// Main config — hot-swappable on SIGHUP via ArcSwap (lock-free reads).
-    pub config:            Arc<ArcSwap<ShepherdConfig>>,
-    pub jwt_keys:          Arc<JwtKeys>,
-    pub corgi_state:       Arc<RwLock<HashMap<String, CorgiNodeState>>>,
-    pub renewal_jobs:      Arc<RwLock<HashMap<Uuid, RenewalJob>>>,
-    pub accounts:          Arc<RwLock<Vec<Account>>>,
-    pub refresh_tokens:    Arc<RefreshTokenStore>,
-    pub assignments:       Arc<RwLock<Vec<ManagedAssignment>>>,
-    pub corgis:            Arc<RwLock<Vec<CorgiNodeConfig>>>,
+    pub config: Arc<ArcSwap<ShepherdConfig>>,
+    pub jwt_keys: Arc<JwtKeys>,
+    pub corgi_state: Arc<RwLock<HashMap<String, CorgiNodeState>>>,
+    pub renewal_jobs: Arc<RwLock<HashMap<Uuid, RenewalJob>>>,
+    pub accounts: Arc<RwLock<Vec<Account>>>,
+    pub refresh_tokens: Arc<RefreshTokenStore>,
+    pub assignments: Arc<RwLock<Vec<ManagedAssignment>>>,
+    pub corgis: Arc<RwLock<Vec<CorgiNodeConfig>>>,
     /// Loaded CA configs keyed by CA name — hot-reloaded on mtime change.
-    pub cas:               Arc<RwLock<HashMap<String, CaConfig>>>,
+    pub cas: Arc<RwLock<HashMap<String, CaConfig>>>,
     /// Last-seen mtimes for hot-reload detection
-    pub corgis_mtime:      Arc<Mutex<Option<SystemTime>>>,
+    pub corgis_mtime: Arc<Mutex<Option<SystemTime>>>,
     pub assignments_mtime: Arc<Mutex<Option<SystemTime>>>,
-    pub accounts_mtime:    Arc<Mutex<Option<SystemTime>>>,
-    pub ca_mtime:          Arc<Mutex<Option<SystemTime>>>,
+    pub accounts_mtime: Arc<Mutex<Option<SystemTime>>>,
+    pub ca_mtime: Arc<Mutex<Option<SystemTime>>>,
     /// Per-corgi mTLS reqwest client pool (keyed by corgi name)
     pub corgi_client_pool: Arc<RwLock<CorgiClientPool>>,
     /// ACME account cache (avoids re-creating accounts on each renewal)
-    pub acme_accounts:     AcmeAccountCache,
+    pub acme_accounts: AcmeAccountCache,
     /// In-progress issuance deduplication: key = "{ca}:{cert_name}"
-    pub in_progress:       Arc<Mutex<HashMap<String, Weak<Notify>>>>,
+    pub in_progress: Arc<Mutex<HashMap<String, Weak<Notify>>>>,
     /// mTLS client for proxying admin requests to Vigil (None if vigilUrl not configured)
-    pub vigil_client:      Arc<RwLock<Option<reqwest::Client>>>,
+    pub vigil_client: Arc<RwLock<Option<reqwest::Client>>>,
     /// One-time admin token for bootstrap API endpoints (None in normal mode)
     pub bootstrap_admin_token: Arc<Mutex<Option<String>>>,
 }
@@ -55,13 +57,18 @@ impl AppState {
         key_pem: Option<String>,
         admin_token: Option<String>,
     ) -> Self {
-        let refresh_token_path = config.renewal_jobs_dir.as_ref()
+        let refresh_token_path = config
+            .renewal_jobs_dir
+            .as_ref()
             .map(|d| d.join("refresh-tokens.json"));
 
         let vigil_client = if config.vigil_url.is_some() {
             match build_vigil_client(&config, &cas, cert_pem.as_deref(), key_pem.as_deref()) {
                 Ok(c) => Some(c),
-                Err(e) => { tracing::warn!("Failed to build Vigil client: {}", e); None }
+                Err(e) => {
+                    tracing::warn!("Failed to build Vigil client: {}", e);
+                    None
+                }
             }
         } else {
             None
@@ -85,7 +92,7 @@ impl AppState {
                 match (cert_pem.as_deref(), key_pem.as_deref()) {
                     (Some(c), Some(k)) => CorgiClientPool::with_bootstrap_identity(c, k),
                     _ => CorgiClientPool::new(),
-                }
+                },
             )),
             acme_accounts: match (cert_pem.as_deref(), key_pem.as_deref()) {
                 (Some(c), Some(k)) => AcmeAccountCache::with_identity(c, k),
@@ -106,8 +113,12 @@ fn build_vigil_client(
     cert_pem: Option<&str>,
     key_pem: Option<&str>,
 ) -> anyhow::Result<reqwest::Client> {
-    let vigil_ca = cas.values().find(|ca| ca.provider == "vigil" && ca.protocol == "acme");
-    let insecure = vigil_ca.map(|ca| ca.config.insecure_skip_verify).unwrap_or(false);
+    let vigil_ca = cas
+        .values()
+        .find(|ca| ca.provider == "vigil" && ca.protocol == "acme");
+    let insecure = vigil_ca
+        .map(|ca| ca.config.insecure_skip_verify)
+        .unwrap_or(false);
 
     // Cert + key: prefer in-memory PEM (bootstrap mode), else read from disk.
     let identity_pem: Vec<u8> = if let (Some(c), Some(k)) = (cert_pem, key_pem) {
@@ -115,14 +126,18 @@ fn build_vigil_client(
         v.extend_from_slice(k.as_bytes());
         v
     } else {
-        let cert_path = vigil_ca.and_then(|ca| ca.config.tls.as_ref()?.cert_path.clone())
+        let cert_path = vigil_ca
+            .and_then(|ca| ca.config.tls.as_ref()?.cert_path.clone())
             .unwrap_or_else(|| config.tls.cert_path.clone());
-        let key_path = vigil_ca.and_then(|ca| ca.config.tls.as_ref()?.key_path.clone())
+        let key_path = vigil_ca
+            .and_then(|ca| ca.config.tls.as_ref()?.key_path.clone())
             .unwrap_or_else(|| config.tls.key_path.clone());
-        let mut v = std::fs::read(&cert_path)
-            .map_err(|e| anyhow::anyhow!("Reading Vigil client cert {}: {}", cert_path.display(), e))?;
-        v.extend_from_slice(&std::fs::read(&key_path)
-            .map_err(|e| anyhow::anyhow!("Reading Vigil client key {}: {}", key_path.display(), e))?);
+        let mut v = std::fs::read(&cert_path).map_err(|e| {
+            anyhow::anyhow!("Reading Vigil client cert {}: {}", cert_path.display(), e)
+        })?;
+        v.extend_from_slice(&std::fs::read(&key_path).map_err(|e| {
+            anyhow::anyhow!("Reading Vigil client key {}: {}", key_path.display(), e)
+        })?);
         v
     };
 
@@ -136,7 +151,8 @@ fn build_vigil_client(
     if insecure {
         builder = builder.danger_accept_invalid_certs(true);
     } else {
-        let ca_path = vigil_ca.and_then(|ca| ca.config.tls.as_ref()?.ca_path.clone())
+        let ca_path = vigil_ca
+            .and_then(|ca| ca.config.tls.as_ref()?.ca_path.clone())
             .unwrap_or_else(|| config.tls.client_ca_path.clone());
         let ca_pem = std::fs::read(&ca_path)
             .map_err(|e| anyhow::anyhow!("Reading Vigil CA cert {}: {}", ca_path.display(), e))?;
@@ -145,5 +161,7 @@ fn build_vigil_client(
         builder = builder.add_root_certificate(ca_cert);
     }
 
-    builder.build().map_err(|e| anyhow::anyhow!("Building Vigil HTTP client: {}", e))
+    builder
+        .build()
+        .map_err(|e| anyhow::anyhow!("Building Vigil HTTP client: {}", e))
 }

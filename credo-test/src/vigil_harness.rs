@@ -62,15 +62,14 @@ impl TestVigil {
 
         let config = build_vigil_config(&tmp);
 
-        vigil::storage::ensure_users_db(&config.users_db_path)
-            .context("ensure users db")?;
+        vigil::storage::ensure_users_db(&config.users_db_path).context("ensure users db")?;
         vigil::storage::ensure_certs_db(&config.cert_db_path, &config.certs_dir)
             .context("ensure certs db")?;
         vigil::storage::ensure_acme_accounts_db(&config.acme_accounts_db_path)
             .context("ensure acme accounts db")?;
 
-        let ca_metadata = vigil::ca::load_ca_metadata(&config)
-            .context("loading test CA metadata")?;
+        let ca_metadata =
+            vigil::ca::load_ca_metadata(&config).context("loading test CA metadata")?;
 
         let state = vigil::state::AppState::new(config, ca_metadata, bootstrap_secret);
         vigil::acme::restore_accounts(&state).await.ok();
@@ -90,7 +89,9 @@ impl TestVigil {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
             axum::serve(listener, router)
-                .with_graceful_shutdown(async { let _ = shutdown_rx.await; })
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_rx.await;
+                })
                 .await
                 .ok();
         });
@@ -102,12 +103,23 @@ impl TestVigil {
             .build()
             .context("building reqwest client")?;
 
-        Ok(TestVigil { url, client, dir, _shutdown: shutdown_tx })
+        Ok(TestVigil {
+            url,
+            client,
+            dir,
+            _shutdown: shutdown_tx,
+        })
     }
 
-    pub fn acme_directory_url(&self) -> String { format!("{}/acme/directory", self.url) }
-    pub fn bootstrap_url(&self)      -> String { format!("{}/bootstrap", self.url) }
-    pub fn sign_url(&self)           -> String { format!("{}/certificates/sign", self.url) }
+    pub fn acme_directory_url(&self) -> String {
+        format!("{}/acme/directory", self.url)
+    }
+    pub fn bootstrap_url(&self) -> String {
+        format!("{}/bootstrap", self.url)
+    }
+    pub fn sign_url(&self) -> String {
+        format!("{}/certificates/sign", self.url)
+    }
 }
 
 pub fn build_vigil_config(tmp: &PathBuf) -> VigilConfig {
@@ -147,5 +159,6 @@ pub fn build_vigil_config(tmp: &PathBuf) -> VigilConfig {
             allow_ip_sans: false,
         },
         config_dir: tmp.clone(),
+        allow_none_validation: true,
     }
 }

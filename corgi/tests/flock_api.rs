@@ -14,9 +14,12 @@ use serde_json::Value;
 async fn control_health_requires_auth() {
     let corgi = TestCorgi::start().await.unwrap();
 
-    let resp = corgi.client
+    let resp = corgi
+        .client
         .get(corgi.control_health_url())
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 401, "control /health must require auth");
 }
@@ -30,9 +33,12 @@ async fn control_health_requires_auth() {
 async fn control_health_returns_200_with_node_info() {
     let corgi = TestCorgi::start_authed().await.unwrap();
 
-    let resp = corgi.client
+    let resp = corgi
+        .client
         .get(corgi.control_health_url())
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
@@ -47,9 +53,12 @@ async fn control_health_returns_200_with_node_info() {
 async fn flock_list_returns_empty_on_fresh_start() {
     let corgi = TestCorgi::start_authed().await.unwrap();
 
-    let resp = corgi.client
+    let resp = corgi
+        .client
         .get(format!("{}/flock", corgi.control_url))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
@@ -62,9 +71,12 @@ async fn flock_list_returns_empty_on_fresh_start() {
 async fn flock_get_unknown_cert_returns_404() {
     let corgi = TestCorgi::start_authed().await.unwrap();
 
-    let resp = corgi.client
+    let resp = corgi
+        .client
         .get(format!("{}/flock/nonexistent-cert", corgi.control_url))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 404);
 }
@@ -74,15 +86,21 @@ async fn flock_get_unknown_cert_returns_404() {
 async fn sync_assignments_returns_refreshed() {
     let corgi = TestCorgi::start_authed().await.unwrap();
 
-    let resp = corgi.client
+    let resp = corgi
+        .client
         .post(format!("{}/sync/assignments", corgi.control_url))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     // Sync will fail to reach shepherd (no shepherd running) but the route
     // itself must respond — either 200 on success or a meaningful error.
     // Either way the route is reachable.
-    assert!(resp.status().is_success() || resp.status().is_server_error(),
-        "sync endpoint must be reachable, got {}", resp.status());
+    assert!(
+        resp.status().is_success() || resp.status().is_server_error(),
+        "sync endpoint must be reachable, got {}",
+        resp.status()
+    );
 }
 
 /// POST /acme-challenges creates a challenge record; GET returns the key authorization.
@@ -91,36 +109,67 @@ async fn acme_challenge_lifecycle_via_control_api() {
     let corgi = TestCorgi::start_authed().await.unwrap();
 
     // Create challenge via control API
-    let create_resp = corgi.client
+    let create_resp = corgi
+        .client
         .post(format!("{}/acme-challenges", corgi.control_url))
         .json(&serde_json::json!({
             "token": "test-token-abc",
             "response": "test-token-abc.key-auth-value",
         }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(create_resp.status(), 201);
     let body: Value = create_resp.json().await.unwrap();
-    assert!(body["challenge"]["token"].is_string(), "challenge token must be present");
+    assert!(
+        body["challenge"]["token"].is_string(),
+        "challenge token must be present"
+    );
 
     // The challenge must now be served on the challenge port
-    let get_resp = corgi.client
-        .get(format!("{}/.well-known/acme-challenge/test-token-abc", corgi.challenge_url))
-        .send().await.unwrap();
+    let get_resp = corgi
+        .client
+        .get(format!(
+            "{}/.well-known/acme-challenge/test-token-abc",
+            corgi.challenge_url
+        ))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(get_resp.status(), 200);
-    assert_eq!(get_resp.text().await.unwrap(), "test-token-abc.key-auth-value");
+    assert_eq!(
+        get_resp.text().await.unwrap(),
+        "test-token-abc.key-auth-value"
+    );
 
     // Delete the challenge
-    let del_resp = corgi.client
-        .delete(format!("{}/acme-challenges/test-token-abc", corgi.control_url))
-        .send().await.unwrap();
+    let del_resp = corgi
+        .client
+        .delete(format!(
+            "{}/acme-challenges/test-token-abc",
+            corgi.control_url
+        ))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(del_resp.status(), 200);
     let del_body: Value = del_resp.json().await.unwrap();
     assert_eq!(del_body["removed"].as_bool(), Some(true));
 
     // Must be gone from challenge server
-    let after_del = corgi.client
-        .get(format!("{}/.well-known/acme-challenge/test-token-abc", corgi.challenge_url))
-        .send().await.unwrap();
-    assert_eq!(after_del.status(), 404, "challenge must be gone after delete");
+    let after_del = corgi
+        .client
+        .get(format!(
+            "{}/.well-known/acme-challenge/test-token-abc",
+            corgi.challenge_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        after_del.status(),
+        404,
+        "challenge must be gone after delete"
+    );
 }

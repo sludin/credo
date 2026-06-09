@@ -39,9 +39,7 @@ pub fn make_test_dir(service: &str) -> Result<TestDir> {
             .unwrap_or("unnamed")
             .replace("::", "__");
 
-        let dir = workspace_output_root()
-            .join(&test_name)
-            .join(service);
+        let dir = workspace_output_root().join(&test_name).join(service);
 
         // Remove stale output from a previous run before writing fresh files.
         if dir.exists() {
@@ -53,11 +51,17 @@ pub fn make_test_dir(service: &str) -> Result<TestDir> {
 
         println!("[credo-test] output → {}", dir.display());
 
-        Ok(TestDir { path: dir, _temp: None })
+        Ok(TestDir {
+            path: dir,
+            _temp: None,
+        })
     } else {
         let tmp = TempDir::new().context("creating temp dir")?;
         let path = tmp.path().to_path_buf();
-        Ok(TestDir { path, _temp: Some(tmp) })
+        Ok(TestDir {
+            path,
+            _temp: Some(tmp),
+        })
     }
 }
 

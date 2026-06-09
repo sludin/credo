@@ -12,7 +12,9 @@ use crate::corgis::load_corgis;
 use crate::issuance::issue_cert;
 use crate::renewal_jobs::{complete_job, create_job, fail_job, update_phase};
 use crate::state::AppState;
-use crate::types::{CorgiFlockEntry, CorgiNodeConfig, CorgiNodeState, CorgiStatus, ManagedAssignment, RenewalPhase};
+use crate::types::{
+    CorgiFlockEntry, CorgiNodeConfig, CorgiNodeState, CorgiStatus, ManagedAssignment, RenewalPhase,
+};
 
 // ---------------------------------------------------------------------------
 // Entry points (spawned as background tasks)
@@ -52,7 +54,9 @@ async fn ping_health(state: &AppState, node: &CorgiNodeConfig) {
     match corgi_get::<serde_json::Value>(&state.corgi_client_pool, node, "/health").await {
         Ok(_) => {
             let mut cs = state.corgi_state.write().await;
-            let entry = cs.entry(node.name.clone()).or_insert_with(CorgiNodeState::new);
+            let entry = cs
+                .entry(node.name.clone())
+                .or_insert_with(CorgiNodeState::new);
             entry.status = CorgiStatus::Reachable;
             entry.last_health_check = Some(Utc::now().timestamp());
             entry.error = None;
@@ -60,7 +64,9 @@ async fn ping_health(state: &AppState, node: &CorgiNodeConfig) {
         Err(e) => {
             tracing::warn!(corgi = %node.name, error = %e, "Corgi health check failed");
             let mut cs = state.corgi_state.write().await;
-            let entry = cs.entry(node.name.clone()).or_insert_with(CorgiNodeState::new);
+            let entry = cs
+                .entry(node.name.clone())
+                .or_insert_with(CorgiNodeState::new);
             entry.status = CorgiStatus::Unreachable;
             entry.error = Some(e.to_string());
         }
@@ -137,17 +143,23 @@ struct FlockEntry {
 async fn poll_flock(state: &AppState, node: &CorgiNodeConfig) {
     match corgi_get::<FlockResponse>(&state.corgi_client_pool, node, "/flock").await {
         Ok(resp) => {
-            let flock: Vec<CorgiFlockEntry> = resp.flock.into_iter().map(|e| CorgiFlockEntry {
-                name: e.name,
-                fingerprint256: e.fingerprint256,
-                valid_to: e.valid_to,
-                lifetime_days: e.lifetime_days.filter(|d| d.is_finite()),
-                status: e.status,
-                san_names: e.san_names,
-                key_exists: Some(e.key_exists),
-            }).collect();
+            let flock: Vec<CorgiFlockEntry> = resp
+                .flock
+                .into_iter()
+                .map(|e| CorgiFlockEntry {
+                    name: e.name,
+                    fingerprint256: e.fingerprint256,
+                    valid_to: e.valid_to,
+                    lifetime_days: e.lifetime_days.filter(|d| d.is_finite()),
+                    status: e.status,
+                    san_names: e.san_names,
+                    key_exists: Some(e.key_exists),
+                })
+                .collect();
             let mut cs = state.corgi_state.write().await;
-            let entry = cs.entry(node.name.clone()).or_insert_with(CorgiNodeState::new);
+            let entry = cs
+                .entry(node.name.clone())
+                .or_insert_with(CorgiNodeState::new);
             entry.status = CorgiStatus::Reachable;
             entry.last_health_check = Some(Utc::now().timestamp());
             entry.flock = flock;
@@ -156,7 +168,9 @@ async fn poll_flock(state: &AppState, node: &CorgiNodeConfig) {
         Err(e) => {
             tracing::warn!(corgi = %node.name, error = %e, "Corgi flock poll failed");
             let mut cs = state.corgi_state.write().await;
-            let entry = cs.entry(node.name.clone()).or_insert_with(CorgiNodeState::new);
+            let entry = cs
+                .entry(node.name.clone())
+                .or_insert_with(CorgiNodeState::new);
             entry.status = CorgiStatus::Unreachable;
             entry.error = Some(e.to_string());
         }
@@ -179,13 +193,18 @@ async fn fingerprint_sync_check(state: &AppState, node: &CorgiNodeConfig) {
     let config = state.config.load_full();
     let store_dir = &config.cert_store_dir;
 
-    let needs_refresh = assignments.iter()
+    let needs_refresh = assignments
+        .iter()
         .filter(|a| a.corgi.as_deref() == Some(node.name.as_str()))
         .any(|a| {
-            let local_fp = read_cert_store_entry(store_dir, &a.cert_name)
-                .and_then(|e| e.fingerprint256);
-            let Some(expected) = local_fp else { return false };
-            let corgi_fp = node_state.flock.iter()
+            let local_fp =
+                read_cert_store_entry(store_dir, &a.cert_name).and_then(|e| e.fingerprint256);
+            let Some(expected) = local_fp else {
+                return false;
+            };
+            let corgi_fp = node_state
+                .flock
+                .iter()
                 .find(|f| f.name == a.cert_name)
                 .and_then(|f| f.fingerprint256.as_deref())
                 .map(|s| s.to_uppercase());
@@ -204,7 +223,9 @@ async fn fingerprint_sync_check(state: &AppState, node: &CorgiNodeConfig) {
             node,
             "/sync/assignments",
             &json!({}),
-        ).await {
+        )
+        .await
+        {
             tracing::warn!(corgi = %node.name, error = %e, "Failed to request corgi assignment refresh");
         }
     }
@@ -236,7 +257,8 @@ async fn cert_maintenance(
     let config = state.config.load_full();
     let store_dir = &config.cert_store_dir;
     let local_cert = read_cert_store_entry(store_dir, &assignment.cert_name);
-    let renew_before: f64 = assignment.renew_before_days
+    let renew_before: f64 = assignment
+        .renew_before_days
         .map(|d| d as f64)
         .unwrap_or(config.renew_before_days);
 
@@ -254,7 +276,10 @@ async fn cert_maintenance(
 
     let needs_renewal = match &local_cert {
         None => true,
-        Some(e) => e.expires_in_days.map(|d| d <= renew_before as i64).unwrap_or(true),
+        Some(e) => e
+            .expires_in_days
+            .map(|d| d <= renew_before as i64)
+            .unwrap_or(true),
     } || corgi_missing_key;
 
     if !needs_renewal {
@@ -283,7 +308,8 @@ async fn cert_maintenance(
         node,
         &format!("/flock/{}/csr", urlencoded(&assignment.cert_name)),
         &json!({ "keyAlgorithm": assignment.key_algorithm.as_deref().unwrap_or("rsa") }),
-    ).await;
+    )
+    .await;
 
     let csr_pem = match csr_resp {
         Ok(r) => r.csr_pem,
@@ -307,15 +333,27 @@ async fn cert_maintenance(
         &assignment.cert_name,
         domains.clone(),
         &assignment.ca,
-    ).await;
+    )
+    .await;
 
     update_phase(&state.renewal_jobs, job_id, RenewalPhase::SubmittingOrder).await;
 
     // Issue via ACME
-    let ca_config = match state.cas.read().await.get(&assignment.ca).map(|ca| ca.config.clone()) {
+    let ca_config = match state
+        .cas
+        .read()
+        .await
+        .get(&assignment.ca)
+        .map(|ca| ca.config.clone())
+    {
         Some(cfg) => cfg,
         None => {
-            fail_job(&state.renewal_jobs, job_id, format!("CA '{}' not configured", assignment.ca)).await;
+            fail_job(
+                &state.renewal_jobs,
+                job_id,
+                format!("CA '{}' not configured", assignment.ca),
+            )
+            .await;
             anyhow::bail!("CA '{}' not configured", assignment.ca);
         }
     };
@@ -331,7 +369,8 @@ async fn cert_maintenance(
         &state.corgi_client_pool,
         &corgis,
         &state.acme_accounts,
-    ).await;
+    )
+    .await;
 
     match result {
         Err(e) => {
@@ -352,7 +391,9 @@ async fn cert_maintenance(
                     "chainPem":     issued.chain_pem,
                     "fullchainPem": issued.fullchain_pem,
                 }),
-            ).await {
+            )
+            .await
+            {
                 tracing::warn!(
                     corgi = %node.name,
                     cert = %assignment.cert_name,
@@ -511,7 +552,10 @@ mod tests {
 
     #[test]
     fn domain_already_in_sans_not_duplicated() {
-        let a = assignment(Some("origin.ludin.org"), &["origin.ludin.org", "www.ludin.org"]);
+        let a = assignment(
+            Some("origin.ludin.org"),
+            &["origin.ludin.org", "www.ludin.org"],
+        );
         assert_eq!(build_domains(&a), vec!["origin.ludin.org", "www.ludin.org"]);
     }
 

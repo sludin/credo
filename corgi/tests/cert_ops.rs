@@ -15,11 +15,21 @@ fn empty_entry(name: &str, dir: &TempDir) -> FlockEntry {
         name: name.to_string(),
         path: dir.path().join(format!("{name}.cert.pem")),
         key_path: dir.path().join(format!("{name}.key.pem")),
-        chain_path: None, fullchain_path: None, csr_path: None,
-        domain: None, monitor: false, hooks: vec![], csr_subject: None,
-        identity_uri: None, sans: vec![],
-        cert_mode: None, key_mode: None, cert_owner: None, cert_group: None,
-        key_owner: None, key_group: None,
+        chain_path: None,
+        fullchain_path: None,
+        csr_path: None,
+        domain: None,
+        monitor: false,
+        hooks: vec![],
+        csr_subject: None,
+        identity_uri: None,
+        sans: vec![],
+        cert_mode: None,
+        key_mode: None,
+        cert_owner: None,
+        cert_group: None,
+        key_owner: None,
+        key_group: None,
     }
 }
 
@@ -50,7 +60,16 @@ fn collect_sans_uses_entry_sans_when_body_empty() {
 
     let req = CsrRequest::default();
     let sans = collect_sans(&entry, &req, None);
-    let dns: Vec<_> = sans.iter().filter_map(|s| if let SanType::DnsName(d) = s { Some(d.as_str()) } else { None }).collect();
+    let dns: Vec<_> = sans
+        .iter()
+        .filter_map(|s| {
+            if let SanType::DnsName(d) = s {
+                Some(d.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
     assert!(dns.contains(&"a.credo.test"), "must include entry SANs");
     assert!(dns.contains(&"b.credo.test"), "must include all entry SANs");
 }
@@ -62,11 +81,23 @@ fn collect_sans_merges_body_and_entry_sans() {
     let mut entry = empty_entry("test", &dir);
     entry.sans = vec!["entry.credo.test".to_string()];
 
-    let req = CsrRequest { sans: Some(vec!["body.credo.test".to_string()]), ..Default::default() };
+    let req = CsrRequest {
+        sans: Some(vec!["body.credo.test".to_string()]),
+        ..Default::default()
+    };
     let sans = collect_sans(&entry, &req, None);
-    let dns: Vec<_> = sans.iter().filter_map(|s| if let SanType::DnsName(d) = s { Some(d.as_str()) } else { None }).collect();
+    let dns: Vec<_> = sans
+        .iter()
+        .filter_map(|s| {
+            if let SanType::DnsName(d) = s {
+                Some(d.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
     assert!(dns.contains(&"entry.credo.test"), "must include entry SAN");
-    assert!(dns.contains(&"body.credo.test"),  "must include body SAN");
+    assert!(dns.contains(&"body.credo.test"), "must include body SAN");
 }
 
 /// Overlapping SANs from entry and body are deduplicated.
@@ -76,11 +107,29 @@ fn collect_sans_deduplicates_overlapping() {
     let mut entry = empty_entry("test", &dir);
     entry.sans = vec!["shared.credo.test".to_string()];
 
-    let req = CsrRequest { sans: Some(vec!["shared.credo.test".to_string(), "other.credo.test".to_string()]), ..Default::default() };
+    let req = CsrRequest {
+        sans: Some(vec![
+            "shared.credo.test".to_string(),
+            "other.credo.test".to_string(),
+        ]),
+        ..Default::default()
+    };
     let sans = collect_sans(&entry, &req, None);
-    let dns: Vec<String> = sans.iter().filter_map(|s| if let SanType::DnsName(d) = s { Some(d.clone()) } else { None }).collect();
+    let dns: Vec<String> = sans
+        .iter()
+        .filter_map(|s| {
+            if let SanType::DnsName(d) = s {
+                Some(d.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
 
-    let count = dns.iter().filter(|d| d.as_str() == "shared.credo.test").count();
+    let count = dns
+        .iter()
+        .filter(|d| d.as_str() == "shared.credo.test")
+        .count();
     assert_eq!(count, 1, "shared.credo.test must appear exactly once");
 }
 
@@ -93,8 +142,20 @@ fn collect_sans_falls_back_to_domain() {
 
     let req = CsrRequest::default();
     let sans = collect_sans(&entry, &req, None);
-    let dns: Vec<_> = sans.iter().filter_map(|s| if let SanType::DnsName(d) = s { Some(d.as_str()) } else { None }).collect();
-    assert!(dns.contains(&"fallback.credo.test"), "must fall back to entry.domain");
+    let dns: Vec<_> = sans
+        .iter()
+        .filter_map(|s| {
+            if let SanType::DnsName(d) = s {
+                Some(d.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert!(
+        dns.contains(&"fallback.credo.test"),
+        "must fall back to entry.domain"
+    );
 }
 
 /// A config-level identity URI becomes a URI SAN.
@@ -107,7 +168,9 @@ fn collect_sans_includes_config_identity_uri() {
     let req = CsrRequest::default();
     let sans = collect_sans(&entry, &req, Some("vigil://credo/node/test-01"));
 
-    let has_uri = sans.iter().any(|s| matches!(s, SanType::URI(u) if u == "vigil://credo/node/test-01"));
+    let has_uri = sans
+        .iter()
+        .any(|s| matches!(s, SanType::URI(u) if u == "vigil://credo/node/test-01"));
     assert!(has_uri, "config identity URI must appear as URI SAN");
 }
 
@@ -128,9 +191,15 @@ fn generate_key_and_csr_writes_key_and_returns_csr() {
 
     let csr_pem = generate_key_and_csr(&entry, &pending, &req, None).unwrap();
 
-    assert!(pending.exists(), "key must be written to the pending staging path");
+    assert!(
+        pending.exists(),
+        "key must be written to the pending staging path"
+    );
     assert!(!entry.key_path.exists(), "key must NOT be written to live/");
-    assert!(csr_pem.contains("CERTIFICATE REQUEST"), "result must be a PEM CSR");
+    assert!(
+        csr_pem.contains("CERTIFICATE REQUEST"),
+        "result must be a PEM CSR"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -149,12 +218,20 @@ fn install_certificate_creates_archive_and_live_symlinks() {
         path: cert_store.join("live/install-test/cert.pem"),
         key_path: cert_store.join("live/install-test/privkey.pem"),
         fullchain_path: Some(cert_store.join("live/install-test/fullchain.pem")),
-        chain_path: None, csr_path: None,
+        chain_path: None,
+        csr_path: None,
         domain: Some("install.credo.test".to_string()),
-        monitor: false, hooks: vec![], csr_subject: None,
-        identity_uri: None, sans: vec![],
-        cert_mode: None, key_mode: None, cert_owner: None, cert_group: None,
-        key_owner: None, key_group: None,
+        monitor: false,
+        hooks: vec![],
+        csr_subject: None,
+        identity_uri: None,
+        sans: vec![],
+        cert_mode: None,
+        key_mode: None,
+        cert_owner: None,
+        cert_group: None,
+        key_owner: None,
+        key_group: None,
     };
 
     let (cert_pem, key_pem) = signed_cert_pem("install.credo.test");
@@ -164,23 +241,45 @@ fn install_certificate_creates_archive_and_live_symlinks() {
         cert_pem: Some(cert_pem.clone()),
         fullchain_pem: Some(fullchain),
         key_pem: Some(key_pem),
-        chain_pem: None, restart: Some(false),
+        chain_pem: None,
+        restart: Some(false),
     };
 
     let result = install_certificate(&entry, &cert_store, &req).unwrap();
 
     assert!(result.changed, "first install must mark changed=true");
-    assert!(!result.next_fingerprint.is_empty(), "fingerprint must be set");
+    assert!(
+        !result.next_fingerprint.is_empty(),
+        "fingerprint must be set"
+    );
 
     let archive = cert_store.join("archive/install-test");
-    assert!(archive.join("cert-001.pem").is_file(),     "cert archive must exist");
-    assert!(archive.join("fullchain-001.pem").is_file(), "fullchain archive must exist");
-    assert!(archive.join("privkey-001.pem").is_file(),  "key archive must exist");
+    assert!(
+        archive.join("cert-001.pem").is_file(),
+        "cert archive must exist"
+    );
+    assert!(
+        archive.join("fullchain-001.pem").is_file(),
+        "fullchain archive must exist"
+    );
+    assert!(
+        archive.join("privkey-001.pem").is_file(),
+        "key archive must exist"
+    );
 
     let live = cert_store.join("live/install-test");
-    assert!(live.join("cert.pem").is_symlink(),     "live/cert.pem must be symlink");
-    assert!(live.join("fullchain.pem").is_symlink(), "live/fullchain.pem must be symlink");
-    assert!(live.join("privkey.pem").is_symlink(),  "live/privkey.pem must be symlink");
+    assert!(
+        live.join("cert.pem").is_symlink(),
+        "live/cert.pem must be symlink"
+    );
+    assert!(
+        live.join("fullchain.pem").is_symlink(),
+        "live/fullchain.pem must be symlink"
+    );
+    assert!(
+        live.join("privkey.pem").is_symlink(),
+        "live/privkey.pem must be symlink"
+    );
 }
 
 /// When install_certificate is called with no key_pem and no key on disk,
@@ -199,11 +298,21 @@ fn install_certificate_no_key_leaves_no_privkey_in_archive() {
         name: "nokey-test".to_string(),
         path: cert_store.join("live/nokey-test/cert.pem"),
         key_path: cert_store.join("live/nokey-test/privkey.pem"),
-        fullchain_path: None, chain_path: None, csr_path: None,
-        domain: None, monitor: false, hooks: vec![], csr_subject: None,
-        identity_uri: None, sans: vec![],
-        cert_mode: None, key_mode: None, cert_owner: None, cert_group: None,
-        key_owner: None, key_group: None,
+        fullchain_path: None,
+        chain_path: None,
+        csr_path: None,
+        domain: None,
+        monitor: false,
+        hooks: vec![],
+        csr_subject: None,
+        identity_uri: None,
+        sans: vec![],
+        cert_mode: None,
+        key_mode: None,
+        cert_owner: None,
+        cert_group: None,
+        key_owner: None,
+        key_group: None,
     };
 
     let (cert_pem, _key_pem) = signed_cert_pem("nokey.credo.test");
@@ -220,11 +329,18 @@ fn install_certificate_no_key_leaves_no_privkey_in_archive() {
     install_certificate(&entry, &cert_store, &req).unwrap();
 
     let archive = cert_store.join("archive/nokey-test");
-    assert!(archive.join("cert-001.pem").is_file(), "cert archive must still be written");
-    assert!(!archive.join("privkey-001.pem").exists(),
-        "no privkey must be written to archive when key_pem=None and key_path absent");
-    assert!(!cert_store.join("live/nokey-test/privkey.pem").exists(),
-        "no privkey symlink must exist in live dir");
+    assert!(
+        archive.join("cert-001.pem").is_file(),
+        "cert archive must still be written"
+    );
+    assert!(
+        !archive.join("privkey-001.pem").exists(),
+        "no privkey must be written to archive when key_pem=None and key_path absent"
+    );
+    assert!(
+        !cert_store.join("live/nokey-test/privkey.pem").exists(),
+        "no privkey symlink must exist in live dir"
+    );
 }
 
 /// reconcile_once generates a new key when entry.key_path is a flat file (bootstrap
@@ -242,7 +358,11 @@ fn flat_file_key_is_not_treated_as_archived() {
     // Write a flat file (bootstrap temp key — not a symlink)
     std::fs::write(&key_path, b"fake key content").unwrap();
 
-    let is_symlink = key_path.symlink_metadata().unwrap().file_type().is_symlink();
+    let is_symlink = key_path
+        .symlink_metadata()
+        .unwrap()
+        .file_type()
+        .is_symlink();
     assert!(!is_symlink, "precondition: flat file is not a symlink");
 
     // reconcile_once checks: symlink_metadata().is_symlink() — flat file → false → needs new key
@@ -250,8 +370,10 @@ fn flat_file_key_is_not_treated_as_archived() {
         .symlink_metadata()
         .map(|m| m.file_type().is_symlink())
         .unwrap_or(false);
-    assert!(!key_is_archived,
-        "flat file key must not be treated as archived; reconcile_once must generate a new key");
+    assert!(
+        !key_is_archived,
+        "flat file key must not be treated as archived; reconcile_once must generate a new key"
+    );
 }
 
 /// reconcile_once generates a private key and CSR when a cert is available from
@@ -271,14 +393,21 @@ fn generate_key_and_csr_for_missing_key_cert() {
         name: "vigil.credo.test".to_string(),
         path: cert_store.join("live/vigil.credo.test/cert.pem"),
         key_path: cert_store.join("live/vigil.credo.test/privkey.pem"),
-        fullchain_path: None, chain_path: None, csr_path: None,
+        fullchain_path: None,
+        chain_path: None,
+        csr_path: None,
         domain: Some("vigil.credo.test".to_string()),
-        monitor: false, hooks: vec![],
+        monitor: false,
+        hooks: vec![],
         csr_subject: None,
         identity_uri: Some("vigil://credo/service/vigil".to_string()),
         sans: vec!["vigil.credo.test".to_string()],
-        cert_mode: None, key_mode: None, cert_owner: None, cert_group: None,
-        key_owner: None, key_group: None,
+        cert_mode: None,
+        key_mode: None,
+        cert_owner: None,
+        cert_group: None,
+        key_owner: None,
+        key_group: None,
     };
 
     assert!(!entry.key_path.exists(), "precondition: no key on disk");
@@ -294,18 +423,26 @@ fn generate_key_and_csr_for_missing_key_cert() {
     let csr_pem = generate_key_and_csr(&entry, &pending, &csr_req, None)
         .expect("must generate CSR for missing-key cert");
 
-    assert!(pending.exists(),
-        "private key must be written to the pending staging path");
-    assert!(!entry.key_path.exists(),
-        "key must NOT be written to live/ — live/ only holds symlinks");
-    assert!(csr_pem.contains("CERTIFICATE REQUEST"),
-        "returned value must be a valid PEM CSR");
+    assert!(
+        pending.exists(),
+        "private key must be written to the pending staging path"
+    );
+    assert!(
+        !entry.key_path.exists(),
+        "key must NOT be written to live/ — live/ only holds symlinks"
+    );
+    assert!(
+        csr_pem.contains("CERTIFICATE REQUEST"),
+        "returned value must be a valid PEM CSR"
+    );
 
     // Pending key is a real file — install_to_archive will move it to archive/
     // and create the live/ symlink when shepherd's /install push arrives.
     let meta = pending.symlink_metadata().unwrap();
-    assert!(!meta.file_type().is_symlink(),
-        "pending key must be a real file so install_to_archive can archive it");
+    assert!(
+        !meta.file_type().is_symlink(),
+        "pending key must be a real file so install_to_archive can archive it"
+    );
 }
 
 /// Installing the same cert twice reports changed=false on the second call.
@@ -319,24 +456,40 @@ fn install_certificate_unchanged_on_second_install() {
         name: "idempotent".to_string(),
         path: cert_store.join("live/idempotent/cert.pem"),
         key_path: cert_store.join("live/idempotent/privkey.pem"),
-        fullchain_path: None, chain_path: None, csr_path: None,
-        domain: None, monitor: false, hooks: vec![], csr_subject: None,
-        identity_uri: None, sans: vec![],
-        cert_mode: None, key_mode: None, cert_owner: None, cert_group: None,
-        key_owner: None, key_group: None,
+        fullchain_path: None,
+        chain_path: None,
+        csr_path: None,
+        domain: None,
+        monitor: false,
+        hooks: vec![],
+        csr_subject: None,
+        identity_uri: None,
+        sans: vec![],
+        cert_mode: None,
+        key_mode: None,
+        cert_owner: None,
+        cert_group: None,
+        key_owner: None,
+        key_group: None,
     };
 
     let (cert_pem, key_pem) = signed_cert_pem("idempotent.credo.test");
     let req = InstallRequest {
-        cert_pem: Some(cert_pem), key_pem: Some(key_pem),
-        fullchain_pem: None, chain_pem: None, restart: Some(false),
+        cert_pem: Some(cert_pem),
+        key_pem: Some(key_pem),
+        fullchain_pem: None,
+        chain_pem: None,
+        restart: Some(false),
     };
 
     let r1 = install_certificate(&entry, &cert_store, &req).unwrap();
     assert!(r1.changed, "first install must be changed");
 
     let r2 = install_certificate(&entry, &cert_store, &req).unwrap();
-    assert!(!r2.changed, "second install of same cert must not be changed");
+    assert!(
+        !r2.changed,
+        "second install of same cert must not be changed"
+    );
 }
 
 /// pem_cert_to_der parses a PEM certificate and returns the DER bytes.

@@ -99,7 +99,7 @@ pub fn build_server_tls_from_pem(
     client_ca_path: Option<&Path>,
 ) -> Result<Arc<ServerConfig>> {
     let certs = parse_certs_pem(cert_pem)?;
-    let key   = parse_private_key_pem(key_pem)?;
+    let key = parse_private_key_pem(key_pem)?;
     build_server_tls_inner(certs, key, client_ca_path)
 }
 
@@ -112,7 +112,7 @@ pub fn build_server_tls(
     client_ca_path: Option<&Path>,
 ) -> Result<Arc<ServerConfig>> {
     let certs = load_certs(cert_path)?;
-    let key   = load_private_key(key_path)?;
+    let key = load_private_key(key_path)?;
     build_server_tls_inner(certs, key, client_ca_path)
 }
 
@@ -162,7 +162,7 @@ pub async fn serve_tls(
         };
 
         let acceptor = acceptor.clone();
-        let router   = router.clone();
+        let router = router.clone();
 
         tokio::spawn(async move {
             let tls_stream = match acceptor.accept(tcp_stream).await {
@@ -174,29 +174,31 @@ pub async fn serve_tls(
             };
 
             let peer_cert = tls_stream
-                .get_ref().1
+                .get_ref()
+                .1
                 .peer_certificates()
                 .and_then(|c| c.first())
                 .map(|c| PeerCertDer(c.as_ref().to_vec()));
 
             let io = TokioIo::new(tls_stream);
 
-            let svc = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
-                let router    = router.clone();
-                let peer_cert = peer_cert.clone();
-                async move {
-                    let (mut parts, body) = req.into_parts();
-                    if let Some(cert) = peer_cert {
-                        parts.extensions.insert(cert);
+            let svc =
+                hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+                    let router = router.clone();
+                    let peer_cert = peer_cert.clone();
+                    async move {
+                        let (mut parts, body) = req.into_parts();
+                        if let Some(cert) = peer_cert {
+                            parts.extensions.insert(cert);
+                        }
+                        parts.extensions.insert(peer_addr);
+                        let req = hyper::Request::from_parts(parts, Body::new(body));
+                        router
+                            .oneshot(req)
+                            .await
+                            .map_err(|_| -> std::convert::Infallible { unreachable!() })
                     }
-                    parts.extensions.insert(peer_addr);
-                    let req = hyper::Request::from_parts(parts, Body::new(body));
-                    router
-                        .oneshot(req)
-                        .await
-                        .map_err(|_| -> std::convert::Infallible { unreachable!() })
-                }
-            });
+                });
 
             if let Err(e) = http1::Builder::new().serve_connection(io, svc).await {
                 tracing::debug!(error = %e, peer = %peer_addr, "Connection error");
@@ -232,18 +234,19 @@ pub async fn serve_http(
 
         let router = router.clone();
         tokio::spawn(async move {
-            let io  = TokioIo::new(tcp_stream);
-            let svc = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
-                let router = router.clone();
-                async move {
-                    let (parts, body) = req.into_parts();
-                    let req = hyper::Request::from_parts(parts, Body::new(body));
-                    router
-                        .oneshot(req)
-                        .await
-                        .map_err(|_| -> std::convert::Infallible { unreachable!() })
-                }
-            });
+            let io = TokioIo::new(tcp_stream);
+            let svc =
+                hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+                    let router = router.clone();
+                    async move {
+                        let (parts, body) = req.into_parts();
+                        let req = hyper::Request::from_parts(parts, Body::new(body));
+                        router
+                            .oneshot(req)
+                            .await
+                            .map_err(|_| -> std::convert::Infallible { unreachable!() })
+                    }
+                });
             if let Err(e) = http1::Builder::new().serve_connection(io, svc).await {
                 tracing::debug!(error = %e, "HTTP connection error");
             }

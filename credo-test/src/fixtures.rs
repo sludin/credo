@@ -12,12 +12,25 @@ pub fn fixtures_dir() -> PathBuf {
         .expect("credo-test has no parent directory")
         .to_path_buf();
     let dir = workspace_root.join("tests/fixtures");
-    assert!(dir.exists(), "tests/fixtures/ not found; run: cargo run -p gen-fixtures");
+    assert!(
+        dir.exists(),
+        "tests/fixtures/ not found; run: cargo run -p gen-fixtures"
+    );
     dir
 }
 
-pub fn root_ca_pem()          -> PathBuf { fixtures_dir().join("root-ca.pem") }
-pub fn root_ca_key()          -> PathBuf { fixtures_dir().join("root-ca.key") }
-pub fn intermediate_ca_pem()  -> PathBuf { fixtures_dir().join("intermediate-ca.pem") }
-pub fn intermediate_ca_key()  -> PathBuf { fixtures_dir().join("intermediate-ca.key") }
-pub fn catrust_pem()          -> PathBuf { fixtures_dir().join("catrust.pem") }
+pub fn root_ca_pem() -> PathBuf {
+    fixtures_dir().join("root-ca.pem")
+}
+pub fn root_ca_key() -> PathBuf {
+    fixtures_dir().join("root-ca.key")
+}
+pub fn intermediate_ca_pem() -> PathBuf {
+    fixtures_dir().join("intermediate-ca.pem")
+}
+pub fn intermediate_ca_key() -> PathBuf {
+    fixtures_dir().join("intermediate-ca.key")
+}
+pub fn catrust_pem() -> PathBuf {
+    fixtures_dir().join("catrust.pem")
+}

@@ -7,8 +7,7 @@ pub fn parse_mode_octal(s: &str) -> Result<u32> {
     let cleaned = s.trim().trim_start_matches("0o").trim_start_matches('0');
     // Handle "0" → 0
     let cleaned = if cleaned.is_empty() { "0" } else { cleaned };
-    u32::from_str_radix(cleaned, 8)
-        .with_context(|| format!("Invalid octal mode: {}", s))
+    u32::from_str_radix(cleaned, 8).with_context(|| format!("Invalid octal mode: {}", s))
 }
 
 /// Set file permissions and optionally ownership.
@@ -27,22 +26,32 @@ pub fn apply_file_policy(
     }
 
     if owner.is_some() || group.is_some() {
-        let uid = owner.map(|name| {
-            nix::unistd::User::from_name(name)
-                .ok()
-                .flatten()
-                .map(|u| u.uid)
-        }).flatten();
+        let uid = owner
+            .map(|name| {
+                nix::unistd::User::from_name(name)
+                    .ok()
+                    .flatten()
+                    .map(|u| u.uid)
+            })
+            .flatten();
 
-        let gid = group.map(|name| {
-            nix::unistd::Group::from_name(name)
-                .ok()
-                .flatten()
-                .map(|g| g.gid)
-        }).flatten();
+        let gid = group
+            .map(|name| {
+                nix::unistd::Group::from_name(name)
+                    .ok()
+                    .flatten()
+                    .map(|g| g.gid)
+            })
+            .flatten();
 
-        nix::unistd::chown(path, uid, gid)
-            .with_context(|| format!("chown {}:{} {}", owner.unwrap_or("-"), group.unwrap_or("-"), path.display()))?;
+        nix::unistd::chown(path, uid, gid).with_context(|| {
+            format!(
+                "chown {}:{} {}",
+                owner.unwrap_or("-"),
+                group.unwrap_or("-"),
+                path.display()
+            )
+        })?;
     }
 
     Ok(())

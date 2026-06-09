@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 pub use credo_lib::types::Role;
@@ -26,7 +26,9 @@ pub struct Account {
     pub created_at: Option<DateTime<Utc>>,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountsFile {
@@ -54,7 +56,7 @@ pub struct CorgiMtlsConfig {
     pub ca_path: Option<PathBuf>,
     /// Fallback used when cert_path doesn't exist yet (bootstrap window).
     pub bootstrap_cert_path: Option<PathBuf>,
-    pub bootstrap_key_path:  Option<PathBuf>,
+    pub bootstrap_key_path: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +162,10 @@ pub enum RenewalPhase {
 
 impl RenewalPhase {
     pub fn is_terminal(&self) -> bool {
-        matches!(self, RenewalPhase::Completed | RenewalPhase::Failed | RenewalPhase::Cancelled)
+        matches!(
+            self,
+            RenewalPhase::Completed | RenewalPhase::Failed | RenewalPhase::Cancelled
+        )
     }
 }
 

@@ -2,7 +2,12 @@
 /// Authenticated by the one-time in-memory admin token (not JWT).
 /// All Vigil and Corgi interactions happen here so the CLI stays a thin HTTP client.
 use anyhow::Context;
-use axum::{extract::State, http::{HeaderMap, StatusCode}, response::IntoResponse, Json};
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    Json,
+};
 use serde::Deserialize;
 
 use crate::state::AppState;
@@ -17,7 +22,9 @@ fn check_bootstrap_token(headers: &HeaderMap, state: &AppState) -> bool {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     let guard = state.bootstrap_admin_token.lock().unwrap();
-    let Some(expected) = guard.as_ref() else { return false; };
+    let Some(expected) = guard.as_ref() else {
+        return false;
+    };
     let expected_full = format!("Bearer {}", expected);
     if auth.len() != expected_full.len() {
         return false;
@@ -30,11 +37,17 @@ fn check_bootstrap_token(headers: &HeaderMap, state: &AppState) -> bool {
 }
 
 fn unauthorized() -> (StatusCode, Json<serde_json::Value>) {
-    (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Unauthorized" })))
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({ "error": "Unauthorized" })),
+    )
 }
 
 fn vigil_unavailable() -> (StatusCode, Json<serde_json::Value>) {
-    (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({ "error": "Vigil client not available" })))
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({ "error": "Vigil client not available" })),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -71,8 +84,16 @@ pub async fn bootstrap_admin_cert(
     };
 
     match sign_csr_via_vigil(&client, vigil_url, &body.csr_pem, body.days.unwrap_or(365)).await {
-        Ok(cert_pem) => (StatusCode::OK, Json(serde_json::json!({ "certPem": cert_pem }))).into_response(),
-        Err(e) => (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        Ok(cert_pem) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "certPem": cert_pem })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -117,11 +138,19 @@ pub async fn bootstrap_corgi(
     match enroll_corgi(&state, &vigil_client, vigil_url, &body).await {
         Ok(()) => {
             tracing::info!(name = %body.name, identity_uri = %body.identity_uri, "Corgi enrolled");
-            (StatusCode::OK, Json(serde_json::json!({ "enrolled": true }))).into_response()
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "enrolled": true })),
+            )
+                .into_response()
         }
         Err(e) => {
             tracing::error!(name = %body.name, error = %e, "Corgi enrollment failed");
-            (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": e.to_string() }))).into_response()
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
         }
     }
 }
@@ -148,41 +177,61 @@ async fn enroll_corgi(
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Missing csrPem in corgi response"))?;
 
-    let fullchain_pem = sign_csr_via_vigil(vigil_client, vigil_url, csr_pem, 365).await
+    let fullchain_pem = sign_csr_via_vigil(vigil_client, vigil_url, csr_pem, 365)
+        .await
         .context("Signing corgi CSR via Vigil")?;
     let (leaf_pem, chain_pem, _) = crate::issuance::split_cert_chain(&fullchain_pem);
 
     let config = state.config.load_full();
-    let ca_path = config.shepherd_ca_path.as_ref()
+    let ca_path = config
+        .shepherd_ca_path
+        .as_ref()
         .unwrap_or(&config.tls.client_ca_path);
     let ca_pem = std::fs::read_to_string(ca_path)
         .with_context(|| format!("Reading CA bundle: {}", ca_path.display()))?;
 
     let check = |label: &'static str, resp: reqwest::Response| -> anyhow::Result<()> {
-        if resp.status().is_success() { return Ok(()); }
+        if resp.status().is_success() {
+            return Ok(());
+        }
         anyhow::bail!("{} returned HTTP {}", label, resp.status())
     };
 
-    check("POST /bootstrap/ca", corgi_client
-        .post(format!("{}/bootstrap/ca", req.corgi_url))
-        .header("Authorization", format!("Bearer {}", req.token))
-        .json(&serde_json::json!({ "caPem": ca_pem }))
-        .send().await.context("POST /bootstrap/ca")?)?;
+    check(
+        "POST /bootstrap/ca",
+        corgi_client
+            .post(format!("{}/bootstrap/ca", req.corgi_url))
+            .header("Authorization", format!("Bearer {}", req.token))
+            .json(&serde_json::json!({ "caPem": ca_pem }))
+            .send()
+            .await
+            .context("POST /bootstrap/ca")?,
+    )?;
 
-    check("POST /bootstrap/cert", corgi_client
-        .post(format!("{}/bootstrap/cert", req.corgi_url))
-        .header("Authorization", format!("Bearer {}", req.token))
-        .json(&serde_json::json!({
-            "certPem":      leaf_pem,
-            "chainPem":     chain_pem,
-            "fullchainPem": fullchain_pem,
-        }))
-        .send().await.context("POST /bootstrap/cert")?)?;
+    check(
+        "POST /bootstrap/cert",
+        corgi_client
+            .post(format!("{}/bootstrap/cert", req.corgi_url))
+            .header("Authorization", format!("Bearer {}", req.token))
+            .json(&serde_json::json!({
+                "certPem":      leaf_pem,
+                "chainPem":     chain_pem,
+                "fullchainPem": fullchain_pem,
+            }))
+            .send()
+            .await
+            .context("POST /bootstrap/cert")?,
+    )?;
 
-    check("POST /bootstrap/finalize", corgi_client
-        .post(format!("{}/bootstrap/finalize", req.corgi_url))
-        .header("Authorization", format!("Bearer {}", req.token))
-        .send().await.context("POST /bootstrap/finalize")?)?;
+    check(
+        "POST /bootstrap/finalize",
+        corgi_client
+            .post(format!("{}/bootstrap/finalize", req.corgi_url))
+            .header("Authorization", format!("Bearer {}", req.token))
+            .send()
+            .await
+            .context("POST /bootstrap/finalize")?,
+    )?;
 
     Ok(())
 }
@@ -217,7 +266,9 @@ pub(crate) async fn sign_csr_via_vigil(
 
 fn build_corgi_bootstrap_client(expected_fingerprint: &str) -> anyhow::Result<reqwest::Client> {
     let normalized = expected_fingerprint.replace(':', "").to_lowercase();
-    let verifier = std::sync::Arc::new(FingerprintVerifier { expected_hex: normalized });
+    let verifier = std::sync::Arc::new(FingerprintVerifier {
+        expected_hex: normalized,
+    });
     let tls = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(verifier)
@@ -262,7 +313,9 @@ impl rustls::client::danger::ServerCertVerifier for FingerprintVerifier {
         dss: &rustls::DigitallySignedStruct,
     ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
         rustls::crypto::verify_tls12_signature(
-            message, cert, dss,
+            message,
+            cert,
+            dss,
             &rustls::crypto::ring::default_provider().signature_verification_algorithms,
         )
     }
@@ -274,7 +327,9 @@ impl rustls::client::danger::ServerCertVerifier for FingerprintVerifier {
         dss: &rustls::DigitallySignedStruct,
     ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
         rustls::crypto::verify_tls13_signature(
-            message, cert, dss,
+            message,
+            cert,
+            dss,
             &rustls::crypto::ring::default_provider().signature_verification_algorithms,
         )
     }

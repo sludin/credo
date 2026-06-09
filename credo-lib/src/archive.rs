@@ -37,7 +37,11 @@ pub fn split_pem_chain(pem: &str) -> Result<PemChain> {
     let chain_pem = chain_parts.join("");
     let fullchain_pem = format!("{}{}", leaf_pem, chain_pem);
 
-    Ok(PemChain { leaf_pem, chain_pem, fullchain_pem })
+    Ok(PemChain {
+        leaf_pem,
+        chain_pem,
+        fullchain_pem,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -82,8 +86,13 @@ pub fn replace_symlink(target_path: &Path, link_path: &Path) -> Result<()> {
         std::fs::remove_file(link_path)
             .with_context(|| format!("Removing old symlink: {}", link_path.display()))?;
     }
-    std::os::unix::fs::symlink(target_path, link_path)
-        .with_context(|| format!("Creating symlink {} → {}", link_path.display(), target_path.display()))
+    std::os::unix::fs::symlink(target_path, link_path).with_context(|| {
+        format!(
+            "Creating symlink {} → {}",
+            link_path.display(),
+            target_path.display()
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -100,7 +109,7 @@ impl CertStorePaths {
         let safe = sanitize_cert_name(cert_name);
         CertStorePaths {
             archive_dir: store_root.join("archive").join(&safe),
-            live_dir:    store_root.join("live").join(&safe),
+            live_dir: store_root.join("live").join(&safe),
         }
     }
 
@@ -114,6 +123,12 @@ impl CertStorePaths {
 /// Replace characters that are not safe in directory names.
 fn sanitize_cert_name(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }

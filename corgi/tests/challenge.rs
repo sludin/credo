@@ -7,9 +7,12 @@ use credo_test::corgi_harness::TestCorgi;
 async fn challenge_health_is_public() {
     let corgi = TestCorgi::start().await.unwrap();
 
-    let resp = corgi.client
+    let resp = corgi
+        .client
         .get(corgi.challenge_health_url())
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -21,11 +24,21 @@ async fn challenge_health_is_public() {
 async fn challenge_404_for_unknown_token() {
     let corgi = TestCorgi::start().await.unwrap();
 
-    let resp = corgi.client
-        .get(format!("{}/.well-known/acme-challenge/unknown-token", corgi.challenge_url))
-        .send().await.unwrap();
+    let resp = corgi
+        .client
+        .get(format!(
+            "{}/.well-known/acme-challenge/unknown-token",
+            corgi.challenge_url
+        ))
+        .send()
+        .await
+        .unwrap();
 
-    assert_eq!(resp.status(), 404, "unknown challenge token must return 404");
+    assert_eq!(
+        resp.status(),
+        404,
+        "unknown challenge token must return 404"
+    );
 }
 
 /// A challenge stored via the control API is immediately served on the challenge port.
@@ -39,25 +52,41 @@ async fn challenge_served_after_insert_via_state() {
     let key_auth = format!("{token}.ABCDEFG1234567890");
 
     // Insert via control API
-    let insert = corgi.client
+    let insert = corgi
+        .client
         .post(format!("{}/acme-challenges", corgi.control_url))
         .json(&serde_json::json!({ "token": token, "response": key_auth }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(insert.status(), 201);
 
     // Must be served on challenge port with correct key authorization
-    let resp = corgi.client
-        .get(format!("{}/.well-known/acme-challenge/{token}", corgi.challenge_url))
-        .send().await.unwrap();
+    let resp = corgi
+        .client
+        .get(format!(
+            "{}/.well-known/acme-challenge/{token}",
+            corgi.challenge_url
+        ))
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
-    let content_type = resp.headers()
+    let content_type = resp
+        .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    assert!(content_type.contains("text/plain"), "challenge response must be text/plain");
-    assert_eq!(resp.text().await.unwrap(), key_auth,
-        "response body must be the key authorization string");
+    assert!(
+        content_type.contains("text/plain"),
+        "challenge response must be text/plain"
+    );
+    assert_eq!(
+        resp.text().await.unwrap(),
+        key_auth,
+        "response body must be the key authorization string"
+    );
 }
 
 /// Challenge response has text/plain content-type (required by RFC 8555 §8.3).
@@ -65,18 +94,32 @@ async fn challenge_served_after_insert_via_state() {
 async fn challenge_response_is_text_plain() {
     let corgi = TestCorgi::start_authed().await.unwrap();
 
-    corgi.client
+    corgi
+        .client
         .post(format!("{}/acme-challenges", corgi.control_url))
         .json(&serde_json::json!({ "token": "ct-tok", "response": "ct-tok.keyauth" }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
-    let resp = corgi.client
-        .get(format!("{}/.well-known/acme-challenge/ct-tok", corgi.challenge_url))
-        .send().await.unwrap();
+    let resp = corgi
+        .client
+        .get(format!(
+            "{}/.well-known/acme-challenge/ct-tok",
+            corgi.challenge_url
+        ))
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
-    let ct = resp.headers().get("content-type")
+    let ct = resp
+        .headers()
+        .get("content-type")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    assert!(ct.contains("text/plain"), "content-type must be text/plain, got: {ct}");
+    assert!(
+        ct.contains("text/plain"),
+        "content-type must be text/plain, got: {ct}"
+    );
 }

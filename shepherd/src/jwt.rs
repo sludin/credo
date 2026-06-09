@@ -61,8 +61,14 @@ fn generate_and_save(key_path: &Path) -> Result<String> {
     }
     std::fs::write(key_path, pem.as_bytes())
         .with_context(|| format!("Writing JWT signing key: {}", key_path.display()))?;
-    std::fs::set_permissions(key_path, std::fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("Setting permissions on JWT signing key: {}", key_path.display()))?;
+    std::fs::set_permissions(key_path, std::fs::Permissions::from_mode(0o600)).with_context(
+        || {
+            format!(
+                "Setting permissions on JWT signing key: {}",
+                key_path.display()
+            )
+        },
+    )?;
 
     tracing::info!(path = %key_path.display(), "Generated new JWT signing key");
     Ok(pem.to_string())
@@ -93,7 +99,11 @@ fn keys_from_pem(pem: &str) -> Result<JwtKeys> {
 
     let public_jwk = build_jwk(verifying_key);
 
-    Ok(JwtKeys { encoding_key, decoding_key, public_jwk })
+    Ok(JwtKeys {
+        encoding_key,
+        decoding_key,
+        public_jwk,
+    })
 }
 
 fn build_jwk(verifying_key: &p256::ecdsa::VerifyingKey) -> serde_json::Value {
@@ -130,8 +140,7 @@ pub fn sign_jwt(
         exp: now + 3600,
         iat: now,
     };
-    encode(&Header::new(Algorithm::ES256), &claims, &keys.encoding_key)
-        .context("Signing JWT")
+    encode(&Header::new(Algorithm::ES256), &claims, &keys.encoding_key).context("Signing JWT")
 }
 
 pub fn verify_jwt(keys: &JwtKeys, token: &str) -> Result<JwtClaims> {
@@ -139,8 +148,8 @@ pub fn verify_jwt(keys: &JwtKeys, token: &str) -> Result<JwtClaims> {
     validation.set_issuer(&["shepherd"]);
     validation.set_audience(&["shepherd"]);
 
-    let data = decode::<JwtClaims>(token, &keys.decoding_key, &validation)
-        .context("Verifying JWT")?;
+    let data =
+        decode::<JwtClaims>(token, &keys.decoding_key, &validation).context("Verifying JWT")?;
     Ok(data.claims)
 }
 

@@ -57,11 +57,19 @@ fn extract_identifiers_from_csr(csr_pem: &str) -> CsrIdentifiers {
 
     let der = match pem::parse(csr_pem) {
         Ok(p) => p.into_contents(),
-        Err(_) => return CsrIdentifiers { dns_names, uri_names, ip_names },
+        Err(_) => {
+            return CsrIdentifiers {
+                dns_names,
+                uri_names,
+                ip_names,
+            }
+        }
     };
 
     use x509_parser::prelude::FromDer;
-    if let Ok((_, csr)) = x509_parser::certification_request::X509CertificationRequest::from_der(&der) {
+    if let Ok((_, csr)) =
+        x509_parser::certification_request::X509CertificationRequest::from_der(&der)
+    {
         // CN
         for attr in csr.certification_request_info.subject.iter_attributes() {
             if let Ok(cn) = attr.attr_value().as_str() {
@@ -83,11 +91,15 @@ fn extract_identifiers_from_csr(csr_pem: &str) -> CsrIdentifiers {
                     match name {
                         x509_parser::extensions::GeneralName::DNSName(dns) => {
                             let s = dns.trim().to_string();
-                            if !s.is_empty() { dns_names.push(s); }
+                            if !s.is_empty() {
+                                dns_names.push(s);
+                            }
                         }
                         x509_parser::extensions::GeneralName::URI(uri) => {
                             let s = uri.trim().to_string();
-                            if !s.is_empty() { uri_names.push(s); }
+                            if !s.is_empty() {
+                                uri_names.push(s);
+                            }
                         }
                         x509_parser::extensions::GeneralName::IPAddress(ip) => {
                             // Convert raw IP bytes to string
@@ -112,7 +124,11 @@ fn extract_identifiers_from_csr(csr_pem: &str) -> CsrIdentifiers {
     ip_names.sort();
     ip_names.dedup();
 
-    CsrIdentifiers { dns_names, uri_names, ip_names }
+    CsrIdentifiers {
+        dns_names,
+        uri_names,
+        ip_names,
+    }
 }
 
 pub fn validate_issuance_policy(
@@ -123,51 +139,93 @@ pub fn validate_issuance_policy(
     let parsed = extract_identifiers_from_csr(csr_pem);
 
     // Classify extra SANs
-    let extra_dns: Vec<String> = extra_sans.iter()
+    let extra_dns: Vec<String> = extra_sans
+        .iter()
         .filter(|s| !is_ip_address(s) && !is_uri(s))
         .cloned()
         .collect();
-    let extra_uris: Vec<String> = extra_sans.iter()
-        .filter(|s| is_uri(s))
-        .cloned()
-        .collect();
-    let extra_ips: Vec<String> = extra_sans.iter()
+    let extra_uris: Vec<String> = extra_sans.iter().filter(|s| is_uri(s)).cloned().collect();
+    let extra_ips: Vec<String> = extra_sans
+        .iter()
         .filter(|s| is_ip_address(s))
         .cloned()
         .collect();
 
-    let mut dns_names: Vec<String> = parsed.dns_names.iter().chain(extra_dns.iter()).cloned().collect();
-    let mut uri_names: Vec<String> = parsed.uri_names.iter().chain(extra_uris.iter()).cloned().collect();
-    let mut ip_names: Vec<String> = parsed.ip_names.iter().chain(extra_ips.iter()).cloned().collect();
+    let mut dns_names: Vec<String> = parsed
+        .dns_names
+        .iter()
+        .chain(extra_dns.iter())
+        .cloned()
+        .collect();
+    let mut uri_names: Vec<String> = parsed
+        .uri_names
+        .iter()
+        .chain(extra_uris.iter())
+        .cloned()
+        .collect();
+    let mut ip_names: Vec<String> = parsed
+        .ip_names
+        .iter()
+        .chain(extra_ips.iter())
+        .cloned()
+        .collect();
 
-    dns_names.sort(); dns_names.dedup();
-    uri_names.sort(); uri_names.dedup();
-    ip_names.sort(); ip_names.dedup();
+    dns_names.sort();
+    dns_names.dedup();
+    uri_names.sort();
+    uri_names.dedup();
+    ip_names.sort();
+    ip_names.dedup();
 
     if !policy.allow_ip_sans && !ip_names.is_empty() {
-        bail!("IP SANs are not allowed by issuance policy: {}", ip_names.join(", "));
+        bail!(
+            "IP SANs are not allowed by issuance policy: {}",
+            ip_names.join(", ")
+        );
     }
 
     if !policy.allowed_dns_suffixes.is_empty() {
-        let disallowed: Vec<&String> = dns_names.iter().filter(|name| {
-            !is_allowed_dns(name, &policy.allowed_dns_suffixes, policy.allow_subdomains, policy.allow_bare_suffix)
-        }).collect();
+        let disallowed: Vec<&String> = dns_names
+            .iter()
+            .filter(|name| {
+                !is_allowed_dns(
+                    name,
+                    &policy.allowed_dns_suffixes,
+                    policy.allow_subdomains,
+                    policy.allow_bare_suffix,
+                )
+            })
+            .collect();
         if !disallowed.is_empty() {
             bail!(
                 "DNS names are outside allowed issuance policy suffixes: {}",
-                disallowed.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                disallowed
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
         }
     }
 
     if !policy.allowed_identity_uri_prefixes.is_empty() {
-        let disallowed: Vec<&String> = uri_names.iter().filter(|uri| {
-            !policy.allowed_identity_uri_prefixes.iter().any(|prefix| uri.starts_with(prefix))
-        }).collect();
+        let disallowed: Vec<&String> = uri_names
+            .iter()
+            .filter(|uri| {
+                !policy
+                    .allowed_identity_uri_prefixes
+                    .iter()
+                    .any(|prefix| uri.starts_with(prefix))
+            })
+            .collect();
         if !disallowed.is_empty() {
             bail!(
                 "Identity URIs are outside allowed issuance policy prefixes: {}",
-                disallowed.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                disallowed
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
         }
     }

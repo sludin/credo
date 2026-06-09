@@ -15,15 +15,17 @@ pub fn load_accounts(path: &Path) -> Result<Vec<Account>> {
 }
 
 pub fn save_accounts(path: &Path, accounts: &[Account]) -> Result<()> {
-    let file = AccountsFile { accounts: accounts.to_vec() };
-    let content = serde_json::to_string_pretty(&file)
-        .context("Serializing accounts")?;
-    std::fs::write(path, content)
-        .with_context(|| format!("Writing accounts: {}", path.display()))
+    let file = AccountsFile {
+        accounts: accounts.to_vec(),
+    };
+    let content = serde_json::to_string_pretty(&file).context("Serializing accounts")?;
+    std::fs::write(path, content).with_context(|| format!("Writing accounts: {}", path.display()))
 }
 
 pub fn find_by_identity_uri<'a>(accounts: &'a [Account], uri: &str) -> Option<&'a Account> {
-    accounts.iter().find(|a| a.active && a.identities.iter().any(|id| id == uri))
+    accounts
+        .iter()
+        .find(|a| a.active && a.identities.iter().any(|id| id == uri))
 }
 
 pub fn find_by_id<'a>(accounts: &'a [Account], id: &str) -> Option<&'a Account> {
@@ -34,7 +36,11 @@ pub fn create_account(accounts: &mut Vec<Account>, account: Account) {
     accounts.push(account);
 }
 
-pub fn update_account(accounts: &mut Vec<Account>, id: &str, mut updater: impl FnMut(&mut Account)) -> bool {
+pub fn update_account(
+    accounts: &mut Vec<Account>,
+    id: &str,
+    mut updater: impl FnMut(&mut Account),
+) -> bool {
     if let Some(a) = accounts.iter_mut().find(|a| a.id == id) {
         updater(a);
         true

@@ -127,8 +127,12 @@ pub struct AcmeChallenge {
     pub order_id: String,
     #[serde(rename = "type")]
     pub challenge_type: String,
+    /// Original validation method requested (none-01, http-01, dns-01).
+    /// challenge_type may differ (none-01 is reported as http-01 to ACME clients).
+    pub validation_method: String,
     pub status: String,
     pub token: String,
+    pub key_authorization: String,
 }
 
 // ---------------------------------------------------------------------------

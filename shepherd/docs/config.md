@@ -125,7 +125,7 @@ Each Corgi entry:
 
 Defines the certificate authorities Shepherd uses for ACME issuance. Each entry under `cas` has a name, `protocol` (`"acme"`), `provider`, and `config` block.
 
-**Vigil (internal CA):**
+**Vigil (internal CA, http-01):**
 ```json
 {
   "cas": {
@@ -138,8 +138,8 @@ Defines the certificate authorities Shepherd uses for ACME issuance. Each entry 
         "renewBeforeDays": 7,
         "accountEmail": "ops@example.com",
         "accountKeyPath": "./shepherd-acme-account.pem",
-        "supportedValidations": ["none-01"],
-        "defaultValidation": "none-01",
+        "supportedValidations": ["http-01"],
+        "defaultValidation": "http-01",
         "tlsCert": "/etc/shepherd/certs/fullchain.pem",
         "tlsKey":  "/etc/shepherd/certs/privkey.pem",
         "ca":      "/etc/credo/credo-catrust.pem"
@@ -148,6 +148,8 @@ Defines the certificate authorities Shepherd uses for ACME issuance. Each entry 
   }
 }
 ```
+
+> **Note:** `none-01` is no longer the recommended default. Vigil rejects `none-01` challenges unless `allowNoneValidation: true` is set in `vigil.config.json` (off by default; not for production). Use `http-01` (requires Corgi's HTTP challenge listener on port 7080) or `dns-01` (requires a DNS provider adapter) instead.
 
 **Let's Encrypt (DNS-01 via Hurricane Electric):**
 ```json

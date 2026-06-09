@@ -97,7 +97,7 @@ pub enum AcmeCommands {
 // ---------------------------------------------------------------------------
 
 pub async fn run_server_start(bootstrap: bool) -> Result<()> {
-    use tokio::signal::unix::{SignalKind, signal};
+    use tokio::signal::unix::{signal, SignalKind};
 
     let config = crate::config::load_config().context("Loading config")?;
     init_logging(config.log_level);
@@ -117,6 +117,10 @@ pub async fn run_server_start(bootstrap: bool) -> Result<()> {
         fingerprint256 = %ca_metadata.fingerprint256,
         "Vigil CA service starting"
     );
+
+    if config.allow_none_validation {
+        tracing::warn!("allowNoneValidation is enabled — ACME challenges are not verified. Do not use in production.");
+    }
 
     // Generate or load TLS material
     let (tls_key_pem, tls_cert_pem, bootstrap_secret) = if bootstrap {
@@ -187,7 +191,11 @@ pub async fn run_server_start(bootstrap: bool) -> Result<()> {
     }
 }
 
-fn build_bootstrap_tls(key_pem: &str, cert_pem: &str, config: &crate::config::VigilConfig) -> Result<std::sync::Arc<rustls::ServerConfig>> {
+fn build_bootstrap_tls(
+    key_pem: &str,
+    cert_pem: &str,
+    config: &crate::config::VigilConfig,
+) -> Result<std::sync::Arc<rustls::ServerConfig>> {
     credo_lib::tls::build_server_tls_from_pem(cert_pem, key_pem, Some(&config.tls.client_ca_path))
         .context("Building bootstrap TLS config from in-memory PEM")
 }
@@ -197,16 +205,25 @@ pub fn run_check_config() -> Result<()> {
     let mut errors = 0u32;
     let mut warnings = 0u32;
 
-    let ok   = |msg: &str| println!("  ✓ {}", msg);
-    let mut err  = |msg: &str| { println!("  ✗ {}", msg); errors += 1; };
-    let _warn = |msg: &str| { println!("  ⚠ {}", msg); warnings += 1; };
+    let ok = |msg: &str| println!("  ✓ {}", msg);
+    let mut err = |msg: &str| {
+        println!("  ✗ {}", msg);
+        errors += 1;
+    };
+    let _warn = |msg: &str| {
+        println!("  ⚠ {}", msg);
+        warnings += 1;
+    };
 
     println!("\nVigil config check");
     println!("{}", "━".repeat(43));
 
     println!("\nvigil.config.json");
     if !config.common_name.is_empty() {
-        ok(&format!("parsed  (commonName={}  port={})", config.common_name, config.port));
+        ok(&format!(
+            "parsed  (commonName={}  port={})",
+            config.common_name, config.port
+        ));
     } else {
         err("commonName is not set — required for bootstrap TLS cert generation");
         errors += 1;
@@ -214,61 +231,111 @@ pub fn run_check_config() -> Result<()> {
 
     println!("\nCA material");
     if config.ca_ecdsa_intermediate_key_path.exists() {
-        ok(&format!("caEcdsaIntermediateKeyPath   {}", config.ca_ecdsa_intermediate_key_path.display()));
+        ok(&format!(
+            "caEcdsaIntermediateKeyPath   {}",
+            config.ca_ecdsa_intermediate_key_path.display()
+        ));
     } else {
-        println!("  ✗ caEcdsaIntermediateKeyPath   {}  NOT FOUND", config.ca_ecdsa_intermediate_key_path.display());
+        println!(
+            "  ✗ caEcdsaIntermediateKeyPath   {}  NOT FOUND",
+            config.ca_ecdsa_intermediate_key_path.display()
+        );
         errors += 1;
     }
     if config.ca_ecdsa_intermediate_cert_path.exists() {
-        ok(&format!("caEcdsaIntermediateCertPath  {}", config.ca_ecdsa_intermediate_cert_path.display()));
+        ok(&format!(
+            "caEcdsaIntermediateCertPath  {}",
+            config.ca_ecdsa_intermediate_cert_path.display()
+        ));
     } else {
-        println!("  ✗ caEcdsaIntermediateCertPath  {}  NOT FOUND", config.ca_ecdsa_intermediate_cert_path.display());
+        println!(
+            "  ✗ caEcdsaIntermediateCertPath  {}  NOT FOUND",
+            config.ca_ecdsa_intermediate_cert_path.display()
+        );
         errors += 1;
     }
 
     println!("\nTLS output paths");
-    if config.tls.key_path.exists() || config.tls.key_path.parent().map(|p| p.exists()).unwrap_or(false) {
+    if config.tls.key_path.exists()
+        || config
+            .tls
+            .key_path
+            .parent()
+            .map(|p| p.exists())
+            .unwrap_or(false)
+    {
         ok(&format!("tls.keyPath parent writable"));
     } else {
-        println!("  ✗ tls.keyPath parent not writable: {}", config.tls.key_path.display());
+        println!(
+            "  ✗ tls.keyPath parent not writable: {}",
+            config.tls.key_path.display()
+        );
         errors += 1;
     }
 
     println!("\nClient CA");
     if config.tls.client_ca_path.exists() {
-        ok(&format!("tls.clientCaPath  {}  (exists)", config.tls.client_ca_path.display()));
+        ok(&format!(
+            "tls.clientCaPath  {}  (exists)",
+            config.tls.client_ca_path.display()
+        ));
     } else {
-        println!("  ✗ tls.clientCaPath  {}  NOT FOUND", config.tls.client_ca_path.display());
+        println!(
+            "  ✗ tls.clientCaPath  {}  NOT FOUND",
+            config.tls.client_ca_path.display()
+        );
         errors += 1;
     }
 
     println!("\nRBAC");
     if !config.rbac_identities.is_empty() {
-        ok(&format!("rbacIdentities  {} identity(ies) configured", config.rbac_identities.len()));
+        ok(&format!(
+            "rbacIdentities  {} identity(ies) configured",
+            config.rbac_identities.len()
+        ));
     } else {
-        println!("  ⚠ rbacIdentities is empty — Shepherd cannot authenticate to Vigil in non-ACME mode");
+        println!(
+            "  ⚠ rbacIdentities is empty — Shepherd cannot authenticate to Vigil in non-ACME mode"
+        );
         warnings += 1;
     }
 
     println!("\nIssuance policy");
     if !config.issuance_policy.allowed_dns_suffixes.is_empty() {
-        ok(&format!("allowedDnsSuffixes  {}", config.issuance_policy.allowed_dns_suffixes.join(", ")));
+        ok(&format!(
+            "allowedDnsSuffixes  {}",
+            config.issuance_policy.allowed_dns_suffixes.join(", ")
+        ));
     } else {
-        println!("  ✗ issuancePolicy.allowedDnsSuffixes is empty — no domain names will be allowed");
+        println!(
+            "  ✗ issuancePolicy.allowedDnsSuffixes is empty — no domain names will be allowed"
+        );
         errors += 1;
     }
 
     println!("\n{}", "━".repeat(43));
     let status = if errors > 0 { "NOT READY" } else { "READY" };
-    println!("Result: {}  ({} error{}, {} warning{})\n",
-        status, errors, if errors != 1 { "s" } else { "" },
-        warnings, if warnings != 1 { "s" } else { "" });
+    println!(
+        "Result: {}  ({} error{}, {} warning{})\n",
+        status,
+        errors,
+        if errors != 1 { "s" } else { "" },
+        warnings,
+        if warnings != 1 { "s" } else { "" }
+    );
 
-    if errors > 0 { std::process::exit(1); }
+    if errors > 0 {
+        std::process::exit(1);
+    }
     Ok(())
 }
 
-pub fn run_ca_add_user(id: &str, name: &str, public_key_pem_file: &str, active: bool) -> Result<()> {
+pub fn run_ca_add_user(
+    id: &str,
+    name: &str,
+    public_key_pem_file: &str,
+    active: bool,
+) -> Result<()> {
     let config = crate::config::load_config().context("Loading config")?;
     let pem = std::fs::read_to_string(public_key_pem_file)
         .with_context(|| format!("Reading public key: {}", public_key_pem_file))?;
@@ -284,7 +351,10 @@ pub fn run_ca_add_user(id: &str, name: &str, public_key_pem_file: &str, active: 
     };
     crate::storage::ensure_users_db(&config.users_db_path)?;
     let created = crate::storage::add_user(&config.users_db_path, user)?;
-    println!("User added: {} (fingerprint: {})", created.id, created.public_key_fingerprint256);
+    println!(
+        "User added: {} (fingerprint: {})",
+        created.id, created.public_key_fingerprint256
+    );
     Ok(())
 }
 
@@ -294,16 +364,28 @@ pub fn run_ca_export_crl(out: Option<&str>, format: &str) -> Result<()> {
 
     match format {
         "json" => {
-            let crl = crate::revocation::generate_crl(&config.cert_db_path, &ca_meta, config.ca.crl_next_update_hours)?;
+            let crl = crate::revocation::generate_crl(
+                &config.cert_db_path,
+                &ca_meta,
+                config.ca.crl_next_update_hours,
+            )?;
             let json = serde_json::to_string_pretty(&crl)?;
             write_output(out, json.as_bytes())?;
         }
         "der" => {
-            let der = crate::pki_wire::build_signed_crl_der(&ca_meta, config.ca.crl_next_update_hours, &config)?;
+            let der = crate::pki_wire::build_signed_crl_der(
+                &ca_meta,
+                config.ca.crl_next_update_hours,
+                &config,
+            )?;
             write_output(out, &der)?;
         }
         _ => {
-            let pem = crate::pki_wire::build_signed_crl_pem(&ca_meta, config.ca.crl_next_update_hours, &config)?;
+            let pem = crate::pki_wire::build_signed_crl_pem(
+                &ca_meta,
+                config.ca.crl_next_update_hours,
+                &config,
+            )?;
             write_output(out, pem.as_bytes())?;
         }
     }
@@ -313,9 +395,17 @@ pub fn run_ca_export_crl(out: Option<&str>, format: &str) -> Result<()> {
 pub fn run_ca_ocsp_check(id: Option<&str>, serial: Option<&str>) -> Result<()> {
     let config = crate::config::load_config().context("Loading config")?;
     let ocsp = if let Some(id) = id {
-        crate::revocation::get_ocsp_status_by_cert_id(&config.cert_db_path, id, config.ca.ocsp_max_age_seconds)?
+        crate::revocation::get_ocsp_status_by_cert_id(
+            &config.cert_db_path,
+            id,
+            config.ca.ocsp_max_age_seconds,
+        )?
     } else if let Some(serial) = serial {
-        crate::revocation::get_ocsp_status_by_serial(&config.cert_db_path, serial, config.ca.ocsp_max_age_seconds)?
+        crate::revocation::get_ocsp_status_by_serial(
+            &config.cert_db_path,
+            serial,
+            config.ca.ocsp_max_age_seconds,
+        )?
     } else {
         anyhow::bail!("Either --id or --serial must be provided");
     };
@@ -328,7 +418,9 @@ fn write_output(path: Option<&str>, data: &[u8]) -> Result<()> {
         Some(p) => std::fs::write(p, data).with_context(|| format!("Writing to {}", p)),
         None => {
             use std::io::Write;
-            std::io::stdout().write_all(data).context("Writing to stdout")
+            std::io::stdout()
+                .write_all(data)
+                .context("Writing to stdout")
         }
     }
 }

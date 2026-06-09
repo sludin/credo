@@ -54,6 +54,8 @@ pub struct VigilConfig {
     pub rbac_identities: Vec<RbacIdentityConfig>,
     pub issuance_policy: IssuancePolicyConfig,
     pub config_dir: PathBuf,
+    /// Allow none-01 challenge auto-approval. Off by default; emit a startup warning when enabled.
+    pub allow_none_validation: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -134,6 +136,7 @@ struct RawConfig {
     log_level: Option<String>,
     rbac_identities: Option<Vec<RawRbacIdentity>>,
     issuance_policy: Option<RawIssuancePolicy>,
+    allow_none_validation: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
@@ -153,17 +156,19 @@ fn resolve(base: &Path, raw: Option<&str>, fallback: &str) -> PathBuf {
 pub fn load_config() -> Result<VigilConfig> {
     let config_path = std::env::var("VIGIL_CONFIG_PATH")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join("vigil.config.json"));
+        .unwrap_or_else(|_| {
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join("vigil.config.json")
+        });
 
-    let config_path = config_path
-        .canonicalize()
-        .unwrap_or(config_path.clone());
+    let config_path = config_path.canonicalize().unwrap_or(config_path.clone());
 
     let processed = load_json_config(&config_path)
         .with_context(|| format!("Loading vigil config: {}", config_path.display()))?;
 
-    let raw: RawConfig = serde_json::from_value(processed.clone())
-        .context("Deserializing vigil config")?;
+    let raw: RawConfig =
+        serde_json::from_value(processed.clone()).context("Deserializing vigil config")?;
 
     let config_dir = config_path.parent().unwrap_or(Path::new(".")).to_path_buf();
     let base_dir = raw
@@ -171,7 +176,11 @@ pub fn load_config() -> Result<VigilConfig> {
         .as_deref()
         .map(|s| {
             let p = Path::new(s);
-            if p.is_absolute() { p.to_path_buf() } else { config_dir.join(p) }
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                config_dir.join(p)
+            }
         })
         .unwrap_or_else(|| config_dir.clone());
 
@@ -190,19 +199,33 @@ pub fn load_config() -> Result<VigilConfig> {
 
     let tls_block = raw.tls.unwrap_or_default();
     let tls = TlsConfig {
-        key_path: resolve(&base_dir, tls_block.key_path.as_deref(), "./certs/privkey.pem"),
-        cert_path: resolve(&base_dir, tls_block.cert_path.as_deref(), "./certs/fullchain.pem"),
-        client_ca_path: resolve(&base_dir, tls_block.client_ca_path.as_deref(), "./certs/root-ca.cert.pem"),
+        key_path: resolve(
+            &base_dir,
+            tls_block.key_path.as_deref(),
+            "./certs/privkey.pem",
+        ),
+        cert_path: resolve(
+            &base_dir,
+            tls_block.cert_path.as_deref(),
+            "./certs/fullchain.pem",
+        ),
+        client_ca_path: resolve(
+            &base_dir,
+            tls_block.client_ca_path.as_deref(),
+            "./certs/root-ca.cert.pem",
+        ),
     };
 
-    let ca_block = raw.ca_ecdsa_intermediate_key_path
+    let ca_block = raw
+        .ca_ecdsa_intermediate_key_path
         .as_ref()
         .map(|_| RawCaBlock::default())
         .unwrap_or_default();
     let _ = ca_block;
 
     let ca_config = {
-        let raw_ca: RawCaBlock = processed.get("ca")
+        let raw_ca: RawCaBlock = processed
+            .get("ca")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
         CaConfig {
@@ -230,20 +253,26 @@ pub fn load_config() -> Result<VigilConfig> {
         .into_iter()
         .enumerate()
         .map(|(i, entry)| {
-            let uri = entry.uri.filter(|s| !s.trim().is_empty()).with_context(|| {
-                format!("rbacIdentities[{}].uri must be a non-empty string", i)
-            })?;
+            let uri = entry
+                .uri
+                .filter(|s| !s.trim().is_empty())
+                .with_context(|| format!("rbacIdentities[{}].uri must be a non-empty string", i))?;
             Ok(RbacIdentityConfig {
                 uri: uri.trim().to_string(),
-                role: crate::types::Role::from_str(
-                    entry.role.as_deref().unwrap_or("admin"),
-                ),
+                role: crate::types::Role::from_str(entry.role.as_deref().unwrap_or("admin")),
                 name: entry.name.filter(|s| !s.trim().is_empty()),
             })
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let log_level = match raw.log_level.as_deref().unwrap_or("info").trim().to_lowercase().as_str() {
+    let log_level = match raw
+        .log_level
+        .as_deref()
+        .unwrap_or("info")
+        .trim()
+        .to_lowercase()
+        .as_str()
+    {
         "fatal" => LogLevel::Fatal,
         "warn" => LogLevel::Warn,
         "debug" => LogLevel::Debug,
@@ -269,7 +298,11 @@ pub fn load_config() -> Result<VigilConfig> {
         ca: ca_config,
         users_db_path: resolve(&data_dir, raw.users_db_path.as_deref(), "users.json"),
         cert_db_path: resolve(&data_dir, raw.cert_db_path.as_deref(), "certificates.json"),
-        acme_accounts_db_path: resolve(&data_dir, raw.acme_accounts_db_path.as_deref(), "acme-accounts.json"),
+        acme_accounts_db_path: resolve(
+            &data_dir,
+            raw.acme_accounts_db_path.as_deref(),
+            "acme-accounts.json",
+        ),
         certs_dir: resolve(&data_dir, raw.certs_dir.as_deref(), "certs"),
         ct_log_path: resolve(&base_dir, raw.ct_log_path.as_deref(), "./logs/ct.log"),
         common_name: raw.common_name.unwrap_or_default(),
@@ -278,5 +311,6 @@ pub fn load_config() -> Result<VigilConfig> {
         rbac_identities,
         issuance_policy: policy,
         config_dir,
+        allow_none_validation: raw.allow_none_validation.unwrap_or(false),
     })
 }

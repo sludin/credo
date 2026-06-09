@@ -3,8 +3,8 @@ use axum::response::Json;
 use chrono::Utc;
 use serde_json::json;
 
-use axum::response::IntoResponse;
 use axum::http::header;
+use axum::response::IntoResponse;
 
 use crate::assignments::{file_mtime, load_assignments};
 use crate::auth::check_min_role;
@@ -17,7 +17,7 @@ use crate::jwt::{jwks_response, sign_jwt};
 use crate::renewal_jobs::{complete_job, create_job, fail_job, update_phase};
 use crate::routes_corgi::build_domains;
 use crate::state::AppState;
-use crate::types::{AuthenticatedUser, Role, RenewalPhase};
+use crate::types::{AuthenticatedUser, RenewalPhase, Role};
 
 // ---------------------------------------------------------------------------
 // Public routes (no auth required)
@@ -32,7 +32,7 @@ pub async fn health() -> Json<serde_json::Value> {
 // ---------------------------------------------------------------------------
 
 pub async fn flock_list(State(state): State<AppState>) -> Json<serde_json::Value> {
-   let corgis = state.corgis.read().await;
+    let corgis = state.corgis.read().await;
     let cs = state.corgi_state.read().await;
     let entries: Vec<_> = corgis.iter().map(|node| {
         let s = cs.get(&node.name);
@@ -53,14 +53,18 @@ pub async fn flock_get(
     Path(name): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let corgis = state.corgis.read().await;
-    let node = corgis.iter().find(|c| c.name == name)
+    let node = corgis
+        .iter()
+        .find(|c| c.name == name)
         .ok_or_else(|| AppError::NotFound(format!("Corgi '{name}' not found")))?;
     let node_name = node.name.clone();
     let node_url = node.url.clone();
     drop(corgis);
     let cs = state.corgi_state.read().await;
     let s = cs.get(&node_name);
-    let status = s.map(|s| format!("{:?}", s.status).to_lowercase()).unwrap_or_else(|| "unknown".into());
+    let status = s
+        .map(|s| format!("{:?}", s.status).to_lowercase())
+        .unwrap_or_else(|| "unknown".into());
     let last_polled = s.and_then(|s| s.last_health_check);
     let flock = s.map(|s| s.flock.clone()).unwrap_or_default();
     let error = s.and_then(|s| s.error.clone());
@@ -94,7 +98,8 @@ pub async fn token(
                 let access = sign_jwt(&state.jwt_keys, identity_uri, &role, None)
                     .map_err(AppError::Internal)?;
                 let expires_at = Utc::now().timestamp() + 86400;
-                let refresh = state.refresh_tokens
+                let refresh = state
+                    .refresh_tokens
                     .issue_token(identity_uri, &role, None, expires_at)
                     .await;
                 return Ok(Json(json!({
@@ -106,18 +111,29 @@ pub async fn token(
     }
 
     // PoP token exchange
-    let pop = body.get("pop")
+    let pop = body
+        .get("pop")
         .ok_or_else(|| AppError::BadRequest("Missing pop field".to_string()))?;
 
-    let cert_pem     = pop.get("cert").and_then(|v| v.as_str())
+    let cert_pem = pop
+        .get("cert")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("Missing pop.cert".to_string()))?;
-    let identity_uri = pop.get("identityUri").and_then(|v| v.as_str())
+    let identity_uri = pop
+        .get("identityUri")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("Missing pop.identityUri".to_string()))?;
-    let issued_at_str = pop.get("issuedAt").and_then(|v| v.as_str())
+    let issued_at_str = pop
+        .get("issuedAt")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("Missing pop.issuedAt".to_string()))?;
-    let challenge    = pop.get("challenge").and_then(|v| v.as_str())
+    let challenge = pop
+        .get("challenge")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("Missing pop.challenge".to_string()))?;
-    let signature_b64 = pop.get("signature").and_then(|v| v.as_str())
+    let signature_b64 = pop
+        .get("signature")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("Missing pop.signature".to_string()))?;
 
     // Freshness: reject PoPs older than 5 minutes
@@ -134,36 +150,46 @@ pub async fn token(
     // Fast path: if client presented the same cert via TLS, the handshake already
     // proved key possession and CA validity — skip crypto verification.
     let tls_match = maybe_peer
-        .and_then(|ext| credo_lib::auth::identity_from_der(&ext.0.0).ok())
+        .and_then(|ext| credo_lib::auth::identity_from_der(&ext.0 .0).ok())
         .zip(credo_lib::auth::identity_from_der(&cert_der).ok())
         .map(|(peer, pop_id)| peer.fingerprint256 == pop_id.fingerprint256)
         .unwrap_or(false);
 
     if !tls_match {
         // No matching TLS cert — verify CA chain then verify PoP signature
-        verify_pop_cert(&cert_der, &state.config.load().tls.client_ca_path)
-            .map_err(|e| AppError::Unauthorized(format!("Certificate not signed by configured CA: {e}")))?;
+        verify_pop_cert(&cert_der, &state.config.load().tls.client_ca_path).map_err(|e| {
+            AppError::Unauthorized(format!("Certificate not signed by configured CA: {e}"))
+        })?;
 
-        verify_pop_signature(&cert_der, challenge, identity_uri, issued_at_str, signature_b64)
-            .map_err(|e| AppError::Unauthorized(format!("PoP signature verification failed: {e}")))?;
+        verify_pop_signature(
+            &cert_der,
+            challenge,
+            identity_uri,
+            issued_at_str,
+            signature_b64,
+        )
+        .map_err(|e| AppError::Unauthorized(format!("PoP signature verification failed: {e}")))?;
     }
 
     // Verify the cert has a vigil:// URI SAN matching identityUri
     let pop_identity = credo_lib::auth::identity_from_der(&cert_der)
         .map_err(|_| AppError::BadRequest("Could not parse cert identity".to_string()))?;
 
-    let cert_uri = pop_identity.san_uris.iter()
+    let cert_uri = pop_identity
+        .san_uris
+        .iter()
         .find(|u| u.starts_with("vigil://"))
         .ok_or_else(|| AppError::Unauthorized("Certificate has no vigil:// URI SAN".to_string()))?;
     if cert_uri != identity_uri {
         return Err(AppError::Unauthorized(
-            "pop.identityUri does not match certificate URI SAN".to_string()
+            "pop.identityUri does not match certificate URI SAN".to_string(),
         ));
     }
 
     // Look up the account
     let accounts = state.accounts.read().await;
-    let account = accounts.iter()
+    let account = accounts
+        .iter()
         .find(|a| a.active && a.identities.contains(&identity_uri.to_string()))
         .ok_or_else(|| AppError::Unauthorized("Identity not found in accounts".to_string()))?
         .clone();
@@ -174,10 +200,21 @@ pub async fn token(
         .map_err(|_| AppError::BadRequest("Could not parse cert".to_string()))?;
     let cert_not_after = x509.validity().not_after.timestamp();
 
-    let access_token = sign_jwt(&state.jwt_keys, identity_uri, &account.role, Some(&account.name))
-        .map_err(AppError::Internal)?;
-    let refresh_token = state.refresh_tokens
-        .issue_token(identity_uri, &account.role, Some(&account.name), cert_not_after)
+    let access_token = sign_jwt(
+        &state.jwt_keys,
+        identity_uri,
+        &account.role,
+        Some(&account.name),
+    )
+    .map_err(AppError::Internal)?;
+    let refresh_token = state
+        .refresh_tokens
+        .issue_token(
+            identity_uri,
+            &account.role,
+            Some(&account.name),
+            cert_not_after,
+        )
         .await;
     let expires_at = chrono::DateTime::from_timestamp(cert_not_after, 0)
         .map(|dt| dt.to_rfc3339())
@@ -194,22 +231,37 @@ pub async fn refresh_token(
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let token = body.get("refreshToken")
+    let token = body
+        .get("refreshToken")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("Missing refreshToken field".to_string()))?;
 
-    let entry = state.refresh_tokens.validate_token(token).await
+    let entry = state
+        .refresh_tokens
+        .validate_token(token)
+        .await
         .ok_or_else(|| AppError::Unauthorized("Invalid or expired refresh token".to_string()))?;
 
     let role = Role::from_str(&entry.role);
-    let access = sign_jwt(&state.jwt_keys, &entry.identity_uri, &role, entry.account_name.as_deref())
-        .map_err(|e| AppError::Internal(e))?;
+    let access = sign_jwt(
+        &state.jwt_keys,
+        &entry.identity_uri,
+        &role,
+        entry.account_name.as_deref(),
+    )
+    .map_err(|e| AppError::Internal(e))?;
 
     // Revoke old, issue new
     state.refresh_tokens.revoke_token(token).await;
     let expires_at = chrono::Utc::now().timestamp() + 86400;
-    let new_refresh = state.refresh_tokens
-        .issue_token(&entry.identity_uri, &role, entry.account_name.as_deref(), expires_at)
+    let new_refresh = state
+        .refresh_tokens
+        .issue_token(
+            &entry.identity_uri,
+            &role,
+            entry.account_name.as_deref(),
+            expires_at,
+        )
         .await;
 
     Ok(Json(json!({
@@ -239,10 +291,13 @@ pub async fn get_certstore(
     let config = state.config.load_full();
     let store_dir = &config.cert_store_dir;
     let names = cert_store::list_cert_store_entries(store_dir);
-    let entries: Vec<_> = names.iter()
+    let entries: Vec<_> = names
+        .iter()
         .filter_map(|n| cert_store::read_cert_store_entry(store_dir, n))
         .collect();
-    Ok(Json(json!({ "certStoreDir": store_dir, "entries": entries })))
+    Ok(Json(
+        json!({ "certStoreDir": store_dir, "entries": entries }),
+    ))
 }
 
 pub async fn get_certstore_entry(
@@ -262,7 +317,13 @@ pub async fn get_certstore_pem(
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
-    let path = state.config.load().cert_store_dir.join("live").join(&name).join("cert.pem");
+    let path = state
+        .config
+        .load()
+        .cert_store_dir
+        .join("live")
+        .join(&name)
+        .join("cert.pem");
     let pem = std::fs::read_to_string(&path)
         .map_err(|_| AppError::NotFound(format!("Certificate file not found for '{name}'")))?;
     Ok(([(header::CONTENT_TYPE, "text/plain")], pem))
@@ -274,7 +335,13 @@ pub async fn get_certstore_fullchain(
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
-    let path = state.config.load().cert_store_dir.join("live").join(&name).join("fullchain.pem");
+    let path = state
+        .config
+        .load()
+        .cert_store_dir
+        .join("live")
+        .join(&name)
+        .join("fullchain.pem");
     let pem = std::fs::read_to_string(&path)
         .map_err(|_| AppError::NotFound(format!("Fullchain file not found for '{name}'")))?;
     Ok(([(header::CONTENT_TYPE, "text/plain")], pem))
@@ -296,10 +363,12 @@ pub async fn get_renewal_job(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
-    let job_id: uuid::Uuid = id.parse()
+    let job_id: uuid::Uuid = id
+        .parse()
         .map_err(|_| AppError::BadRequest("Invalid job ID".to_string()))?;
     let jobs = state.renewal_jobs.read().await;
-    let job = jobs.get(&job_id)
+    let job = jobs
+        .get(&job_id)
         .ok_or_else(|| AppError::NotFound(format!("Renewal job '{id}' not found")))?;
     Ok(Json(serde_json::to_value(job).unwrap()))
 }
@@ -311,14 +380,17 @@ pub async fn get_last_renewal_job(
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
     let jobs = state.renewal_jobs.read().await;
-    let last = jobs.values()
+    let last = jobs
+        .values()
         .filter(|j| j.cert_name == cert_name && j.phase.is_terminal())
         .max_by_key(|j| j.updated_at)
         .cloned();
     drop(jobs);
     match last {
         Some(job) => Ok(Json(json!({ "job": job }))),
-        None => Err(AppError::NotFound(format!("No completed job found for '{cert_name}'"))),
+        None => Err(AppError::NotFound(format!(
+            "No completed job found for '{cert_name}'"
+        ))),
     }
 }
 
@@ -351,7 +423,9 @@ pub async fn get_account(
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
     let accounts = state.accounts.read().await;
-    let account = accounts.iter().find(|a| a.id == id)
+    let account = accounts
+        .iter()
+        .find(|a| a.id == id)
         .ok_or_else(|| AppError::NotFound(format!("Account '{id}' not found")))?;
     Ok(Json(serde_json::to_value(account).unwrap()))
 }
@@ -362,16 +436,19 @@ pub async fn get_cas(
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
     let cas_guard = state.cas.read().await;
-    let cas: Vec<_> = cas_guard.iter().map(|(_, ca)| {
-        json!({
-            "name": ca.name,
-            "protocol": ca.protocol,
-            "provider": ca.provider,
-            "directoryUrl": ca.config.directory_url,
-            "supportedValidations": ca.config.supported_validations,
-            "defaultValidation": ca.config.default_validation,
+    let cas: Vec<_> = cas_guard
+        .iter()
+        .map(|(_, ca)| {
+            json!({
+                "name": ca.name,
+                "protocol": ca.protocol,
+                "provider": ca.provider,
+                "directoryUrl": ca.config.directory_url,
+                "supportedValidations": ca.config.supported_validations,
+                "defaultValidation": ca.config.default_validation,
+            })
         })
-    }).collect();
+        .collect();
     Ok(Json(json!({ "cas": cas })))
 }
 
@@ -381,14 +458,23 @@ pub async fn get_vigil_ca(
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
     let config = state.config.load_full();
-    let url = config.vigil_url.as_ref()
+    let url = config
+        .vigil_url
+        .as_ref()
         .ok_or_else(|| AppError::BadRequest("Vigil not configured".to_string()))?;
-    let client = state.vigil_client.read().await.clone()
+    let client = state
+        .vigil_client
+        .read()
+        .await
+        .clone()
         .ok_or_else(|| AppError::BadRequest("Vigil client unavailable".to_string()))?;
-    let body: serde_json::Value = client.get(format!("{}/ca", url.trim_end_matches('/')))
-        .send().await
+    let body: serde_json::Value = client
+        .get(format!("{}/ca", url.trim_end_matches('/')))
+        .send()
+        .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Vigil request failed: {}", e)))?
-        .json().await
+        .json()
+        .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Vigil response parse error: {}", e)))?;
     Ok(Json(body))
 }
@@ -399,14 +485,23 @@ pub async fn get_vigil_status(
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
     let config = state.config.load_full();
-    let url = config.vigil_url.as_ref()
+    let url = config
+        .vigil_url
+        .as_ref()
         .ok_or_else(|| AppError::BadRequest("Vigil not configured".to_string()))?;
-    let client = state.vigil_client.read().await.clone()
+    let client = state
+        .vigil_client
+        .read()
+        .await
+        .clone()
         .ok_or_else(|| AppError::BadRequest("Vigil client unavailable".to_string()))?;
-    let body: serde_json::Value = client.get(format!("{}/health", url.trim_end_matches('/')))
-        .send().await
+    let body: serde_json::Value = client
+        .get(format!("{}/health", url.trim_end_matches('/')))
+        .send()
+        .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Vigil request failed: {}", e)))?
-        .json().await
+        .json()
+        .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Vigil response parse error: {}", e)))?;
     Ok(Json(body))
 }
@@ -418,14 +513,17 @@ pub async fn config_summary(
     check_min_role(Some(&user.role), &Role::Readonly)?;
     let config = state.config.load_full();
     let cas_guard = state.cas.read().await;
-    let cas: Vec<_> = cas_guard.iter().map(|(_, ca)| {
-        json!({
-            "name": ca.name,
-            "protocol": ca.protocol,
-            "provider": ca.provider,
-            "defaultValidation": ca.config.default_validation,
+    let cas: Vec<_> = cas_guard
+        .iter()
+        .map(|(_, ca)| {
+            json!({
+                "name": ca.name,
+                "protocol": ca.protocol,
+                "provider": ca.provider,
+                "defaultValidation": ca.config.default_validation,
+            })
         })
-    }).collect();
+        .collect();
     Ok(Json(json!({
         "agentPort": config.agent_port,
         "dashboardPort": config.dashboard_port,
@@ -477,36 +575,58 @@ async fn admin_provision_or_renew(
         .clone();
     drop(assignments);
 
-    let corgi_name = assignment.corgi.as_deref()
+    let corgi_name = assignment
+        .corgi
+        .as_deref()
         .ok_or_else(|| AppError::BadRequest(format!("Assignment '{cert_name}' has no corgi")))?;
 
     let corgis = state.corgis.read().await.clone();
-    let node = corgis.iter()
+    let node = corgis
+        .iter()
         .find(|c| c.name == corgi_name)
         .ok_or_else(|| AppError::NotFound(format!("Corgi '{corgi_name}' not in config")))?
         .clone();
 
-    let ca_config = state.cas.read().await.get(&assignment.ca)
-        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("CA '{}' not configured", assignment.ca)))?
-        .config.clone();
+    let ca_config = state
+        .cas
+        .read()
+        .await
+        .get(&assignment.ca)
+        .ok_or_else(|| {
+            AppError::Internal(anyhow::anyhow!("CA '{}' not configured", assignment.ca))
+        })?
+        .config
+        .clone();
 
-    let key_algorithm = body.get("keyAlgorithm")
+    let key_algorithm = body
+        .get("keyAlgorithm")
         .and_then(|v| v.as_str())
         .or(assignment.key_algorithm.as_deref())
         .unwrap_or("rsa");
 
     // Get CSR from corgi
     #[derive(serde::Deserialize)]
-    struct CsrResponse { #[serde(rename = "csrPem")] csr_pem: String }
+    struct CsrResponse {
+        #[serde(rename = "csrPem")]
+        csr_pem: String,
+    }
     let csr: CsrResponse = corgi_post(
         &state.corgi_client_pool,
         &node,
         &format!("/flock/{}/csr", urlencoded(cert_name)),
         &json!({ "keyAlgorithm": key_algorithm }),
-    ).await.map_err(AppError::Internal)?;
+    )
+    .await
+    .map_err(AppError::Internal)?;
 
     let domains = build_domains(&assignment);
-    let job_id = create_job(&state.renewal_jobs, &assignment.cert_name, domains.clone(), &assignment.ca).await;
+    let job_id = create_job(
+        &state.renewal_jobs,
+        &assignment.cert_name,
+        domains.clone(),
+        &assignment.ca,
+    )
+    .await;
 
     let state2 = state.clone();
     let node2 = node.clone();
@@ -526,7 +646,9 @@ async fn admin_provision_or_renew(
             &state2.corgi_client_pool,
             &corgis,
             &state2.acme_accounts,
-        ).await {
+        )
+        .await
+        {
             Ok(result) => {
                 complete_job(&state2.renewal_jobs, job_id, result.fingerprint256.clone()).await;
                 if result.changed {
@@ -535,7 +657,8 @@ async fn admin_provision_or_renew(
                         &node2,
                         &format!("/flock/{}/install", urlencoded(&cert_name2)),
                         &json!({ "certPem": result.cert_pem }),
-                    ).await;
+                    )
+                    .await;
                 }
             }
             Err(e) => {
@@ -545,11 +668,14 @@ async fn admin_provision_or_renew(
         }
     });
 
-    Ok((axum::http::StatusCode::ACCEPTED, Json(json!({
-        "jobId": job_id.to_string(),
-        "status": "pending",
-        "certName": assignment.cert_name,
-    }))))
+    Ok((
+        axum::http::StatusCode::ACCEPTED,
+        Json(json!({
+            "jobId": job_id.to_string(),
+            "status": "pending",
+            "certName": assignment.cert_name,
+        })),
+    ))
 }
 
 pub async fn cancel_renewal_job(
@@ -558,7 +684,8 @@ pub async fn cancel_renewal_job(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Admin)?;
-    let job_id: uuid::Uuid = id.parse()
+    let job_id: uuid::Uuid = id
+        .parse()
         .map_err(|_| AppError::BadRequest("Invalid job ID".to_string()))?;
     let mut jobs = state.renewal_jobs.write().await;
     if jobs.remove(&job_id).is_some() {
@@ -593,7 +720,9 @@ pub async fn update_account(
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Admin)?;
     let mut accounts = state.accounts.write().await;
-    let account = accounts.iter_mut().find(|a| a.id == id)
+    let account = accounts
+        .iter_mut()
+        .find(|a| a.id == id)
         .ok_or_else(|| AppError::NotFound(format!("Account '{id}' not found")))?;
     if let Some(v) = body.get("displayName").and_then(|v| v.as_str()) {
         account.display_name = v.to_string();
@@ -608,7 +737,10 @@ pub async fn update_account(
         account.notes = v.to_string();
     }
     if let Some(ids) = body.get("identities").and_then(|v| v.as_array()) {
-        account.identities = ids.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+        account.identities = ids
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect();
     }
     let updated = account.clone();
     drop(accounts);
@@ -647,7 +779,9 @@ pub async fn reload_corgis(
     let count = list.len();
     *state.corgis.write().await = list;
     *state.corgis_mtime.lock().unwrap() = file_mtime(&path);
-    Ok(Json(json!({ "reloaded": true, "corgis": count, "corgisConfigPath": path })))
+    Ok(Json(
+        json!({ "reloaded": true, "corgis": count, "corgisConfigPath": path }),
+    ))
 }
 
 pub async fn reload_assignments(
@@ -660,7 +794,9 @@ pub async fn reload_assignments(
     let count = list.len();
     *state.assignments.write().await = list;
     *state.assignments_mtime.lock().unwrap() = file_mtime(&path);
-    Ok(Json(json!({ "reloaded": true, "assignments": count, "assignmentsConfigPath": path })))
+    Ok(Json(
+        json!({ "reloaded": true, "assignments": count, "assignmentsConfigPath": path }),
+    ))
 }
 
 pub async fn reload_accounts(
@@ -673,7 +809,9 @@ pub async fn reload_accounts(
     let count = list.len();
     *state.accounts.write().await = list;
     *state.accounts_mtime.lock().unwrap() = file_mtime(&path);
-    Ok(Json(json!({ "reloaded": true, "accounts": count, "accountsPath": path })))
+    Ok(Json(
+        json!({ "reloaded": true, "accounts": count, "accountsPath": path }),
+    ))
 }
 
 pub async fn reload_cas(
@@ -686,7 +824,9 @@ pub async fn reload_cas(
     let count = map.len();
     *state.cas.write().await = map;
     *state.ca_mtime.lock().unwrap() = file_mtime(&path);
-    Ok(Json(json!({ "reloaded": true, "cas": count, "caConfigPath": path })))
+    Ok(Json(
+        json!({ "reloaded": true, "cas": count, "caConfigPath": path }),
+    ))
 }
 
 fn urlencoded(s: &str) -> String {
@@ -700,10 +840,12 @@ fn urlencoded(s: &str) -> String {
 fn pop_pem_to_der(pem: &str) -> Option<Vec<u8>> {
     use rustls_pemfile::Item;
     let mut rd = std::io::BufReader::new(pem.as_bytes());
-    rustls_pemfile::read_one(&mut rd).ok()?.and_then(|item| match item {
-        Item::X509Certificate(d) => Some(d.to_vec()),
-        _ => None,
-    })
+    rustls_pemfile::read_one(&mut rd)
+        .ok()?
+        .and_then(|item| match item {
+            Item::X509Certificate(d) => Some(d.to_vec()),
+            _ => None,
+        })
 }
 
 /// Verify that `cert_der` was signed by at least one cert in `ca_path`.
@@ -719,7 +861,10 @@ fn verify_pop_cert(cert_der: &[u8], ca_path: &std::path::Path) -> anyhow::Result
     // Try each cert in the CA bundle
     for block in rustls_pemfile::certs(&mut std::io::BufReader::new(ca_pem.as_bytes())).flatten() {
         if let Ok((_, ca_cert)) = X509Certificate::from_der(block.as_ref()) {
-            if user_cert.verify_signature(Some(ca_cert.public_key())).is_ok() {
+            if user_cert
+                .verify_signature(Some(ca_cert.public_key()))
+                .is_ok()
+            {
                 return Ok(());
             }
         }
@@ -743,13 +888,13 @@ fn verify_pop_signature(
     use base64::Engine;
     use x509_parser::prelude::*;
 
-    let challenge_bytes = hex::decode(challenge_hex)
-        .context("Decoding PoP challenge hex")?;
+    let challenge_bytes = hex::decode(challenge_hex).context("Decoding PoP challenge hex")?;
     let mut message = challenge_bytes;
     message.extend_from_slice(identity_uri.as_bytes());
     message.extend_from_slice(issued_at.as_bytes());
 
-    let sig_bytes = URL_SAFE_NO_PAD.decode(signature_b64)
+    let sig_bytes = URL_SAFE_NO_PAD
+        .decode(signature_b64)
         .or_else(|_| base64::engine::general_purpose::STANDARD.decode(signature_b64))
         .context("Decoding PoP signature base64")?;
 
@@ -760,9 +905,9 @@ fn verify_pop_signature(
 
     // EC P-256 (all Vigil-issued certs are P-256)
     use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
-    let vk = VerifyingKey::from_sec1_bytes(pk_data)
-        .context("Parsing EC P-256 public key from cert")?;
-    let sig = Signature::from_der(&sig_bytes)
-        .context("Parsing DER-encoded PoP signature")?;
-    vk.verify(&message, &sig).context("EC P-256 PoP signature mismatch")
+    let vk =
+        VerifyingKey::from_sec1_bytes(pk_data).context("Parsing EC P-256 public key from cert")?;
+    let sig = Signature::from_der(&sig_bytes).context("Parsing DER-encoded PoP signature")?;
+    vk.verify(&message, &sig)
+        .context("EC P-256 PoP signature mismatch")
 }

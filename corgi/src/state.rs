@@ -1,6 +1,6 @@
+use arc_swap::ArcSwap;
 use std::collections::HashMap;
 use std::sync::Arc;
-use arc_swap::ArcSwap;
 use tokio::sync::RwLock;
 
 use crate::config::{CorgiConfig, FlockEntry};

@@ -36,14 +36,24 @@ impl TestCorgiBootstrap {
         Self::start_inner(dir, &tmp, cert_store_dir).await
     }
 
-    async fn start_inner(dir: TestDir, tmp: &std::path::PathBuf, cert_store_dir: std::path::PathBuf) -> Result<Self> {
+    async fn start_inner(
+        dir: TestDir,
+        tmp: &std::path::PathBuf,
+        cert_store_dir: std::path::PathBuf,
+    ) -> Result<Self> {
         let config = std::sync::Arc::new(build_corgi_config(tmp, &cert_store_dir));
         let token = hex::encode({
             let mut b = [0u8; 16];
             use std::io::Read;
             std::fs::File::open("/dev/urandom")
-                .and_then(|mut f| { f.read_exact(&mut b)?; Ok(b) })
-                .unwrap_or_else(|_| { b[0] = 42; b })
+                .and_then(|mut f| {
+                    f.read_exact(&mut b)?;
+                    Ok(b)
+                })
+                .unwrap_or_else(|_| {
+                    b[0] = 42;
+                    b
+                })
         });
 
         let (router, done_rx) =
@@ -55,7 +65,9 @@ impl TestCorgiBootstrap {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
             axum::serve(listener, router)
-                .with_graceful_shutdown(async { let _ = shutdown_rx.await; })
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_rx.await;
+                })
                 .await
                 .ok();
         });
@@ -76,13 +88,25 @@ impl TestCorgiBootstrap {
         })
     }
 
-    pub fn status_url(&self)   -> String { format!("{}/bootstrap/status",   self.url) }
-    pub fn csr_url(&self)      -> String { format!("{}/bootstrap/csr",      self.url) }
-    pub fn ca_url(&self)       -> String { format!("{}/bootstrap/ca",       self.url) }
-    pub fn cert_url(&self)     -> String { format!("{}/bootstrap/cert",     self.url) }
-    pub fn finalize_url(&self) -> String { format!("{}/bootstrap/finalize", self.url) }
+    pub fn status_url(&self) -> String {
+        format!("{}/bootstrap/status", self.url)
+    }
+    pub fn csr_url(&self) -> String {
+        format!("{}/bootstrap/csr", self.url)
+    }
+    pub fn ca_url(&self) -> String {
+        format!("{}/bootstrap/ca", self.url)
+    }
+    pub fn cert_url(&self) -> String {
+        format!("{}/bootstrap/cert", self.url)
+    }
+    pub fn finalize_url(&self) -> String {
+        format!("{}/bootstrap/finalize", self.url)
+    }
 
-    pub fn auth_header(&self) -> String { format!("Bearer {}", self.token) }
+    pub fn auth_header(&self) -> String {
+        format!("Bearer {}", self.token)
+    }
 
     /// Wait for POST /bootstrap/finalize to be called (with a timeout).
     pub async fn wait_for_finalize(&mut self) -> bool {
@@ -96,13 +120,13 @@ impl TestCorgiBootstrap {
     }
 }
 
+use crate::test_dir::{make_test_dir, TestDir};
 /// Corgi test harness: spins up corgi's control and challenge Axum routers
 /// over plain HTTP on random ports.
 use anyhow::Result;
-use crate::test_dir::{make_test_dir, TestDir};
 use corgi::config::{
-    AuthConfig, AuthMode, CorgiConfig, FilePolicyConfig, HttpChallengeConfig, LogLevel,
-    MtlsConfig, ProxyAuthConfig, ShepherdSyncConfig, TlsConfig,
+    AuthConfig, AuthMode, CorgiConfig, FilePolicyConfig, HttpChallengeConfig, LogLevel, MtlsConfig,
+    ProxyAuthConfig, ShepherdSyncConfig, TlsConfig,
 };
 use corgi::state::AppState;
 use std::collections::HashMap;
@@ -161,7 +185,9 @@ impl TestCorgi {
         let (shutdown_control_tx, shutdown_control_rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
             axum::serve(control_listener, control_router)
-                .with_graceful_shutdown(async { let _ = shutdown_control_rx.await; })
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_control_rx.await;
+                })
                 .await
                 .ok();
         });
@@ -169,7 +195,9 @@ impl TestCorgi {
         let (shutdown_challenge_tx, shutdown_challenge_rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
             axum::serve(challenge_listener, challenge_router)
-                .with_graceful_shutdown(async { let _ = shutdown_challenge_rx.await; })
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_challenge_rx.await;
+                })
                 .await
                 .ok();
         });
@@ -190,8 +218,12 @@ impl TestCorgi {
         })
     }
 
-    pub fn control_health_url(&self)   -> String { format!("{}/health", self.control_url) }
-    pub fn challenge_health_url(&self) -> String { format!("{}/health", self.challenge_url) }
+    pub fn control_health_url(&self) -> String {
+        format!("{}/health", self.control_url)
+    }
+    pub fn challenge_health_url(&self) -> String {
+        format!("{}/health", self.challenge_url)
+    }
 }
 
 /// Build a corgi config.
@@ -212,11 +244,11 @@ fn build_corgi_config(tmp: &PathBuf, cert_store_dir: &PathBuf) -> CorgiConfig {
         dns_override: HashMap::new(),
         tls: TlsConfig {
             cert_path: live.join("cert.pem"),
-            key_path:  live.join("privkey.pem"),
+            key_path: live.join("privkey.pem"),
         },
         mtls: MtlsConfig {
             cert_path: tmp.join("mtls.pem"),
-            key_path:  tmp.join("mtls.key"),
+            key_path: tmp.join("mtls.key"),
             // bootstrap/ca writes the trust bundle here; must be inside the harness tempdir
             ca_path: Some(tmp.join("mtls-ca.pem")),
         },
@@ -232,7 +264,9 @@ fn build_corgi_config(tmp: &PathBuf, cert_store_dir: &PathBuf) -> CorgiConfig {
         service_hooks: HashMap::new(),
         default_hooks: vec![],
         log_level: LogLevel::Warn,
-        auth: AuthConfig { mode: AuthMode::Mtls },
+        auth: AuthConfig {
+            mode: AuthMode::Mtls,
+        },
         rbac_identities: vec![],
         proxy_auth: ProxyAuthConfig {
             client_cert_header: "X-Client-Cert".to_string(),
@@ -246,14 +280,17 @@ fn build_corgi_config(tmp: &PathBuf, cert_store_dir: &PathBuf) -> CorgiConfig {
             stale_warning_seconds: 300,
             assignments_cache_path: tmp.join("assignments.json"),
         },
-        config_path:   tmp.join("corgi.config.json"),
+        config_path: tmp.join("corgi.config.json"),
         accounts_path: tmp.join("corgi.accounts.json"),
         bootstrap_port: 0,
-        chain_path:    Some(live.join("chain.pem")),
+        chain_path: Some(live.join("chain.pem")),
         fullchain_path: Some(live.join("fullchain.pem")),
         csr_path: None,
         file_policy: FilePolicyConfig {
-            owner: None, group: None, cert_mode: None, key_mode: None,
+            owner: None,
+            group: None,
+            cert_mode: None,
+            key_mode: None,
         },
         cert_hooks: HashMap::new(),
     }

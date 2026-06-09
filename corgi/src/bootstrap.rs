@@ -8,15 +8,15 @@ use axum::{Json, Router};
 use hyper::server::conn::http1;
 use hyper_util::rt::TokioIo;
 use rand::Rng;
-use sha2::Digest;
 use serde_json::{json, Value};
+use sha2::Digest;
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex};
 
 use crate::archive::set_permissions;
 use crate::cert_ops::{
-    fingerprint_display, generate_bootstrap_cert, generate_key_and_csr,
-    install_certificate, pem_cert_to_der,
+    fingerprint_display, generate_bootstrap_cert, generate_key_and_csr, install_certificate,
+    pem_cert_to_der,
 };
 use crate::config::CorgiConfig;
 use crate::server::bind_tcp;
@@ -55,7 +55,10 @@ fn check_token(headers: &HeaderMap, expected_token: &str) -> bool {
 }
 
 fn unauthorized() -> (StatusCode, Json<Value>) {
-    (StatusCode::UNAUTHORIZED, Json(json!({ "error": "Unauthorized" })))
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "error": "Unauthorized" })),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +95,11 @@ async fn bs_csr(
 
     let bs_dir = bootstrap_dir(&state.config);
     if let Err(e) = std::fs::create_dir_all(&bs_dir) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response();
     }
 
     let mut entry = node_identity_entry(&state.config);
@@ -126,7 +133,11 @@ async fn bs_ca(
     let ca_pem = match body.get("caPem").and_then(|v| v.as_str()).map(str::trim) {
         Some(s) if !s.is_empty() => s.to_string(),
         _ => {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "caPem is required" }))).into_response()
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "caPem is required" })),
+            )
+                .into_response()
         }
     };
 
@@ -134,13 +145,21 @@ async fn bs_ca(
     let ca_path = match &state.config.mtls.ca_path {
         Some(p) => p.clone(),
         None => {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "mtls.caPath is not configured" }))).into_response()
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "mtls.caPath is not configured" })),
+            )
+                .into_response()
         }
     };
 
     if let Some(parent) = ca_path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response();
         }
     }
 
@@ -150,7 +169,11 @@ async fn bs_ca(
             tracing::info!(ca_path = %ca_path.display(), "Bootstrap: Shepherd CA installed");
             (StatusCode::OK, Json(json!({ "installed": true }))).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -166,7 +189,11 @@ async fn bs_cert(
     let cert_pem = match body.get("certPem").and_then(|v| v.as_str()).map(str::trim) {
         Some(s) if !s.is_empty() => s.to_string(),
         _ => {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "certPem is required" }))).into_response()
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "certPem is required" })),
+            )
+                .into_response()
         }
     };
 
@@ -176,15 +203,26 @@ async fn bs_cert(
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "Private key not found. Call GET /bootstrap/csr first." })),
-        ).into_response();
+        )
+            .into_response();
     }
 
     let key_pem = match std::fs::read_to_string(&key_path) {
         Ok(k) => k,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
     };
 
-    let chain_pem = body.get("chainPem").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let chain_pem = body
+        .get("chainPem")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let fullchain_pem = body
         .get("fullchainPem")
         .and_then(|v| v.as_str())
@@ -193,20 +231,34 @@ async fn bs_cert(
 
     let fingerprint = match pem_cert_to_der(&cert_pem) {
         Ok(der) => fingerprint_display(&der),
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
     };
 
     let entry = node_identity_entry(&state.config);
     let req = InstallRequest {
         cert_pem: Some(cert_pem),
-        chain_pem: if chain_pem.is_empty() { None } else { Some(chain_pem) },
+        chain_pem: if chain_pem.is_empty() {
+            None
+        } else {
+            Some(chain_pem)
+        },
         fullchain_pem: Some(fullchain_pem),
         key_pem: Some(key_pem),
         restart: None,
     };
 
     if let Err(e) = install_certificate(&entry, &state.config.cert_store_dir, &req) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response();
     }
 
     // Key is now safely in archive; remove the bootstrap staging copy.
@@ -218,11 +270,15 @@ async fn bs_cert(
         fingerprint256 = %fingerprint,
         "Bootstrap: cert installed to cert store"
     );
-    (StatusCode::OK, Json(json!({
-        "installed": true,
-        "changed": true,
-        "fingerprint256": fingerprint,
-    }))).into_response()
+    (
+        StatusCode::OK,
+        Json(json!({
+            "installed": true,
+            "changed": true,
+            "fingerprint256": fingerprint,
+        })),
+    )
+        .into_response()
 }
 
 async fn bs_finalize(
@@ -259,10 +315,10 @@ pub fn build_bootstrap_router(
         done_tx: Arc::new(Mutex::new(Some(done_tx))),
     };
     let router = Router::new()
-        .route("/bootstrap/status",   get(bs_status))
-        .route("/bootstrap/csr",      get(bs_csr))
-        .route("/bootstrap/ca",       post(bs_ca))
-        .route("/bootstrap/cert",     post(bs_cert))
+        .route("/bootstrap/status", get(bs_status))
+        .route("/bootstrap/csr", get(bs_csr))
+        .route("/bootstrap/ca", post(bs_ca))
+        .route("/bootstrap/cert", post(bs_cert))
         .route("/bootstrap/finalize", post(bs_finalize))
         .with_state(state);
     (router, done_rx)
@@ -346,8 +402,8 @@ pub async fn run_bootstrap(config: Arc<CorgiConfig>) -> Result<()> {
                 };
 
                 let io = TokioIo::new(tls_stream);
-                let svc =
-                    hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+                let svc = hyper::service::service_fn(
+                    move |req: hyper::Request<hyper::body::Incoming>| {
                         let router = router.clone();
                         async move {
                             let (parts, body) = req.into_parts();
@@ -358,7 +414,8 @@ pub async fn run_bootstrap(config: Arc<CorgiConfig>) -> Result<()> {
                                 .await
                                 .map_err(|_| -> std::convert::Infallible { unreachable!() })
                         }
-                    });
+                    },
+                );
 
                 if let Err(e) = http1::Builder::new().serve_connection(io, svc).await {
                     tracing::debug!(error = %e, "Bootstrap connection error");
@@ -417,10 +474,7 @@ fn node_identity_entry(config: &CorgiConfig) -> crate::config::FlockEntry {
         })
 }
 
-fn build_ephemeral_tls(
-    cert_pem: &str,
-    key_pem: &str,
-) -> Result<Arc<rustls::ServerConfig>> {
+fn build_ephemeral_tls(cert_pem: &str, key_pem: &str) -> Result<Arc<rustls::ServerConfig>> {
     use rustls::ServerConfig;
     let certs = rustls_pemfile::certs(&mut std::io::BufReader::new(cert_pem.as_bytes()))
         .collect::<Result<Vec<_>, _>>()

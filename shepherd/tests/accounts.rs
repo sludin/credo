@@ -4,7 +4,9 @@ use shepherd::accounts;
 use shepherd::types::{Account, Role};
 use tempfile::TempDir;
 
-fn tmp() -> TempDir { TempDir::new().unwrap() }
+fn tmp() -> TempDir {
+    TempDir::new().unwrap()
+}
 
 fn make_account(id: &str, name: &str, role: Role) -> Account {
     Account {
@@ -35,7 +37,7 @@ fn save_and_load_round_trips() {
     let path = dir.path().join("accounts.json");
 
     let a1 = make_account("a1", "alice", Role::Admin);
-    let a2 = make_account("a2", "bob",   Role::Readonly);
+    let a2 = make_account("a2", "bob", Role::Readonly);
     accounts::save_accounts(&path, &[a1.clone(), a2.clone()]).unwrap();
 
     let loaded = accounts::load_accounts(&path).unwrap();
@@ -49,7 +51,7 @@ fn save_and_load_round_trips() {
 fn find_by_identity_uri() {
     let accts = vec![
         make_account("a1", "alice", Role::Admin),
-        make_account("a2", "bob",   Role::Readonly),
+        make_account("a2", "bob", Role::Readonly),
     ];
 
     let found = accounts::find_by_identity_uri(&accts, "vigil://credo/test/alice");
@@ -104,5 +106,8 @@ fn delete_account_removes() {
     assert_eq!(accts[0].id, "d2");
 
     let not_found = accounts::delete_account(&mut accts, "d1");
-    assert!(!not_found, "delete must return false for already-removed ID");
+    assert!(
+        !not_found,
+        "delete must return false for already-removed ID"
+    );
 }

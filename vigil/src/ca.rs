@@ -38,15 +38,25 @@ fn der_tlv(tag: u8, content: &[u8]) -> Vec<u8> {
     out
 }
 
-pub fn der_sequence(content: &[u8]) -> Vec<u8> { der_tlv(0x30, content) }
-pub fn der_context_constructed(tag: u8, content: &[u8]) -> Vec<u8> { der_tlv(0xa0 | tag, content) }
-pub fn der_context_primitive(tag: u8, content: &[u8]) -> Vec<u8> { der_tlv(0x80 | tag, content) }
-pub fn der_octet_string(content: &[u8]) -> Vec<u8> { der_tlv(0x04, content) }
+pub fn der_sequence(content: &[u8]) -> Vec<u8> {
+    der_tlv(0x30, content)
+}
+pub fn der_context_constructed(tag: u8, content: &[u8]) -> Vec<u8> {
+    der_tlv(0xa0 | tag, content)
+}
+pub fn der_context_primitive(tag: u8, content: &[u8]) -> Vec<u8> {
+    der_tlv(0x80 | tag, content)
+}
+pub fn der_octet_string(content: &[u8]) -> Vec<u8> {
+    der_tlv(0x04, content)
+}
 
 /// Integer from raw bytes (MSB preserved; zero-extends if high bit set).
 pub fn der_integer_bytes(bytes: &[u8]) -> Vec<u8> {
     // Strip leading zeros but keep at least one byte; if MSB >= 0x80 prepend 0x00
-    let stripped: &[u8] = bytes.iter().position(|&b| b != 0)
+    let stripped: &[u8] = bytes
+        .iter()
+        .position(|&b| b != 0)
         .map(|i| &bytes[i..])
         .unwrap_or(&bytes[..1]);
     let content: Vec<u8> = if !stripped.is_empty() && stripped[0] >= 0x80 {
@@ -101,7 +111,10 @@ fn encode_oid_component(n: u64) -> Vec<u8> {
 }
 
 pub fn encode_oid(oid: &str) -> Vec<u8> {
-    let components: Vec<u64> = oid.split('.').map(|s| s.parse::<u64>().unwrap_or(0)).collect();
+    let components: Vec<u64> = oid
+        .split('.')
+        .map(|s| s.parse::<u64>().unwrap_or(0))
+        .collect();
     if components.len() < 2 {
         return der_tlv(0x06, &[]);
     }
@@ -112,9 +125,13 @@ pub fn encode_oid(oid: &str) -> Vec<u8> {
     der_tlv(0x06, &content)
 }
 
-fn der_null() -> Vec<u8> { vec![0x05, 0x00] }
+fn der_null() -> Vec<u8> {
+    vec![0x05, 0x00]
+}
 
-fn der_boolean_true() -> Vec<u8> { der_tlv(0x01, &[0xff]) }
+fn der_boolean_true() -> Vec<u8> {
+    der_tlv(0x01, &[0xff])
+}
 
 // ---------------------------------------------------------------------------
 // Extension building
@@ -157,20 +174,23 @@ fn build_san_extension(names: &[String]) -> Vec<u8> {
     if names.is_empty() {
         return vec![];
     }
-    let general_names: Vec<u8> = names.iter().flat_map(|name| {
-        let n = name.trim();
-        if is_ip_san(n) {
-            // iPAddress [7] IMPLICIT
-            let parts: Vec<u8> = n.split('.').map(|p| p.parse::<u8>().unwrap_or(0)).collect();
-            der_context_primitive(7, &parts)
-        } else if is_uri_san(n) {
-            // uniformResourceIdentifier [6] IMPLICIT IA5String
-            der_context_primitive(6, n.as_bytes())
-        } else {
-            // dNSName [2] IMPLICIT IA5String
-            der_context_primitive(2, n.as_bytes())
-        }
-    }).collect();
+    let general_names: Vec<u8> = names
+        .iter()
+        .flat_map(|name| {
+            let n = name.trim();
+            if is_ip_san(n) {
+                // iPAddress [7] IMPLICIT
+                let parts: Vec<u8> = n.split('.').map(|p| p.parse::<u8>().unwrap_or(0)).collect();
+                der_context_primitive(7, &parts)
+            } else if is_uri_san(n) {
+                // uniformResourceIdentifier [6] IMPLICIT IA5String
+                der_context_primitive(6, n.as_bytes())
+            } else {
+                // dNSName [2] IMPLICIT IA5String
+                der_context_primitive(2, n.as_bytes())
+            }
+        })
+        .collect();
 
     let san_sequence = der_sequence(&general_names);
     let ext_value = der_octet_string(&san_sequence);
@@ -191,9 +211,9 @@ pub enum CaSigningKey {
 impl CaSigningKey {
     pub fn sig_alg_oid(&self) -> &'static str {
         match self {
-            CaSigningKey::EcdsaP256(_) => "1.2.840.10045.4.3.2",  // ecdsa-with-SHA256
-            CaSigningKey::EcdsaP384(_) => "1.2.840.10045.4.3.3",  // ecdsa-with-SHA384
-            CaSigningKey::Rsa(_)       => "1.2.840.113549.1.1.11", // sha256WithRSAEncryption
+            CaSigningKey::EcdsaP256(_) => "1.2.840.10045.4.3.2", // ecdsa-with-SHA256
+            CaSigningKey::EcdsaP384(_) => "1.2.840.10045.4.3.3", // ecdsa-with-SHA384
+            CaSigningKey::Rsa(_) => "1.2.840.113549.1.1.11",     // sha256WithRSAEncryption
         }
     }
 
@@ -234,11 +254,15 @@ pub fn load_signing_key(pem: &str) -> Result<CaSigningKey> {
 
     // Try ECDSA P-384 first (default curve)
     if let Ok(key) = p384::SecretKey::from_pkcs8_pem(pem) {
-        return Ok(CaSigningKey::EcdsaP384(Box::new(p384::ecdsa::SigningKey::from(&key))));
+        return Ok(CaSigningKey::EcdsaP384(Box::new(
+            p384::ecdsa::SigningKey::from(&key),
+        )));
     }
     // Try ECDSA P-256
     if let Ok(key) = p256::SecretKey::from_pkcs8_pem(pem) {
-        return Ok(CaSigningKey::EcdsaP256(Box::new(p256::ecdsa::SigningKey::from(&key))));
+        return Ok(CaSigningKey::EcdsaP256(Box::new(
+            p256::ecdsa::SigningKey::from(&key),
+        )));
     }
     // Try RSA
     if let Ok(priv_key) = rsa::RsaPrivateKey::from_pkcs8_pem(pem) {
@@ -247,10 +271,14 @@ pub fn load_signing_key(pem: &str) -> Result<CaSigningKey> {
     }
     // Also try SEC1 PEM (EC PRIVATE KEY header)
     if let Ok(key) = p384::SecretKey::from_sec1_pem(pem) {
-        return Ok(CaSigningKey::EcdsaP384(Box::new(p384::ecdsa::SigningKey::from(&key))));
+        return Ok(CaSigningKey::EcdsaP384(Box::new(
+            p384::ecdsa::SigningKey::from(&key),
+        )));
     }
     if let Ok(key) = p256::SecretKey::from_sec1_pem(pem) {
-        return Ok(CaSigningKey::EcdsaP256(Box::new(p256::ecdsa::SigningKey::from(&key))));
+        return Ok(CaSigningKey::EcdsaP256(Box::new(
+            p256::ecdsa::SigningKey::from(&key),
+        )));
     }
     bail!("Failed to load CA signing key from PEM — supported types: ECDSA P-256/P-384, RSA")
 }
@@ -284,7 +312,11 @@ pub fn load_ca_metadata(config: &VigilConfig) -> Result<RootCAMetadata> {
     parse_cert_metadata(&cert_pem, key_path, cert_path)
 }
 
-fn parse_cert_metadata(cert_pem: &str, key_path: &Path, cert_path: &Path) -> Result<RootCAMetadata> {
+fn parse_cert_metadata(
+    cert_pem: &str,
+    key_path: &Path,
+    cert_path: &Path,
+) -> Result<RootCAMetadata> {
     let der = pem::parse(cert_pem.trim())
         .with_context(|| "Parsing CA cert PEM")?
         .into_contents();
@@ -294,9 +326,15 @@ fn parse_cert_metadata(cert_pem: &str, key_path: &Path, cert_path: &Path) -> Res
 
     let subject = cert.subject().to_string();
     let serial_number = cert.serial.to_str_radix(16).to_uppercase();
-    let valid_from = cert.validity().not_before.to_rfc2822()
+    let valid_from = cert
+        .validity()
+        .not_before
+        .to_rfc2822()
         .unwrap_or_else(|_| cert.validity().not_before.to_string());
-    let valid_to = cert.validity().not_after.to_rfc2822()
+    let valid_to = cert
+        .validity()
+        .not_after
+        .to_rfc2822()
         .unwrap_or_else(|_| cert.validity().not_after.to_string());
     let fingerprint256 = format!("SHA256:{}", hex::encode(Sha256::digest(&der)));
 
@@ -337,7 +375,9 @@ fn extract_csr_fields(csr_der: &[u8]) -> Result<CsrFields> {
     let subject_der = cri.subject.as_raw().to_vec();
 
     // CN
-    let cn = cri.subject.iter_attributes()
+    let cn = cri
+        .subject
+        .iter_attributes()
         .find_map(|attr| attr.attr_value().as_str().ok().map(|s| s.to_string()));
 
     // SPKI — re-encode from raw bytes. x509-parser stores the raw DER slice
@@ -367,7 +407,12 @@ fn extract_csr_fields(csr_der: &[u8]) -> Result<CsrFields> {
         }
     }
 
-    Ok(CsrFields { subject_der, spki_der, san_names, cn })
+    Ok(CsrFields {
+        subject_der,
+        spki_der,
+        san_names,
+        cn,
+    })
 }
 
 /// Extract the SubjectPublicKeyInfo DER bytes from a CSR DER blob.
@@ -379,24 +424,28 @@ fn extract_spki_der(csr_der: &[u8]) -> Result<Vec<u8>> {
     let (cri_inner, _) = der_read_sequence(cri_content)
         .ok_or_else(|| anyhow::anyhow!("CSR: CertificationRequestInfo SEQUENCE parse failed"))?;
     // CertificationRequestInfo: INTEGER(version), SEQUENCE(subject), SEQUENCE(spki), [0](attrs)
-    let after_version = der_skip_tlv(cri_inner)
-        .ok_or_else(|| anyhow::anyhow!("CSR: skip version failed"))?;
-    let after_subject = der_skip_tlv(after_version)
-        .ok_or_else(|| anyhow::anyhow!("CSR: skip subject failed"))?;
+    let after_version =
+        der_skip_tlv(cri_inner).ok_or_else(|| anyhow::anyhow!("CSR: skip version failed"))?;
+    let after_subject =
+        der_skip_tlv(after_version).ok_or_else(|| anyhow::anyhow!("CSR: skip subject failed"))?;
     // Now at SPKI
-    let (spki_bytes, _) = der_read_tlv(after_subject)
-        .ok_or_else(|| anyhow::anyhow!("CSR: SPKI parse failed"))?;
+    let (spki_bytes, _) =
+        der_read_tlv(after_subject).ok_or_else(|| anyhow::anyhow!("CSR: SPKI parse failed"))?;
     Ok(spki_bytes.to_vec())
 }
 
 /// Read a DER TLV: returns (full TLV bytes, remainder)
 fn der_read_tlv(data: &[u8]) -> Option<(&[u8], &[u8])> {
-    if data.is_empty() { return None; }
+    if data.is_empty() {
+        return None;
+    }
     let tag_len = 1usize;
     let (len_size, len) = decode_der_length(&data[tag_len..])?;
     let header_size = tag_len + len_size;
     let total = header_size + len;
-    if data.len() < total { return None; }
+    if data.len() < total {
+        return None;
+    }
     Some((&data[..total], &data[total..]))
 }
 
@@ -407,11 +456,15 @@ fn der_skip_tlv(data: &[u8]) -> Option<&[u8]> {
 
 /// Read a SEQUENCE: returns (inner content, remainder)
 fn der_read_sequence(data: &[u8]) -> Option<(&[u8], &[u8])> {
-    if data.is_empty() || data[0] != 0x30 { return None; }
+    if data.is_empty() || data[0] != 0x30 {
+        return None;
+    }
     let (len_size, len) = decode_der_length(&data[1..])?;
     let header_size = 1 + len_size;
     let total = header_size + len;
-    if data.len() < total { return None; }
+    if data.len() < total {
+        return None;
+    }
     Some((&data[header_size..total], &data[total..]))
 }
 
@@ -421,12 +474,16 @@ fn decode_der_length(data: &[u8]) -> Option<(usize, usize)> {
 
 /// Public DER length decoder used by pki_wire.rs.
 pub fn decode_der_length_pub(data: &[u8]) -> Option<(usize, usize)> {
-    if data.is_empty() { return None; }
+    if data.is_empty() {
+        return None;
+    }
     if data[0] < 0x80 {
         Some((1, data[0] as usize))
     } else {
         let num_bytes = (data[0] & 0x7F) as usize;
-        if data.len() < 1 + num_bytes { return None; }
+        if data.len() < 1 + num_bytes {
+            return None;
+        }
         let mut len = 0usize;
         for &b in &data[1..1 + num_bytes] {
             len = (len << 8) | (b as usize);
@@ -482,7 +539,8 @@ pub fn sign_csr(
     let issuer_der = extract_subject_der(&ca_der)?;
 
     // Serial: read from OpenSSL DB if available, else random
-    let ca_dir = config.ca_ecdsa_intermediate_cert_path
+    let ca_dir = config
+        .ca_ecdsa_intermediate_cert_path
         .parent()
         .and_then(|p| p.parent())
         .unwrap_or(config.ca_dir.as_path());
@@ -573,7 +631,12 @@ pub fn sign_csr(
     let cert_meta = parse_cert_der_metadata(&cert_der)?;
     if used_openssl_db {
         let _ = crate::openssl_db::write_new_cert(ca_dir, &serial_hex, &cert_pem_str);
-        let _ = crate::openssl_db::append_valid_entry(ca_dir, &serial_hex, &cert_meta.valid_to, &cert_meta.subject);
+        let _ = crate::openssl_db::append_valid_entry(
+            ca_dir,
+            &serial_hex,
+            &cert_meta.valid_to,
+            &cert_meta.subject,
+        );
     }
 
     let chain_pem = format!("{}\n", cert_pem.trim());
@@ -599,16 +662,16 @@ fn extract_subject_der(cert_der: &[u8]) -> Result<Vec<u8>> {
         .ok_or_else(|| anyhow::anyhow!("Cert: outer SEQUENCE parse failed"))?;
     let (tbs_content, _) = der_read_sequence(cert_content)
         .ok_or_else(|| anyhow::anyhow!("Cert: TBS SEQUENCE parse failed"))?;
-    let after_version = der_skip_tlv(tbs_content)
-        .ok_or_else(|| anyhow::anyhow!("Cert: skip version failed"))?;
-    let after_serial = der_skip_tlv(after_version)
-        .ok_or_else(|| anyhow::anyhow!("Cert: skip serial failed"))?;
-    let after_alg = der_skip_tlv(after_serial)
-        .ok_or_else(|| anyhow::anyhow!("Cert: skip algorithm failed"))?;
-    let after_issuer = der_skip_tlv(after_alg)
-        .ok_or_else(|| anyhow::anyhow!("Cert: skip issuer failed"))?;
-    let after_validity = der_skip_tlv(after_issuer)
-        .ok_or_else(|| anyhow::anyhow!("Cert: skip validity failed"))?;
+    let after_version =
+        der_skip_tlv(tbs_content).ok_or_else(|| anyhow::anyhow!("Cert: skip version failed"))?;
+    let after_serial =
+        der_skip_tlv(after_version).ok_or_else(|| anyhow::anyhow!("Cert: skip serial failed"))?;
+    let after_alg =
+        der_skip_tlv(after_serial).ok_or_else(|| anyhow::anyhow!("Cert: skip algorithm failed"))?;
+    let after_issuer =
+        der_skip_tlv(after_alg).ok_or_else(|| anyhow::anyhow!("Cert: skip issuer failed"))?;
+    let after_validity =
+        der_skip_tlv(after_issuer).ok_or_else(|| anyhow::anyhow!("Cert: skip validity failed"))?;
     // Now at subject (SEQUENCE)
     let (subject_bytes, _) = der_read_tlv(after_validity)
         .ok_or_else(|| anyhow::anyhow!("Cert: subject TLV parse failed"))?;
@@ -633,13 +696,25 @@ fn parse_cert_der_metadata(cert_der: &[u8]) -> Result<CertMeta> {
 
     let serial_number = cert.serial.to_str_radix(16).to_uppercase();
     let subject = cert.subject().to_string();
-    let valid_from = cert.validity().not_before.to_rfc2822()
+    let valid_from = cert
+        .validity()
+        .not_before
+        .to_rfc2822()
         .unwrap_or_else(|_| cert.validity().not_before.to_string());
-    let valid_to = cert.validity().not_after.to_rfc2822()
+    let valid_to = cert
+        .validity()
+        .not_after
+        .to_rfc2822()
         .unwrap_or_else(|_| cert.validity().not_after.to_string());
     let fingerprint256 = format!("SHA256:{}", hex::encode(Sha256::digest(cert_der)));
 
-    Ok(CertMeta { serial_number, subject, valid_from, valid_to, fingerprint256 })
+    Ok(CertMeta {
+        serial_number,
+        subject,
+        valid_from,
+        valid_to,
+        fingerprint256,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -660,18 +735,21 @@ pub fn generate_bootstrap_server_cert(
     params.not_before = time::OffsetDateTime::now_utc();
     params.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(1);
 
-    let cert = Certificate::from_params(params)
-        .context("Generating bootstrap cert params")?;
+    let cert = Certificate::from_params(params).context("Generating bootstrap cert params")?;
 
     let key_pem = cert.serialize_private_key_pem();
-    let _cert_pem = cert.serialize_pem().context("Serializing bootstrap cert PEM")?;
+    let _cert_pem = cert
+        .serialize_pem()
+        .context("Serializing bootstrap cert PEM")?;
 
     // Sign with our intermediate CA
     let ca_key_pem = std::fs::read_to_string(&config.ca_ecdsa_intermediate_key_path)?;
     let ca_cert_pem = std::fs::read_to_string(&config.ca_ecdsa_intermediate_cert_path)?;
 
     // Use the self-signed cert's CSR to get a CA-signed cert
-    let csr_pem = cert.serialize_request_pem().context("Serializing bootstrap CSR")?;
+    let csr_pem = cert
+        .serialize_request_pem()
+        .context("Serializing bootstrap CSR")?;
     let signed = sign_csr(&csr_pem, 1, None, config).context("Signing bootstrap cert")?;
     let _ = (ca_key_pem, ca_cert_pem); // loaded inside sign_csr
 

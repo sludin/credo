@@ -5,7 +5,9 @@ use tempfile::TempDir;
 use vigil::storage;
 use vigil::types::CertificateRecord;
 
-fn tmp() -> TempDir { TempDir::new().unwrap() }
+fn tmp() -> TempDir {
+    TempDir::new().unwrap()
+}
 
 fn dummy_cert_record(id: &str, serial: &str) -> CertificateRecord {
     CertificateRecord {
@@ -21,8 +23,12 @@ fn dummy_cert_record(id: &str, serial: &str) -> CertificateRecord {
         owner_vigil_user_id: "test".to_string(),
         issuing_acme_account_id: None,
         revoked: false,
-        revoked_at: None, revoked_by: None, revoked_by_vigil_user_id: None,
-        revoked_by_acme_account_id: None, revoked_via: None, revoke_reason: None,
+        revoked_at: None,
+        revoked_by: None,
+        revoked_by_vigil_user_id: None,
+        revoked_by_acme_account_id: None,
+        revoked_via: None,
+        revoke_reason: None,
     }
 }
 
@@ -33,7 +39,7 @@ const DUMMY_CERT: &str = "-----BEGIN CERTIFICATE-----\nMIIBIjANBgkqhkiG9w0BAQEFA
 #[test]
 fn issue_and_retrieve_cert_record() {
     let dir = tmp();
-    let db  = dir.path().join("certs.json");
+    let db = dir.path().join("certs.json");
     let store = dir.path().join("certs");
     storage::ensure_certs_db(&db, &store).unwrap();
 
@@ -42,7 +48,10 @@ fn issue_and_retrieve_cert_record() {
 
     assert_eq!(stored.id, "cert-a");
     assert!(!stored.cert_path.is_empty(), "cert_path must be populated");
-    assert!(Path::new(&stored.cert_path).exists(), "cert PEM file must exist on disk");
+    assert!(
+        Path::new(&stored.cert_path).exists(),
+        "cert PEM file must exist on disk"
+    );
 
     let fetched = storage::get_certificate_record(&db, "cert-a").unwrap();
     assert!(fetched.is_some(), "must be retrievable by ID");
@@ -54,7 +63,7 @@ fn issue_and_retrieve_cert_record() {
 #[test]
 fn find_cert_by_serial_normalizes_hex() {
     let dir = tmp();
-    let db  = dir.path().join("certs.json");
+    let db = dir.path().join("certs.json");
     let store = dir.path().join("certs");
     storage::ensure_certs_db(&db, &store).unwrap();
 
@@ -67,8 +76,15 @@ fn find_cert_by_serial_normalizes_hex() {
 
     // Uppercase + leading zeros stripped
     let r2 = storage::find_certificate_by_serial(&db, "00AbCd").unwrap();
-    assert!(r2.is_some(), "must find with mixed-case, leading-zero serial");
-    assert_eq!(r1.unwrap().id, r2.unwrap().id, "both queries must return same cert");
+    assert!(
+        r2.is_some(),
+        "must find with mixed-case, leading-zero serial"
+    );
+    assert_eq!(
+        r1.unwrap().id,
+        r2.unwrap().id,
+        "both queries must return same cert"
+    );
 
     // Bare normalized form
     let r3 = storage::find_certificate_by_serial(&db, "abcd").unwrap();
@@ -80,20 +96,28 @@ fn find_cert_by_serial_normalizes_hex() {
 #[test]
 fn revoke_cert_updates_stats() {
     let dir = tmp();
-    let db  = dir.path().join("certs.json");
+    let db = dir.path().join("certs.json");
     let store = dir.path().join("certs");
     storage::ensure_certs_db(&db, &store).unwrap();
 
-    storage::issue_certificate_record(&db, &store, dummy_cert_record("c1", "01"), DUMMY_CERT).unwrap();
-    storage::issue_certificate_record(&db, &store, dummy_cert_record("c2", "02"), DUMMY_CERT).unwrap();
+    storage::issue_certificate_record(&db, &store, dummy_cert_record("c1", "01"), DUMMY_CERT)
+        .unwrap();
+    storage::issue_certificate_record(&db, &store, dummy_cert_record("c2", "02"), DUMMY_CERT)
+        .unwrap();
 
     let (total, revoked, active) = storage::certificate_stats(&db).unwrap();
     assert_eq!((total, revoked, active), (2, 0, 2));
 
     let updated = storage::revoke_certificate(
-        &db, "c1", "tester", "keyCompromise",
-        Some("tester".to_string()), None, Some("api".to_string()),
-    ).unwrap();
+        &db,
+        "c1",
+        "tester",
+        "keyCompromise",
+        Some("tester".to_string()),
+        None,
+        Some("api".to_string()),
+    )
+    .unwrap();
     assert!(updated.is_some(), "revoke must return the updated record");
     let updated = updated.unwrap();
     assert!(updated.revoked, "revoked flag must be true");
@@ -134,16 +158,18 @@ fn ensure_dbs_initializes_empty_state() {
 #[test]
 fn list_certificate_records_returns_all() {
     let dir = tmp();
-    let db    = dir.path().join("certs.json");
+    let db = dir.path().join("certs.json");
     let store = dir.path().join("certs");
     storage::ensure_certs_db(&db, &store).unwrap();
 
     for i in 1u8..=3 {
         storage::issue_certificate_record(
-            &db, &store,
+            &db,
+            &store,
             dummy_cert_record(&format!("cert-{i}"), &format!("{i:02x}")),
             DUMMY_CERT,
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     let records = storage::list_certificate_records(&db).unwrap();

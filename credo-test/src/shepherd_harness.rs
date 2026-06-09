@@ -44,10 +44,10 @@ impl TestShepherd {
             identity_uri: Some("vigil://credo/node/corgi-01".to_string()),
             mtls: CorgiMtlsConfig {
                 cert_path: std::path::PathBuf::from("/dev/null"),
-                key_path:  std::path::PathBuf::from("/dev/null"),
+                key_path: std::path::PathBuf::from("/dev/null"),
                 ca_path: None,
                 bootstrap_cert_path: None,
-                bootstrap_key_path:  None,
+                bootstrap_key_path: None,
             },
             insecure_skip_verify: false,
         };
@@ -71,12 +71,11 @@ impl TestShepherd {
 
         let config = build_shepherd_config(&tmp);
 
-        let jwt_keys = shepherd::jwt::load_or_generate(&config.jwt_signing_key_path)
-            .context("JWT keys")?;
-        let accounts = shepherd::accounts::load_accounts(&config.accounts_path)
-            .context("accounts")?;
-        let cas = shepherd::cas::load_cas(&config.ca_config_path)
-            .context("CAs")?;
+        let jwt_keys =
+            shepherd::jwt::load_or_generate(&config.jwt_signing_key_path).context("JWT keys")?;
+        let accounts =
+            shepherd::accounts::load_accounts(&config.accounts_path).context("accounts")?;
+        let cas = shepherd::cas::load_cas(&config.ca_config_path).context("CAs")?;
 
         let state = AppState::new(config, jwt_keys, accounts, cas, None, None, None);
         let jwt_keys_arc = state.jwt_keys.clone();
@@ -104,15 +103,21 @@ impl TestShepherd {
         let (shutdown_agent_tx, shutdown_agent_rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
             axum::serve(agent_listener, agent_router)
-                .with_graceful_shutdown(async { let _ = shutdown_agent_rx.await; })
-                .await.ok();
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_agent_rx.await;
+                })
+                .await
+                .ok();
         });
 
         let (shutdown_dashboard_tx, shutdown_dashboard_rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
             axum::serve(dashboard_listener, dashboard_router)
-                .with_graceful_shutdown(async { let _ = shutdown_dashboard_rx.await; })
-                .await.ok();
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_dashboard_rx.await;
+                })
+                .await
+                .ok();
         });
 
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -132,8 +137,12 @@ impl TestShepherd {
         })
     }
 
-    pub fn agent_health_url(&self)     -> String { format!("{}/health", self.agent_url) }
-    pub fn dashboard_health_url(&self) -> String { format!("{}/health", self.dashboard_url) }
+    pub fn agent_health_url(&self) -> String {
+        format!("{}/health", self.agent_url)
+    }
+    pub fn dashboard_health_url(&self) -> String {
+        format!("{}/health", self.dashboard_url)
+    }
 }
 
 fn build_shepherd_config(tmp: &PathBuf) -> ShepherdConfig {
@@ -148,7 +157,7 @@ fn build_shepherd_config(tmp: &PathBuf) -> ShepherdConfig {
             key_path: tmp.join("tls.key"),
             client_ca_path: crate::fixtures::catrust_pem(),
             bootstrap_cert_path: None,
-            bootstrap_key_path:  None,
+            bootstrap_key_path: None,
         },
         jwt_signing_key_path: tmp.join("jwt.key"),
         corgis_config_path: tmp.join("shepherd.corgis.json"),

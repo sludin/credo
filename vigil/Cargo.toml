@@ -77,6 +77,12 @@ time = { version = "0.3", features = ["std"] }   # required by rcgen
 # .env file loading
 dotenvy = "0.15"
 
+# HTTP client (http-01 challenge validation)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# DNS resolver (dns-01 challenge validation)
+hickory-resolver = { version = "0.26", default-features = false, features = ["tokio"] }
+
 # Misc
 rand     = "0.8"
 uuid     = { version = "1", features = ["v4"] }

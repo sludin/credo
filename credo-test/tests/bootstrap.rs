@@ -25,17 +25,25 @@ async fn vigil_bootstrap_endpoint_inactive_by_default() {
         "shepherd.credo.test",
         &["shepherd.credo.test"],
         &["vigil://credo/service/shepherd"],
-    ).unwrap();
+    )
+    .unwrap();
 
-    let resp = vigil.client
+    let resp = vigil
+        .client
         .post(vigil.bootstrap_url())
         .json(&serde_json::json!({
             "secret": "deadbeefdeadbeef",
             "csr": csr_pem,
         }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
-    assert_eq!(resp.status(), 404, "bootstrap endpoint should be inactive without a secret");
+    assert_eq!(
+        resp.status(),
+        404,
+        "bootstrap endpoint should be inactive without a secret"
+    );
 }
 
 /// POST /bootstrap with the correct secret signs the CSR and returns cert+chain.
@@ -48,15 +56,19 @@ async fn vigil_bootstrap_success() {
         "shepherd.credo.test",
         &["shepherd.credo.test"],
         &["vigil://credo/service/shepherd"],
-    ).unwrap();
+    )
+    .unwrap();
 
-    let resp = vigil.client
+    let resp = vigil
+        .client
         .post(vigil.bootstrap_url())
         .json(&serde_json::json!({
             "secret": secret,
             "csr": csr_pem,
         }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200, "correct secret should succeed");
 
@@ -78,15 +90,19 @@ async fn vigil_bootstrap_wrong_secret_returns_403() {
         "shepherd.credo.test",
         &["shepherd.credo.test"],
         &["vigil://credo/service/shepherd"],
-    ).unwrap();
+    )
+    .unwrap();
 
-    let resp = vigil.client
+    let resp = vigil
+        .client
         .post(vigil.bootstrap_url())
         .json(&serde_json::json!({
             "secret": "0000000000000000000000000000000000000000000000000000000000000000",
             "csr": csr_pem,
         }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 403, "wrong secret must return 403");
 }
@@ -101,21 +117,32 @@ async fn vigil_bootstrap_wrong_secret_stays_open() {
         "shepherd.credo.test",
         &["shepherd.credo.test"],
         &["vigil://credo/service/shepherd"],
-    ).unwrap();
+    )
+    .unwrap();
 
     // Wrong secret — should not close the endpoint
-    let r1 = vigil.client
+    let r1 = vigil
+        .client
         .post(vigil.bootstrap_url())
         .json(&serde_json::json!({ "secret": "wrong", "csr": csr_pem }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r1.status(), 403);
 
     // Correct secret — should still work
-    let r2 = vigil.client
+    let r2 = vigil
+        .client
         .post(vigil.bootstrap_url())
         .json(&serde_json::json!({ "secret": secret, "csr": csr_pem }))
-        .send().await.unwrap();
-    assert_eq!(r2.status(), 200, "correct secret must still work after wrong-secret attempt");
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r2.status(),
+        200,
+        "correct secret must still work after wrong-secret attempt"
+    );
 }
 
 /// POST /bootstrap closes the endpoint after one successful call.
@@ -129,15 +156,32 @@ async fn vigil_bootstrap_endpoint_closes_after_success() {
         "shepherd.credo.test",
         &["shepherd.credo.test"],
         &["vigil://credo/service/shepherd"],
-    ).unwrap();
+    )
+    .unwrap();
 
     let body = serde_json::json!({ "secret": secret, "csr": csr_pem });
 
-    let r1 = vigil.client.post(vigil.bootstrap_url()).json(&body).send().await.unwrap();
+    let r1 = vigil
+        .client
+        .post(vigil.bootstrap_url())
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r1.status(), 200, "first call must succeed");
 
-    let r2 = vigil.client.post(vigil.bootstrap_url()).json(&body).send().await.unwrap();
-    assert_eq!(r2.status(), 404, "second call must get 404 — endpoint closed");
+    let r2 = vigil
+        .client
+        .post(vigil.bootstrap_url())
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r2.status(),
+        404,
+        "second call must get 404 — endpoint closed"
+    );
 }
 
 /// POST /bootstrap with a CSR that violates issuance policy returns 400.
@@ -147,16 +191,16 @@ async fn vigil_bootstrap_policy_violation_returns_400() {
     let secret = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
     let vigil = TestVigil::start_with_bootstrap(secret).await.unwrap();
 
-    let (csr_pem, _) = cert_gen::make_csr(
-        "attacker.evil.com",
-        &["attacker.evil.com"],
-        &[],
-    ).unwrap();
+    let (csr_pem, _) =
+        cert_gen::make_csr("attacker.evil.com", &["attacker.evil.com"], &[]).unwrap();
 
-    let resp = vigil.client
+    let resp = vigil
+        .client
         .post(vigil.bootstrap_url())
         .json(&serde_json::json!({ "secret": secret, "csr": csr_pem }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 400, "policy-violating CSR must return 400");
 }
@@ -171,12 +215,16 @@ async fn vigil_bootstrap_cert_is_signed_by_test_ca() {
         "shepherd.credo.test",
         &["shepherd.credo.test"],
         &["vigil://credo/service/shepherd"],
-    ).unwrap();
+    )
+    .unwrap();
 
-    let resp = vigil.client
+    let resp = vigil
+        .client
         .post(vigil.bootstrap_url())
         .json(&serde_json::json!({ "secret": secret, "csr": csr_pem }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
@@ -224,10 +272,13 @@ async fn corgi_bootstrap_csr_requires_token() {
 async fn corgi_bootstrap_csr_bad_token() {
     let bs = TestCorgiBootstrap::start().await.unwrap();
 
-    let resp = bs.client
+    let resp = bs
+        .client
         .get(bs.csr_url())
         .header("Authorization", "Bearer wrongtoken")
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 401);
 }
 
@@ -236,15 +287,21 @@ async fn corgi_bootstrap_csr_bad_token() {
 async fn corgi_bootstrap_csr_success() {
     let bs = TestCorgiBootstrap::start().await.unwrap();
 
-    let resp = bs.client
+    let resp = bs
+        .client
         .get(bs.csr_url())
         .header("Authorization", bs.auth_header())
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200);
 
     let body: Value = resp.json().await.unwrap();
     let csr = body["csrPem"].as_str().expect("csrPem must be present");
-    assert!(csr.contains("CERTIFICATE REQUEST"), "response must contain a CSR PEM");
+    assert!(
+        csr.contains("CERTIFICATE REQUEST"),
+        "response must contain a CSR PEM"
+    );
 }
 
 /// POST /bootstrap/ca without a token returns 401.
@@ -253,10 +310,13 @@ async fn corgi_bootstrap_ca_requires_token() {
     let bs = TestCorgiBootstrap::start().await.unwrap();
 
     let catrust = std::fs::read_to_string(credo_test::fixtures::catrust_pem()).unwrap();
-    let resp = bs.client
+    let resp = bs
+        .client
         .post(bs.ca_url())
         .json(&serde_json::json!({ "caPem": catrust }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 401);
 }
 
@@ -266,11 +326,14 @@ async fn corgi_bootstrap_ca_installs_ca() {
     let bs = TestCorgiBootstrap::start().await.unwrap();
 
     let catrust = std::fs::read_to_string(credo_test::fixtures::catrust_pem()).unwrap();
-    let resp = bs.client
+    let resp = bs
+        .client
         .post(bs.ca_url())
         .header("Authorization", bs.auth_header())
         .json(&serde_json::json!({ "caPem": catrust }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200);
 
     let body: Value = resp.json().await.unwrap();
@@ -292,15 +355,23 @@ async fn corgi_bootstrap_cert_without_csr_first_returns_400() {
         &["vigil://credo/node/corgi-01"],
         1,
         bs.dir.path(),
-    ).unwrap();
+    )
+    .unwrap();
 
-    let resp = bs.client
+    let resp = bs
+        .client
         .post(bs.cert_url())
         .header("Authorization", bs.auth_header())
         .json(&serde_json::json!({ "certPem": cert_pem }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
-    assert_eq!(resp.status(), 400, "cert install without prior CSR/key must fail");
+    assert_eq!(
+        resp.status(),
+        400,
+        "cert install without prior CSR/key must fail"
+    );
 }
 
 /// POST /bootstrap/finalize without a token returns 401.
@@ -317,17 +388,23 @@ async fn corgi_bootstrap_finalize_requires_token() {
 async fn corgi_bootstrap_finalize_returns_done() {
     let mut bs = TestCorgiBootstrap::start().await.unwrap();
 
-    let resp = bs.client
+    let resp = bs
+        .client
         .post(bs.finalize_url())
         .header("Authorization", bs.auth_header())
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200);
 
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["done"].as_bool(), Some(true));
 
     // The done channel should have fired
-    assert!(bs.wait_for_finalize().await, "done channel must fire after finalize");
+    assert!(
+        bs.wait_for_finalize().await,
+        "done channel must fire after finalize"
+    );
 }
 
 /// Full corgi bootstrap sequence: csr → ca → cert → finalize.
@@ -339,11 +416,16 @@ async fn corgi_bootstrap_full_sequence() {
     let tmp = bs.dir.path().to_path_buf();
 
     // Step 1: GET /bootstrap/csr — generates key on disk, returns CSR PEM
-    let csr_resp: Value = bs.client
+    let csr_resp: Value = bs
+        .client
         .get(bs.csr_url())
         .header("Authorization", bs.auth_header())
-        .send().await.unwrap()
-        .json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let csr_pem = csr_resp["csrPem"].as_str().expect("csrPem present");
 
     // Sign the CSR with the test intermediate CA (direct call, no vigil server needed)
@@ -351,16 +433,26 @@ async fn corgi_bootstrap_full_sequence() {
 
     // Step 2: POST /bootstrap/ca — install the trust bundle
     let catrust = std::fs::read_to_string(credo_test::fixtures::catrust_pem()).unwrap();
-    let ca_resp: Value = bs.client
+    let ca_resp: Value = bs
+        .client
         .post(bs.ca_url())
         .header("Authorization", bs.auth_header())
         .json(&serde_json::json!({ "caPem": catrust }))
-        .send().await.unwrap()
-        .json().await.unwrap();
-    assert_eq!(ca_resp["installed"].as_bool(), Some(true), "CA install must succeed");
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        ca_resp["installed"].as_bool(),
+        Some(true),
+        "CA install must succeed"
+    );
 
     // Step 3: POST /bootstrap/cert — install the signed certificate with all three fields
-    let cert_resp = bs.client
+    let cert_resp = bs
+        .client
         .post(bs.cert_url())
         .header("Authorization", bs.auth_header())
         .json(&serde_json::json!({
@@ -368,19 +460,29 @@ async fn corgi_bootstrap_full_sequence() {
             "chainPem":     signed.chain_pem,
             "fullchainPem": signed.fullchain_pem,
         }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(cert_resp.status(), 200, "cert install must succeed");
 
     let cert_body: Value = cert_resp.json().await.unwrap();
     assert_eq!(cert_body["installed"].as_bool(), Some(true));
-    assert!(cert_body["fingerprint256"].is_string(), "fingerprint256 must be returned");
+    assert!(
+        cert_body["fingerprint256"].is_string(),
+        "fingerprint256 must be returned"
+    );
 
     // Step 4: POST /bootstrap/finalize — signal enrollment complete
-    let fin_resp: Value = bs.client
+    let fin_resp: Value = bs
+        .client
         .post(bs.finalize_url())
         .header("Authorization", bs.auth_header())
-        .send().await.unwrap()
-        .json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(fin_resp["done"].as_bool(), Some(true));
 
     assert!(bs.wait_for_finalize().await, "done channel must fire");
@@ -396,23 +498,50 @@ async fn corgi_bootstrap_full_sequence() {
     // certstore/live/<common_name>/fullchain.pem        (symlink → archive)
     // certstore/live/<common_name>/privkey.pem          (symlink → archive)
     let certstore = tmp.join("certstore");
-    let archive   = certstore.join("archive").join(CORGI_COMMON_NAME);
-    let live      = certstore.join("live").join(CORGI_COMMON_NAME);
+    let archive = certstore.join("archive").join(CORGI_COMMON_NAME);
+    let live = certstore.join("live").join(CORGI_COMMON_NAME);
 
-    assert!(archive.join("cert-001.pem").is_file(),      "cert archive must exist as regular file");
-    assert!(archive.join("chain-001.pem").is_file(),     "chain archive must exist as regular file");
-    assert!(archive.join("fullchain-001.pem").is_file(), "fullchain archive must exist as regular file");
-    assert!(archive.join("privkey-001.pem").is_file(),   "key archive must exist as regular file");
+    assert!(
+        archive.join("cert-001.pem").is_file(),
+        "cert archive must exist as regular file"
+    );
+    assert!(
+        archive.join("chain-001.pem").is_file(),
+        "chain archive must exist as regular file"
+    );
+    assert!(
+        archive.join("fullchain-001.pem").is_file(),
+        "fullchain archive must exist as regular file"
+    );
+    assert!(
+        archive.join("privkey-001.pem").is_file(),
+        "key archive must exist as regular file"
+    );
 
-    assert!(live.join("cert.pem").is_symlink(),      "live/cert.pem must be a symlink");
-    assert!(live.join("chain.pem").is_symlink(),     "live/chain.pem must be a symlink");
-    assert!(live.join("fullchain.pem").is_symlink(), "live/fullchain.pem must be a symlink");
-    assert!(live.join("privkey.pem").is_symlink(),   "live/privkey.pem must be a symlink");
+    assert!(
+        live.join("cert.pem").is_symlink(),
+        "live/cert.pem must be a symlink"
+    );
+    assert!(
+        live.join("chain.pem").is_symlink(),
+        "live/chain.pem must be a symlink"
+    );
+    assert!(
+        live.join("fullchain.pem").is_symlink(),
+        "live/fullchain.pem must be a symlink"
+    );
+    assert!(
+        live.join("privkey.pem").is_symlink(),
+        "live/privkey.pem must be a symlink"
+    );
 
     // The live cert symlink must resolve to a valid PEM certificate signed by the test CA.
     let live_cert_pem = std::fs::read_to_string(live.join("cert.pem"))
         .expect("live/cert.pem must be readable through symlink");
-    assert!(live_cert_pem.contains("BEGIN CERTIFICATE"), "live cert must be valid PEM");
+    assert!(
+        live_cert_pem.contains("BEGIN CERTIFICATE"),
+        "live cert must be valid PEM"
+    );
 
     let issuer = cert_issuer(&live_cert_pem);
     assert!(
@@ -436,20 +565,34 @@ async fn shepherd_gets_cert_from_vigil_bootstrap() {
         "shepherd.credo.test",
         &["shepherd.credo.test"],
         &["vigil://credo/service/shepherd"],
-    ).unwrap();
+    )
+    .unwrap();
 
-    let resp = vigil.client
+    let resp = vigil
+        .client
         .post(vigil.bootstrap_url())
         .json(&serde_json::json!({ "secret": secret, "csr": csr_pem }))
-        .send().await.unwrap();
-    assert_eq!(resp.status(), 200, "shepherd must get cert from vigil bootstrap");
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "shepherd must get cert from vigil bootstrap"
+    );
 
     let body: Value = resp.json().await.unwrap();
     let cert_pem = body["cert"].as_str().expect("cert field present");
     let chain_pem = body["chain"].as_str().expect("chain field present");
 
-    assert!(cert_pem.contains("BEGIN CERTIFICATE"),  "cert must be valid PEM");
-    assert!(chain_pem.contains("BEGIN CERTIFICATE"), "chain must be valid PEM");
+    assert!(
+        cert_pem.contains("BEGIN CERTIFICATE"),
+        "cert must be valid PEM"
+    );
+    assert!(
+        chain_pem.contains("BEGIN CERTIFICATE"),
+        "chain must be valid PEM"
+    );
 
     // Cert must be signed by the test intermediate CA
     let issuer = cert_issuer(cert_pem);
@@ -465,11 +608,18 @@ async fn shepherd_gets_cert_from_vigil_bootstrap() {
     );
 
     // Vigil bootstrap closes after one successful use
-    let closed = vigil.client
+    let closed = vigil
+        .client
         .post(vigil.bootstrap_url())
         .json(&serde_json::json!({ "secret": secret, "csr": csr_pem }))
-        .send().await.unwrap();
-    assert_eq!(closed.status(), 404, "vigil bootstrap must be closed after shepherd enrolled");
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        closed.status(),
+        404,
+        "vigil bootstrap must be closed after shepherd enrolled"
+    );
 }
 
 /// Full 5-step bootstrap ceremony: vigil → shepherd → corgi.
@@ -505,19 +655,28 @@ async fn full_stack_bootstrap_ceremony() {
         "shepherd.credo.test",
         &["shepherd.credo.test"],
         &["vigil://credo/service/shepherd"],
-    ).unwrap();
+    )
+    .unwrap();
 
-    let shepherd_resp: Value = vigil.client
+    let shepherd_resp: Value = vigil
+        .client
         .post(vigil.bootstrap_url())
         .json(&serde_json::json!({ "secret": vigil_secret, "csr": shepherd_csr }))
-        .send().await.unwrap()
-        .json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
 
     let shepherd_cert = shepherd_resp["cert"].as_str().expect("shepherd cert field");
     let shepherd_chain = shepherd_resp["chain"].as_str().unwrap_or("");
     let shepherd_fullchain = format!("{}{}", shepherd_cert, shepherd_chain);
 
-    assert!(shepherd_cert.contains("BEGIN CERTIFICATE"), "shepherd cert must be PEM");
+    assert!(
+        shepherd_cert.contains("BEGIN CERTIFICATE"),
+        "shepherd cert must be PEM"
+    );
     assert!(
         cert_has_uri_san(shepherd_cert, "vigil://credo/service/shepherd"),
         "shepherd cert must carry its identity URI SAN"
@@ -531,24 +690,38 @@ async fn full_stack_bootstrap_ceremony() {
     std::fs::write(shepherd_live.join("privkey.pem"), &shepherd_key).unwrap();
 
     // Vigil bootstrap is now closed (one-shot).
-    let closed_check = vigil.client
+    let closed_check = vigil
+        .client
         .post(vigil.bootstrap_url())
         .json(&serde_json::json!({ "secret": vigil_secret, "csr": shepherd_csr }))
-        .send().await.unwrap();
-    assert_eq!(closed_check.status(), 404, "vigil bootstrap must close after shepherd enrolled");
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        closed_check.status(),
+        404,
+        "vigil bootstrap must close after shepherd enrolled"
+    );
 
     // === Phase 2: Corgi starts in bootstrap mode using the shared certstore ===
-    let mut corgi = TestCorgiBootstrap::start_with_cert_store(certstore.clone()).await.unwrap();
+    let mut corgi = TestCorgiBootstrap::start_with_cert_store(certstore.clone())
+        .await
+        .unwrap();
     let signing_tmp = corgi.dir.path().to_path_buf();
 
     // === Phase 3: Shepherd coordinates corgi enrollment ===
 
     // 3a: Fetch corgi's CSR
-    let csr_body: Value = corgi.client
+    let csr_body: Value = corgi
+        .client
         .get(corgi.csr_url())
         .header("Authorization", corgi.auth_header())
-        .send().await.unwrap()
-        .json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let corgi_csr = csr_body["csrPem"].as_str().expect("csrPem");
 
     // 3b: Sign CSR (shepherd calls vigil's /certificates/sign in production;
@@ -557,16 +730,26 @@ async fn full_stack_bootstrap_ceremony() {
 
     // 3c: Push trust bundle to corgi
     let catrust = std::fs::read_to_string(credo_test::fixtures::catrust_pem()).unwrap();
-    let ca_resp: Value = corgi.client
+    let ca_resp: Value = corgi
+        .client
         .post(corgi.ca_url())
         .header("Authorization", corgi.auth_header())
         .json(&serde_json::json!({ "caPem": catrust }))
-        .send().await.unwrap()
-        .json().await.unwrap();
-    assert_eq!(ca_resp["installed"].as_bool(), Some(true), "CA install must succeed");
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        ca_resp["installed"].as_bool(),
+        Some(true),
+        "CA install must succeed"
+    );
 
     // 3d: Install signed cert on corgi — send cert, chain, and fullchain separately
-    let cert_resp: Value = corgi.client
+    let cert_resp: Value = corgi
+        .client
         .post(corgi.cert_url())
         .header("Authorization", corgi.auth_header())
         .json(&serde_json::json!({
@@ -574,55 +757,105 @@ async fn full_stack_bootstrap_ceremony() {
             "chainPem":     signed.chain_pem,
             "fullchainPem": signed.fullchain_pem,
         }))
-        .send().await.unwrap()
-        .json().await.unwrap();
-    assert_eq!(cert_resp["installed"].as_bool(), Some(true), "corgi cert install must succeed");
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        cert_resp["installed"].as_bool(),
+        Some(true),
+        "corgi cert install must succeed"
+    );
 
     // 3e: Finalize
-    let fin: Value = corgi.client
+    let fin: Value = corgi
+        .client
         .post(corgi.finalize_url())
         .header("Authorization", corgi.auth_header())
-        .send().await.unwrap()
-        .json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(fin["done"].as_bool(), Some(true));
     assert!(corgi.wait_for_finalize().await, "done channel must fire");
 
     // === Verify shared certstore — production bootstrap state ===
 
     // Shepherd's entry: regular files (direct write by cmd_bootstrap_server_start)
-    assert!(shepherd_live.join("fullchain.pem").is_file(),
-        "shepherd fullchain must be a regular file (direct write)");
-    assert!(shepherd_live.join("privkey.pem").is_file(),
-        "shepherd privkey must be a regular file (direct write)");
+    assert!(
+        shepherd_live.join("fullchain.pem").is_file(),
+        "shepherd fullchain must be a regular file (direct write)"
+    );
+    assert!(
+        shepherd_live.join("privkey.pem").is_file(),
+        "shepherd privkey must be a regular file (direct write)"
+    );
 
-    let shepherd_cert_on_disk = std::fs::read_to_string(shepherd_live.join("fullchain.pem")).unwrap();
-    assert!(cert_issuer(&shepherd_cert_on_disk).contains("Credo Test Intermediate CA"),
-        "shepherd cert must be signed by test CA");
+    let shepherd_cert_on_disk =
+        std::fs::read_to_string(shepherd_live.join("fullchain.pem")).unwrap();
+    assert!(
+        cert_issuer(&shepherd_cert_on_disk).contains("Credo Test Intermediate CA"),
+        "shepherd cert must be signed by test CA"
+    );
 
     // Corgi's entry: archive + live symlinks, all in the common_name directory (not "node-identity")
     let archive = certstore.join("archive").join(CORGI_COMMON_NAME);
-    let live    = certstore.join("live").join(CORGI_COMMON_NAME);
+    let live = certstore.join("live").join(CORGI_COMMON_NAME);
 
-    assert!(archive.join("cert-001.pem").is_file(),      "corgi cert archive must exist");
-    assert!(archive.join("chain-001.pem").is_file(),     "corgi chain archive must exist");
-    assert!(archive.join("fullchain-001.pem").is_file(), "corgi fullchain archive must exist");
-    assert!(archive.join("privkey-001.pem").is_file(),   "corgi key archive must exist");
+    assert!(
+        archive.join("cert-001.pem").is_file(),
+        "corgi cert archive must exist"
+    );
+    assert!(
+        archive.join("chain-001.pem").is_file(),
+        "corgi chain archive must exist"
+    );
+    assert!(
+        archive.join("fullchain-001.pem").is_file(),
+        "corgi fullchain archive must exist"
+    );
+    assert!(
+        archive.join("privkey-001.pem").is_file(),
+        "corgi key archive must exist"
+    );
 
-    assert!(live.join("cert.pem").is_symlink(),      "live/cert.pem must be a symlink");
-    assert!(live.join("chain.pem").is_symlink(),     "live/chain.pem must be a symlink");
-    assert!(live.join("fullchain.pem").is_symlink(), "live/fullchain.pem must be a symlink");
-    assert!(live.join("privkey.pem").is_symlink(),   "live/privkey.pem must be a symlink");
+    assert!(
+        live.join("cert.pem").is_symlink(),
+        "live/cert.pem must be a symlink"
+    );
+    assert!(
+        live.join("chain.pem").is_symlink(),
+        "live/chain.pem must be a symlink"
+    );
+    assert!(
+        live.join("fullchain.pem").is_symlink(),
+        "live/fullchain.pem must be a symlink"
+    );
+    assert!(
+        live.join("privkey.pem").is_symlink(),
+        "live/privkey.pem must be a symlink"
+    );
 
     let corgi_live_cert = std::fs::read_to_string(live.join("cert.pem")).unwrap();
     let issuer = cert_issuer(&corgi_live_cert);
-    assert!(issuer.contains("Credo Test Intermediate CA"),
-        "corgi cert must be signed by test CA, got: {issuer}");
-    assert!(cert_has_uri_san(&corgi_live_cert, "vigil://credo/node/corgi-01"),
-        "corgi cert must carry node identity URI SAN");
+    assert!(
+        issuer.contains("Credo Test Intermediate CA"),
+        "corgi cert must be signed by test CA, got: {issuer}"
+    );
+    assert!(
+        cert_has_uri_san(&corgi_live_cert, "vigil://credo/node/corgi-01"),
+        "corgi cert must carry node identity URI SAN"
+    );
 
     // vigil.credo.test/ intentionally absent — it appears only after assignment sync (Phase 5).
-    assert!(!certstore.join("live/vigil.credo.test").exists(),
-        "vigil cert must not exist yet — appears only after assignment sync");
+    assert!(
+        !certstore.join("live/vigil.credo.test").exists(),
+        "vigil cert must not exist yet — appears only after assignment sync"
+    );
 }
 
 // ============================================================================
@@ -638,11 +871,16 @@ async fn bootstrap_cert_live_dir_uses_common_name_not_node_identity() {
     let certstore = bs.dir.path().join("certstore");
 
     // Generate key + CSR
-    let csr_resp: Value = bs.client
+    let csr_resp: Value = bs
+        .client
         .get(bs.csr_url())
         .header("Authorization", bs.auth_header())
-        .send().await.unwrap()
-        .json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let csr_pem = csr_resp["csrPem"].as_str().unwrap();
 
     let signed = cert_gen::sign_csr_with_test_ca(csr_pem, 1, bs.dir.path()).unwrap();
@@ -655,22 +893,32 @@ async fn bootstrap_cert_live_dir_uses_common_name_not_node_identity() {
             "chainPem":     signed.chain_pem,
             "fullchainPem": signed.fullchain_pem,
         }))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     let live_common = certstore.join("live").join(CORGI_COMMON_NAME);
     let live_node_id = certstore.join("live/node-identity");
 
     // The correct directory must contain all three live symlinks
-    assert!(live_common.join("cert.pem").exists(),
-        "cert.pem must be in live/<common_name>/, not node-identity/");
-    assert!(live_common.join("fullchain.pem").exists(),
-        "fullchain.pem must be in live/<common_name>/");
-    assert!(live_common.join("privkey.pem").exists(),
-        "privkey.pem must be in live/<common_name>/");
+    assert!(
+        live_common.join("cert.pem").exists(),
+        "cert.pem must be in live/<common_name>/, not node-identity/"
+    );
+    assert!(
+        live_common.join("fullchain.pem").exists(),
+        "fullchain.pem must be in live/<common_name>/"
+    );
+    assert!(
+        live_common.join("privkey.pem").exists(),
+        "privkey.pem must be in live/<common_name>/"
+    );
 
     // The old node-identity directory must not be created
-    assert!(!live_node_id.exists(),
-        "live/node-identity/ must not be created — archive uses common_name");
+    assert!(
+        !live_node_id.exists(),
+        "live/node-identity/ must not be created — archive uses common_name"
+    );
 }
 
 /// Bug: when chainPem was omitted from the bootstrap cert request, no chain.pem
@@ -682,17 +930,26 @@ async fn bootstrap_cert_creates_chain_archive_and_symlink() {
     let bs = TestCorgiBootstrap::start().await.unwrap();
     let certstore = bs.dir.path().join("certstore");
 
-    let csr_resp: Value = bs.client
+    let csr_resp: Value = bs
+        .client
         .get(bs.csr_url())
         .header("Authorization", bs.auth_header())
-        .send().await.unwrap()
-        .json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     let csr_pem = csr_resp["csrPem"].as_str().unwrap();
 
     let signed = cert_gen::sign_csr_with_test_ca(csr_pem, 1, bs.dir.path()).unwrap();
-    assert!(!signed.chain_pem.is_empty(), "test CA must produce a non-empty chain");
+    assert!(
+        !signed.chain_pem.is_empty(),
+        "test CA must produce a non-empty chain"
+    );
 
-    let resp: Value = bs.client
+    let resp: Value = bs
+        .client
         .post(bs.cert_url())
         .header("Authorization", bs.auth_header())
         .json(&serde_json::json!({
@@ -700,23 +957,33 @@ async fn bootstrap_cert_creates_chain_archive_and_symlink() {
             "chainPem":     signed.chain_pem,
             "fullchainPem": signed.fullchain_pem,
         }))
-        .send().await.unwrap()
-        .json().await.unwrap();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(resp["installed"].as_bool(), Some(true));
 
     let archive = certstore.join("archive").join(CORGI_COMMON_NAME);
-    let live    = certstore.join("live").join(CORGI_COMMON_NAME);
+    let live = certstore.join("live").join(CORGI_COMMON_NAME);
 
-    assert!(archive.join("chain-001.pem").is_file(),
-        "chain-001.pem must exist in archive when chainPem is provided");
-    assert!(live.join("chain.pem").is_symlink(),
-        "live/chain.pem must be a symlink into the archive");
+    assert!(
+        archive.join("chain-001.pem").is_file(),
+        "chain-001.pem must exist in archive when chainPem is provided"
+    );
+    assert!(
+        live.join("chain.pem").is_symlink(),
+        "live/chain.pem must be a symlink into the archive"
+    );
 
     // Symlink must resolve and contain valid PEM
     let chain_content = std::fs::read_to_string(live.join("chain.pem"))
         .expect("live/chain.pem must be readable through symlink");
-    assert!(chain_content.contains("BEGIN CERTIFICATE"),
-        "chain.pem must contain at least one PEM certificate");
+    assert!(
+        chain_content.contains("BEGIN CERTIFICATE"),
+        "chain.pem must contain at least one PEM certificate"
+    );
 }
 
 /// Bug: when a local cert existed but Shepherd had no fingerprint, the sync loop
@@ -736,12 +1003,15 @@ fn cert_days_remaining_flags_near_expiry_bootstrap_cert() {
     params.subject_alt_names = vec![SanType::DnsName("bootstrap.credo.test".to_string())];
     let now = time::OffsetDateTime::now_utc();
     params.not_before = now;
-    params.not_after  = now + time::Duration::days(1);
+    params.not_after = now + time::Duration::days(1);
     let cert = Certificate::from_params(params).unwrap();
     std::fs::write(&cert_path, cert.serialize_pem().unwrap()).unwrap();
 
     let days = cert_days_remaining(&cert_path).expect("must read 1-day cert");
-    assert!(days < 30, "1-day cert must be flagged as near-expiry (got {days} days remaining)");
+    assert!(
+        days < 30,
+        "1-day cert must be flagged as near-expiry (got {days} days remaining)"
+    );
     assert!(days >= 0, "cert must not be reported as already expired");
 
     // Also verify a long-lived cert is not flagged
@@ -749,13 +1019,15 @@ fn cert_days_remaining_flags_near_expiry_bootstrap_cert() {
     let mut params2 = CertificateParams::default();
     params2.subject_alt_names = vec![SanType::DnsName("long.credo.test".to_string())];
     params2.not_before = now;
-    params2.not_after  = now + time::Duration::days(365);
+    params2.not_after = now + time::Duration::days(365);
     let cert2 = Certificate::from_params(params2).unwrap();
     std::fs::write(&long_path, cert2.serialize_pem().unwrap()).unwrap();
 
     let long_days = cert_days_remaining(&long_path).expect("must read 365-day cert");
-    assert!(long_days >= 30,
-        "365-day cert must not be flagged as near-expiry (got {long_days} days remaining)");
+    assert!(
+        long_days >= 30,
+        "365-day cert must not be flagged as near-expiry (got {long_days} days remaining)"
+    );
 }
 
 // ============================================================================
@@ -775,14 +1047,17 @@ fn cert_issuer(cert_pem: &str) -> String {
 fn cert_has_uri_san(cert_pem: &str, expected_uri: &str) -> bool {
     use x509_parser::extensions::GeneralName;
     let der = pem_to_der(cert_pem);
-    let Ok((_, cert)) = x509_parser::parse_x509_certificate(&der) else { return false; };
+    let Ok((_, cert)) = x509_parser::parse_x509_certificate(&der) else {
+        return false;
+    };
     cert.subject_alternative_name()
         .ok()
         .flatten()
         .map(|san| {
-            san.value.general_names.iter().any(|n| {
-                matches!(n, GeneralName::URI(u) if *u == expected_uri)
-            })
+            san.value
+                .general_names
+                .iter()
+                .any(|n| matches!(n, GeneralName::URI(u) if *u == expected_uri))
         })
         .unwrap_or(false)
 }

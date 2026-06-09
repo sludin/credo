@@ -93,7 +93,10 @@ pub fn generate_crl(
             serial_number: r.serial_number.clone(),
             subject: r.subject.clone(),
             revoked_at: r.revoked_at.clone().unwrap_or_else(|| generated_at.clone()),
-            revoke_reason: r.revoke_reason.clone().unwrap_or_else(|| "unspecified".to_string()),
+            revoke_reason: r
+                .revoke_reason
+                .clone()
+                .unwrap_or_else(|| "unspecified".to_string()),
         })
         .collect();
 

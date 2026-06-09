@@ -50,7 +50,9 @@ impl AcmeAccountCache {
 
         let creds_path = credentials_path(&config.account_key_path);
 
-        let identity_override = self.identity.as_deref()
+        let identity_override = self
+            .identity
+            .as_deref()
             .map(|(c, k)| (c.as_slice(), k.as_slice()));
 
         let account = if creds_path.exists() {
@@ -87,15 +89,18 @@ impl AcmeAccountCache {
             )
             .await
             .with_context(|| {
-                format!("Creating ACME account for CA '{ca_name}' at {}", config.directory_url)
+                format!(
+                    "Creating ACME account for CA '{ca_name}' at {}",
+                    config.directory_url
+                )
             })?;
 
             // Persist credentials as JSON
             if let Some(parent) = creds_path.parent() {
                 std::fs::create_dir_all(parent).ok();
             }
-            let creds_json = serde_json::to_string_pretty(&creds)
-                .context("Serializing ACME credentials")?;
+            let creds_json =
+                serde_json::to_string_pretty(&creds).context("Serializing ACME credentials")?;
             std::fs::write(&creds_path, creds_json)
                 .with_context(|| format!("Writing ACME credentials: {}", creds_path.display()))?;
             tracing::info!(ca = %ca_name, path = %creds_path.display(), "ACME account credentials saved");
@@ -103,7 +108,10 @@ impl AcmeAccountCache {
             account
         };
 
-        self.inner.lock().unwrap().insert(cache_key, account.clone());
+        self.inner
+            .lock()
+            .unwrap()
+            .insert(cache_key, account.clone());
         Ok(account)
     }
 }
@@ -115,7 +123,8 @@ impl AcmeAccountCache {
 /// Credentials are stored alongside the configured key path with an .acme.json suffix.
 fn credentials_path(account_key_path: &std::path::Path) -> std::path::PathBuf {
     let mut p = account_key_path.to_path_buf();
-    let name = p.file_name()
+    let name = p
+        .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("account")
         .to_string();
@@ -124,16 +133,15 @@ fn credentials_path(account_key_path: &std::path::Path) -> std::path::PathBuf {
 }
 
 fn build_eab(config: &AcmeCaConfig) -> Result<Option<ExternalAccountKey>> {
-    let Some(eab) = &config.eab else { return Ok(None) };
+    let Some(eab) = &config.eab else {
+        return Ok(None);
+    };
     let key_bytes = base64::engine::Engine::decode(
         &base64::engine::general_purpose::URL_SAFE_NO_PAD,
         &eab.hmac_key,
     )
     .or_else(|_| {
-        base64::engine::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            &eab.hmac_key,
-        )
+        base64::engine::Engine::decode(&base64::engine::general_purpose::STANDARD, &eab.hmac_key)
     })
     .with_context(|| format!("Decoding EAB HMAC key (expected base64url)"))?;
     Ok(Some(ExternalAccountKey::new(eab.kid.clone(), &key_bytes)))
@@ -186,12 +194,20 @@ fn build_instant_acme_client(
                         }
                         identity_override.map(|(c, k)| (c.to_vec(), k.to_vec()))
                     }
-                    (Err(e), _) => return Err(anyhow::anyhow!(
-                        "Reading ACME client cert {}: {}", cert_path.display(), e
-                    )),
-                    (_, Err(e)) => return Err(anyhow::anyhow!(
-                        "Reading ACME client key {}: {}", key_path.display(), e
-                    )),
+                    (Err(e), _) => {
+                        return Err(anyhow::anyhow!(
+                            "Reading ACME client cert {}: {}",
+                            cert_path.display(),
+                            e
+                        ))
+                    }
+                    (_, Err(e)) => {
+                        return Err(anyhow::anyhow!(
+                            "Reading ACME client key {}: {}",
+                            key_path.display(),
+                            e
+                        ))
+                    }
                 }
             }
             _ => identity_override.map(|(c, k)| (c.to_vec(), k.to_vec())),

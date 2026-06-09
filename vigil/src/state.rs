@@ -1,6 +1,6 @@
+use arc_swap::ArcSwap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use arc_swap::ArcSwap;
 use tokio::sync::{Mutex, RwLock};
 
 use crate::config::VigilConfig;
@@ -38,7 +38,11 @@ pub struct StateInner {
 }
 
 impl AppState {
-    pub fn new(config: VigilConfig, ca_metadata: RootCAMetadata, bootstrap_secret: Option<String>) -> Self {
+    pub fn new(
+        config: VigilConfig,
+        ca_metadata: RootCAMetadata,
+        bootstrap_secret: Option<String>,
+    ) -> Self {
         AppState {
             config: Arc::new(ArcSwap::from_pointee(config)),
             inner: Arc::new(StateInner {

@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::config::{FlockEntry, CorgiConfig};
+use crate::config::{CorgiConfig, FlockEntry};
 use crate::state::AppState;
 use crate::types::{AssignmentsCacheFile, ManagedAssignment};
 
@@ -32,7 +32,9 @@ pub fn merge_assignments(
             (live.join("fullchain.pem"), live.join("privkey.pem"))
         };
 
-        let hooks = config.cert_hooks.get(name)
+        let hooks = config
+            .cert_hooks
+            .get(name)
             .cloned()
             .unwrap_or_else(|| config.default_hooks.clone());
 
@@ -49,17 +51,31 @@ pub fn merge_assignments(
             csr_subject: assignment.csr_subject.clone(),
             identity_uri: assignment.identity_uri.clone(),
             sans: assignment.sans.clone(),
-            cert_mode: assignment.cert_mode.as_deref().and_then(parse_mode)
+            cert_mode: assignment
+                .cert_mode
+                .as_deref()
+                .and_then(parse_mode)
                 .or(config.file_policy.cert_mode),
-            key_mode: assignment.key_mode.as_deref().and_then(parse_mode)
+            key_mode: assignment
+                .key_mode
+                .as_deref()
+                .and_then(parse_mode)
                 .or(config.file_policy.key_mode),
-            cert_owner: assignment.cert_owner.clone()
+            cert_owner: assignment
+                .cert_owner
+                .clone()
                 .or_else(|| config.file_policy.owner.clone()),
-            cert_group: assignment.cert_group.clone()
+            cert_group: assignment
+                .cert_group
+                .clone()
                 .or_else(|| config.file_policy.group.clone()),
-            key_owner: assignment.key_owner.clone()
+            key_owner: assignment
+                .key_owner
+                .clone()
                 .or_else(|| config.file_policy.owner.clone()),
-            key_group: assignment.key_group.clone()
+            key_group: assignment
+                .key_group
+                .clone()
                 .or_else(|| config.file_policy.group.clone()),
         };
 

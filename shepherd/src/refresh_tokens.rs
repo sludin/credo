@@ -97,9 +97,13 @@ impl RefreshTokenStore {
     }
 
     async fn persist(&self) -> Result<()> {
-        let Some(ref path) = self.store_path else { return Ok(()) };
+        let Some(ref path) = self.store_path else {
+            return Ok(());
+        };
         let tokens = self.tokens.read().await;
-        let file = TokenFile { tokens: tokens.clone() };
+        let file = TokenFile {
+            tokens: tokens.clone(),
+        };
         drop(tokens);
         let content = serde_json::to_string_pretty(&file).context("Serializing refresh tokens")?;
         std::fs::write(path, content)
@@ -118,5 +122,9 @@ fn load_from_disk(path: &PathBuf) -> Result<HashMap<String, RefreshTokenEntry>> 
 
     // Prune expired
     let now = Utc::now().timestamp();
-    Ok(file.tokens.into_iter().filter(|(_, e)| e.expires_at > now).collect())
+    Ok(file
+        .tokens
+        .into_iter()
+        .filter(|(_, e)| e.expires_at > now)
+        .collect())
 }

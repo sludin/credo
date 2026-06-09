@@ -107,6 +107,14 @@ Clients that can access Vigil's mTLS-protected endpoints (all non-ACME routes). 
 
 Note: Vigil also validates all mTLS clients against `usersDbPath`. A client must have a matching `active: true` entry in the users registry regardless of `rbacIdentities`.
 
+## ACME Challenge Validation
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `allowNoneValidation` | bool | `false` | Allow the `none-01` pseudo-challenge method, which auto-approves any challenge without external verification. **Never enable in production.** Vigil emits a `WARN` log at startup when this flag is true. |
+
+When `allowNoneValidation` is `false` (the default), Shepherd must use `"dns-01"` or `"http-01"` validation for all certificate assignments targeting this Vigil instance. Vigil will reject any challenge submitted via `none-01` with an `unauthorized` error.
+
 ## Logging
 
 | Field | Type | Default | Description |

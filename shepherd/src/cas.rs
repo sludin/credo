@@ -4,7 +4,9 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::types::{AcmeCaConfig, AcmeTlsConfig, CaConfig, ExternalAccountBinding, ValidationMethodConfig};
+use crate::types::{
+    AcmeCaConfig, AcmeTlsConfig, CaConfig, ExternalAccountBinding, ValidationMethodConfig,
+};
 
 // ---------------------------------------------------------------------------
 // Raw JSON shapes for shepherd.ca.json
@@ -87,8 +89,8 @@ pub fn load_cas(path: &Path) -> Result<HashMap<String, CaConfig>> {
 
     let mut out = HashMap::new();
     for (name, entry) in file.cas {
-        let ca = parse_ca_entry(&name, entry, base)
-            .with_context(|| format!("Parsing CA '{name}'"))?;
+        let ca =
+            parse_ca_entry(&name, entry, base).with_context(|| format!("Parsing CA '{name}'"))?;
         out.insert(name, ca);
     }
     Ok(out)
@@ -96,7 +98,11 @@ pub fn load_cas(path: &Path) -> Result<HashMap<String, CaConfig>> {
 
 fn parse_ca_entry(name: &str, entry: RawCaEntry, base: &Path) -> Result<CaConfig> {
     if entry.protocol != "acme" {
-        anyhow::bail!("CA '{}' uses unsupported protocol '{}'", name, entry.protocol);
+        anyhow::bail!(
+            "CA '{}' uses unsupported protocol '{}'",
+            name,
+            entry.protocol
+        );
     }
 
     let raw: RawAcmeConfig = serde_json::from_value(entry.config)
@@ -104,42 +110,67 @@ fn parse_ca_entry(name: &str, entry: RawCaEntry, base: &Path) -> Result<CaConfig
 
     let resolve = |s: &str| -> PathBuf {
         let p = Path::new(s);
-        if p.is_absolute() { p.to_path_buf() } else { base.join(p) }
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            base.join(p)
+        }
     };
 
     // TLS: nested block takes priority over flat fields
     let tls = {
-        let cert_path = raw.tls.as_ref().and_then(|t| t.cert_path.as_deref())
+        let cert_path = raw
+            .tls
+            .as_ref()
+            .and_then(|t| t.cert_path.as_deref())
             .or(raw.tls_cert.as_deref())
             .map(resolve);
-        let key_path = raw.tls.as_ref().and_then(|t| t.key_path.as_deref())
+        let key_path = raw
+            .tls
+            .as_ref()
+            .and_then(|t| t.key_path.as_deref())
             .or(raw.tls_key.as_deref())
             .map(resolve);
-        let ca_path = raw.tls.as_ref().and_then(|t| t.ca_path.as_deref())
+        let ca_path = raw
+            .tls
+            .as_ref()
+            .and_then(|t| t.ca_path.as_deref())
             .or(raw.ca_path.as_deref())
             .or(raw.ca.as_deref())
             .map(resolve);
         if cert_path.is_some() || key_path.is_some() || ca_path.is_some() {
-            Some(AcmeTlsConfig { cert_path, key_path, ca_path })
+            Some(AcmeTlsConfig {
+                cert_path,
+                key_path,
+                ca_path,
+            })
         } else {
             None
         }
     };
 
-    let validation: HashMap<String, ValidationMethodConfig> = raw.validation
+    let validation: HashMap<String, ValidationMethodConfig> = raw
+        .validation
         .unwrap_or_default()
         .into_iter()
-        .map(|(k, v)| (k, ValidationMethodConfig {
-            provider: v.provider,
-            provider_config: v.provider_config,
-            propagation_delay_seconds: v.propagation_delay_seconds,
-        }))
+        .map(|(k, v)| {
+            (
+                k,
+                ValidationMethodConfig {
+                    provider: v.provider,
+                    provider_config: v.provider_config,
+                    propagation_delay_seconds: v.propagation_delay_seconds,
+                },
+            )
+        })
         .collect();
 
-    let supported_validations = raw.supported_validations
+    let supported_validations = raw
+        .supported_validations
         .unwrap_or_else(|| vec!["none-01".into(), "dns-01".into(), "http-01".into()]);
 
-    let default_validation = raw.default_validation
+    let default_validation = raw
+        .default_validation
         .or_else(|| supported_validations.first().cloned())
         .unwrap_or_else(|| "dns-01".into());
 
@@ -153,10 +184,12 @@ fn parse_ca_entry(name: &str, entry: RawCaEntry, base: &Path) -> Result<CaConfig
             account_key_path: resolve(&raw.account_key_path),
             renew_before_days: raw.renew_before_days,
             days: raw.days,
-            eab: raw.external_account_binding.map(|e| ExternalAccountBinding {
-                kid: e.kid,
-                hmac_key: e.hmac_key,
-            }),
+            eab: raw
+                .external_account_binding
+                .map(|e| ExternalAccountBinding {
+                    kid: e.kid,
+                    hmac_key: e.hmac_key,
+                }),
             validation,
             supported_validations,
             default_validation,

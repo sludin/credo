@@ -1,7 +1,5 @@
 use anyhow::{Context, Result};
-use instant_acme::{
-    AuthorizationStatus, ChallengeType, Identifier, NewOrder, Order, OrderStatus,
-};
+use instant_acme::{AuthorizationStatus, ChallengeType, Identifier, NewOrder, Order, OrderStatus};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
@@ -54,7 +52,9 @@ pub async fn issue_cert(
         .with_context(|| format!("Getting ACME account for CA '{ca_name}'"))?;
 
     let validation_method = resolve_validation_method(ca_config, assignment);
-    let force_revalidate = assignment.validation.as_ref()
+    let force_revalidate = assignment
+        .validation
+        .as_ref()
         .map(|v| v.force_revalidate)
         .unwrap_or(false);
 
@@ -81,8 +81,15 @@ pub async fn issue_cert(
         .and_then(|e| e.fingerprint256);
     let changed = current_fp.as_deref() != Some(&fingerprint);
 
-    persist_issued_material(cert_store_dir, cert_name, &cert_pem, &chain_pem, &fullchain_pem, None)
-        .with_context(|| format!("Persisting cert material for '{cert_name}'"))?;
+    persist_issued_material(
+        cert_store_dir,
+        cert_name,
+        &cert_pem,
+        &chain_pem,
+        &fullchain_pem,
+        None,
+    )
+    .with_context(|| format!("Persisting cert material for '{cert_name}'"))?;
 
     tracing::info!(cert = %cert_name, ca = %ca_name, changed = %changed, fp = %fingerprint, "Cert issued and stored");
 
@@ -113,10 +120,7 @@ async fn run_issuance(
     pool: &Arc<RwLock<CorgiClientPool>>,
     corgis: &[CorgiNodeConfig],
 ) -> Result<String> {
-    let identifiers: Vec<Identifier> = domains
-        .iter()
-        .map(|d| Identifier::Dns(d.clone()))
-        .collect();
+    let identifiers: Vec<Identifier> = domains.iter().map(|d| Identifier::Dns(d.clone())).collect();
 
     tracing::info!(
         cert = %cert_name, ca = %ca_name,
@@ -125,15 +129,22 @@ async fn run_issuance(
     );
 
     let mut order = account
-        .new_order(&NewOrder { identifiers: &identifiers })
+        .new_order(&NewOrder {
+            identifiers: &identifiers,
+        })
         .await
         .context("Creating ACME order")?;
 
-    let authorizations = order.authorizations().await.context("Fetching ACME authorizations")?;
+    let authorizations = order
+        .authorizations()
+        .await
+        .context("Fetching ACME authorizations")?;
     tracing::debug!(cert = %cert_name, count = authorizations.len(), "ACME authorizations loaded");
 
     // DNS cleanups deferred until after cert is issued
-    let mut deferred_cleanups: Vec<Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>> = vec![];
+    let mut deferred_cleanups: Vec<
+        Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>,
+    > = vec![];
 
     for authz in &authorizations {
         let domain = match &authz.identifier {
@@ -151,10 +162,9 @@ async fn run_issuance(
             _ => {}
         }
 
-        let challenge = find_challenge(&authz.challenges, validation_method)
-            .ok_or_else(|| anyhow::anyhow!(
-                "No '{validation_method}' challenge offered for '{domain}'"
-            ))?;
+        let challenge = find_challenge(&authz.challenges, validation_method).ok_or_else(|| {
+            anyhow::anyhow!("No '{validation_method}' challenge offered for '{domain}'")
+        })?;
 
         tracing::info!(
             cert = %cert_name, domain = %domain, method = %validation_method,
@@ -193,11 +203,14 @@ async fn run_issuance(
                 };
 
                 tracing::info!(cert = %cert_name, domain = %domain, record = %record_name, "Creating DNS TXT record");
-                provider.create(&ctx).await
+                provider
+                    .create(&ctx)
+                    .await
                     .with_context(|| format!("Creating DNS TXT for '{domain}'"))?;
 
                 // Verify propagation at authoritative nameservers
-                verify_dns_propagation(cert_name, domain, &record_name, &dns_value).await
+                verify_dns_propagation(cert_name, domain, &record_name, &dns_value)
+                    .await
                     .with_context(|| format!("DNS propagation check for '{domain}'"))?;
                 tracing::info!(cert = %cert_name, domain = %domain, "DNS propagation verified");
 
@@ -228,18 +241,26 @@ async fn run_issuance(
             ChallengeType::Http01 => {
                 let key_auth = order.key_authorization(challenge);
                 let token = &challenge.token;
-                let corgi_name = assignment.corgi.as_deref()
-                    .ok_or_else(|| anyhow::anyhow!("http-01 for '{cert_name}' requires a corgi assignment"))?;
-                let node = corgis.iter()
+                let corgi_name = assignment.corgi.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("http-01 for '{cert_name}' requires a corgi assignment")
+                })?;
+                let node = corgis
+                    .iter()
                     .find(|c| c.name == corgi_name)
                     .ok_or_else(|| anyhow::anyhow!("Corgi '{corgi_name}' not found in config"))?;
 
-                corgi_post::<serde_json::Value>(pool, node, "/acme-challenges", &serde_json::json!({
-                    "token": token,
-                    "response": key_auth.as_str(),
-                    "domain": domain,
-                })).await
-                    .with_context(|| format!("Publishing HTTP-01 challenge for '{domain}'"))?;
+                corgi_post::<serde_json::Value>(
+                    pool,
+                    node,
+                    "/acme-challenges",
+                    &serde_json::json!({
+                        "token": token,
+                        "response": key_auth.as_str(),
+                        "domain": domain,
+                    }),
+                )
+                .await
+                .with_context(|| format!("Publishing HTTP-01 challenge for '{domain}'"))?;
 
                 let cleanup_pool = pool.clone();
                 let cleanup_node = node.clone();
@@ -249,8 +270,12 @@ async fn run_issuance(
                         let path = format!("/acme-challenges/{}", urlencoded(&cleanup_token));
                         // DELETE via corgi — best-effort
                         let _ = corgi_post::<serde_json::Value>(
-                            &cleanup_pool, &cleanup_node, &path, &serde_json::json!({}),
-                        ).await;
+                            &cleanup_pool,
+                            &cleanup_node,
+                            &path,
+                            &serde_json::json!({}),
+                        )
+                        .await;
                     })
                 }));
             }
@@ -261,7 +286,9 @@ async fn run_issuance(
             }
         }
 
-        order.set_challenge_ready(&challenge.url).await
+        order
+            .set_challenge_ready(&challenge.url)
+            .await
             .with_context(|| format!("Submitting challenge ready for '{domain}'"))?;
     }
 
@@ -273,7 +300,10 @@ async fn run_issuance(
 
     // Finalize with CSR
     tracing::info!(cert = %cert_name, ca = %ca_name, "Finalizing ACME order");
-    order.finalize(csr_der).await.context("Finalizing ACME order")?;
+    order
+        .finalize(csr_der)
+        .await
+        .context("Finalizing ACME order")?;
 
     // Get certificate (poll until available)
     let cert_chain = wait_for_certificate(cert_name, ca_name, &mut order).await?;
@@ -310,11 +340,7 @@ async fn wait_for_order_ready(
     anyhow::bail!("Timeout waiting for ACME order to become ready for '{cert_name}'")
 }
 
-async fn wait_for_certificate(
-    cert_name: &str,
-    ca_name: &str,
-    order: &mut Order,
-) -> Result<String> {
+async fn wait_for_certificate(cert_name: &str, ca_name: &str, order: &mut Order) -> Result<String> {
     for attempt in 1..=30u32 {
         if let Some(cert) = order.certificate().await.context("Fetching certificate")? {
             return Ok(cert);
@@ -345,7 +371,9 @@ async fn verify_dns_propagation(
     let resolver = TokioResolver::builder_with_config(
         ResolverConfig::default(),
         hickory_resolver::net::runtime::TokioRuntimeProvider::new(),
-    ).build().context("Building DNS resolver")?;
+    )
+    .build()
+    .context("Building DNS resolver")?;
 
     // Walk up labels to find authoritative NS
     let ns_names = resolve_authoritative_ns(&resolver, record_name).await;
@@ -360,12 +388,20 @@ async fn verify_dns_propagation(
     for ns in &ns_names {
         if let Ok(r) = resolver.ipv4_lookup(ns.as_str()).await {
             ns_ips.extend(r.answers().iter().filter_map(|rec| {
-                if let RData::A(a) = &rec.data { Some(std::net::IpAddr::V4(a.0)) } else { None }
+                if let RData::A(a) = &rec.data {
+                    Some(std::net::IpAddr::V4(a.0))
+                } else {
+                    None
+                }
             }));
         }
         if let Ok(r) = resolver.ipv6_lookup(ns.as_str()).await {
             ns_ips.extend(r.answers().iter().filter_map(|rec| {
-                if let RData::AAAA(aaaa) = &rec.data { Some(std::net::IpAddr::V6(aaaa.0)) } else { None }
+                if let RData::AAAA(aaaa) = &rec.data {
+                    Some(std::net::IpAddr::V6(aaaa.0))
+                } else {
+                    None
+                }
             }));
         }
     }
@@ -380,23 +416,28 @@ async fn verify_dns_propagation(
     for attempt in 1..=100u32 {
         let mut all_ok = true;
         for &ip in &ns_ips {
-            let ns_cfg = ResolverConfig::from_parts(
-                None, vec![],
-                vec![NameServerConfig::udp_and_tcp(ip)],
-            );
+            let ns_cfg =
+                ResolverConfig::from_parts(None, vec![], vec![NameServerConfig::udp_and_tcp(ip)]);
             let ns_resolver = match TokioResolver::builder_with_config(
                 ns_cfg,
                 hickory_resolver::net::runtime::TokioRuntimeProvider::new(),
-            ).build() {
+            )
+            .build()
+            {
                 Ok(r) => r,
-                Err(_) => { all_ok = false; continue; }
+                Err(_) => {
+                    all_ok = false;
+                    continue;
+                }
             };
             match ns_resolver.txt_lookup(record_name).await {
                 Ok(records) => {
                     let found = records.answers().iter().any(|rec| {
                         if let RData::TXT(txt) = &rec.data {
                             txt.txt_data.iter().any(|d| {
-                                std::str::from_utf8(d).map(|s| s == expected_txt).unwrap_or(false)
+                                std::str::from_utf8(d)
+                                    .map(|s| s == expected_txt)
+                                    .unwrap_or(false)
                             })
                         } else {
                             false
@@ -406,7 +447,9 @@ async fn verify_dns_propagation(
                         all_ok = false;
                     }
                 }
-                Err(_) => { all_ok = false; }
+                Err(_) => {
+                    all_ok = false;
+                }
             }
         }
         if all_ok {
@@ -429,7 +472,8 @@ async fn resolve_authoritative_ns(
     for i in 0..parts.len().saturating_sub(1) {
         let zone = parts[i..].join(".");
         if let Ok(ns_lookup) = resolver.ns_lookup(zone.as_str()).await {
-            let names: Vec<String> = ns_lookup.answers()
+            let names: Vec<String> = ns_lookup
+                .answers()
                 .iter()
                 .filter_map(|r| {
                     if let RData::NS(ns) = &r.data {
@@ -462,7 +506,10 @@ pub fn split_cert_chain(chain_pem: &str) -> (String, String, String) {
     }
 
     let leaf = certs[0].trim().to_string() + "\n";
-    let chain: String = certs[1..].iter().map(|s| s.trim().to_string() + "\n").collect();
+    let chain: String = certs[1..]
+        .iter()
+        .map(|s| s.trim().to_string() + "\n")
+        .collect();
     let fullchain = format!("{leaf}{chain}");
     (leaf, chain, fullchain)
 }
@@ -491,7 +538,11 @@ pub fn leaf_fingerprint(cert_pem: &str) -> Result<String> {
 // ---------------------------------------------------------------------------
 
 fn resolve_validation_method(config: &AcmeCaConfig, assignment: &ManagedAssignment) -> String {
-    if let Some(method) = assignment.validation.as_ref().and_then(|v| v.validation_type.as_deref()) {
+    if let Some(method) = assignment
+        .validation
+        .as_ref()
+        .and_then(|v| v.validation_type.as_deref())
+    {
         if method != "auto" {
             return method.to_string();
         }
@@ -523,7 +574,11 @@ fn resolve_dns_validation_config(
     }
 
     let provider = assignment_override
-        .and_then(|o| o.get("provider").and_then(|v| v.as_str()).map(str::to_string))
+        .and_then(|o| {
+            o.get("provider")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
         .or_else(|| ca_defaults.and_then(|d| d.provider.clone()));
 
     let provider_config = assignment_override
@@ -534,7 +589,11 @@ fn resolve_dns_validation_config(
         .and_then(|o| o.get("propagationDelaySeconds").and_then(|v| v.as_u64()))
         .or_else(|| ca_defaults.and_then(|d| d.propagation_delay_seconds));
 
-    Some(DnsValidationConfig { provider, provider_config, propagation_delay_seconds })
+    Some(DnsValidationConfig {
+        provider,
+        provider_config,
+        propagation_delay_seconds,
+    })
 }
 
 fn find_challenge<'a>(
@@ -543,10 +602,14 @@ fn find_challenge<'a>(
 ) -> Option<&'a instant_acme::Challenge> {
     match method {
         "dns-01" => challenges.iter().find(|c| c.r#type == ChallengeType::Dns01),
-        "http-01" => challenges.iter().find(|c| c.r#type == ChallengeType::Http01),
+        "http-01" => challenges
+            .iter()
+            .find(|c| c.r#type == ChallengeType::Http01),
         // none-01 or other vigil-style: skip unrecognised challenge types that
         // the server may include (e.g. dns-persist-01).
-        _ => challenges.iter().find(|c| c.r#type != ChallengeType::Unknown),
+        _ => challenges
+            .iter()
+            .find(|c| c.r#type != ChallengeType::Unknown),
     }
 }
 
@@ -557,15 +620,19 @@ fn find_challenge<'a>(
 fn pem_to_csr_der(pem: &str) -> Option<Vec<u8>> {
     use rustls_pemfile::Item;
     let mut reader = std::io::BufReader::new(pem.as_bytes());
-    rustls_pemfile::read_one(&mut reader).ok()?.and_then(|item| match item {
-        Item::Csr(der) => Some(der.to_vec()),
-        _ => None,
-    })
+    rustls_pemfile::read_one(&mut reader)
+        .ok()?
+        .and_then(|item| match item {
+            Item::Csr(der) => Some(der.to_vec()),
+            _ => None,
+        })
 }
 
 fn urlencoded(s: &str) -> String {
-    s.chars().map(|c| match c {
-        'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
-        _ => format!("%{:02X}", c as u8),
-    }).collect()
+    s.chars()
+        .map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+            _ => format!("%{:02X}", c as u8),
+        })
+        .collect()
 }

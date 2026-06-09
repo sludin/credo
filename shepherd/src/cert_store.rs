@@ -90,7 +90,7 @@ pub fn persist_issued_material(
     key_pem: Option<&str>,
 ) -> Result<()> {
     let archive_dir = store_dir.join("archive").join(cert_name);
-    let live_dir    = store_dir.join("live").join(cert_name);
+    let live_dir = store_dir.join("live").join(cert_name);
     std::fs::create_dir_all(&archive_dir).context("Creating archive dir")?;
     std::fs::create_dir_all(&live_dir).context("Creating live dir")?;
 
@@ -98,18 +98,17 @@ pub fn persist_issued_material(
 
     let write = |name: &str, content: &str| -> Result<std::path::PathBuf> {
         let p = archive_dir.join(name);
-        std::fs::write(&p, content)
-            .with_context(|| format!("Writing {}", p.display()))?;
+        std::fs::write(&p, content).with_context(|| format!("Writing {}", p.display()))?;
         Ok(p)
     };
 
-    let cert_arc     = write(&format!("cert-{ordinal:04}.pem"), cert_pem)?;
-    let chain_arc    = write(&format!("chain-{ordinal:04}.pem"), chain_pem)?;
-    let full_arc     = write(&format!("fullchain-{ordinal:04}.pem"), fullchain_pem)?;
+    let cert_arc = write(&format!("cert-{ordinal:04}.pem"), cert_pem)?;
+    let chain_arc = write(&format!("chain-{ordinal:04}.pem"), chain_pem)?;
+    let full_arc = write(&format!("fullchain-{ordinal:04}.pem"), fullchain_pem)?;
 
-    replace_symlink(&cert_arc,  &live_dir.join("cert.pem"))?;
+    replace_symlink(&cert_arc, &live_dir.join("cert.pem"))?;
     replace_symlink(&chain_arc, &live_dir.join("chain.pem"))?;
-    replace_symlink(&full_arc,  &live_dir.join("fullchain.pem"))?;
+    replace_symlink(&full_arc, &live_dir.join("fullchain.pem"))?;
 
     if let Some(key) = key_pem {
         let key_arc = write(&format!("privkey-{ordinal:04}.pem"), key)?;
@@ -126,10 +125,12 @@ pub fn persist_issued_material(
 fn pem_der(pem: &str) -> Option<Vec<u8>> {
     use rustls_pemfile::Item;
     let mut reader = std::io::BufReader::new(pem.as_bytes());
-    rustls_pemfile::read_one(&mut reader).ok()?.and_then(|item| match item {
-        Item::X509Certificate(der) => Some(der.to_vec()),
-        _ => None,
-    })
+    rustls_pemfile::read_one(&mut reader)
+        .ok()?
+        .and_then(|item| match item {
+            Item::X509Certificate(der) => Some(der.to_vec()),
+            _ => None,
+        })
 }
 
 fn next_ordinal(archive_dir: &Path) -> u32 {

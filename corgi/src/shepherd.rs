@@ -15,8 +15,8 @@ pub fn build_shepherd_client(config: &CorgiConfig) -> Result<Client> {
     if let Some(ca_path) = &config.mtls.ca_path {
         let ca_pem = std::fs::read(ca_path)
             .with_context(|| format!("Reading Shepherd CA: {}", ca_path.display()))?;
-        let ca_cert = reqwest::tls::Certificate::from_pem(&ca_pem)
-            .context("Parsing Shepherd CA cert")?;
+        let ca_cert =
+            reqwest::tls::Certificate::from_pem(&ca_pem).context("Parsing Shepherd CA cert")?;
         builder = builder.add_root_certificate(ca_cert);
     } else {
         // No CA configured — skip server cert verification (mirrors Node.js rejectUnauthorized: false)
@@ -31,8 +31,7 @@ pub fn build_shepherd_client(config: &CorgiConfig) -> Result<Client> {
         .with_context(|| format!("Reading mTLS key: {}", config.mtls.key_path.display()))?;
     combined.extend_from_slice(&key_pem);
 
-    let identity = reqwest::Identity::from_pem(&combined)
-        .context("Building mTLS identity")?;
+    let identity = reqwest::Identity::from_pem(&combined).context("Building mTLS identity")?;
     builder = builder.identity(identity);
 
     Ok(builder.build().context("Building reqwest client")?)
@@ -118,8 +117,18 @@ impl ShepherdClient {
     /// POST /agents/:id/renew/:name — submit a CSR for async re-issuance.
     /// Shepherd issues the cert from the provided CSR and pushes it to corgi
     /// via /flock/<name>/install when done.
-    pub async fn request_renew(&self, corgi_id: &str, cert_name: &str, csr_pem: &str) -> Result<()> {
-        let url = format!("{}/agents/{}/renew/{}", self.base_url, corgi_id, urlencoded(cert_name));
+    pub async fn request_renew(
+        &self,
+        corgi_id: &str,
+        cert_name: &str,
+        csr_pem: &str,
+    ) -> Result<()> {
+        let url = format!(
+            "{}/agents/{}/renew/{}",
+            self.base_url,
+            corgi_id,
+            urlencoded(cert_name)
+        );
         let resp = self
             .client
             .post(&url)

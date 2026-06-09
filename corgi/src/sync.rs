@@ -2,7 +2,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::archive::pending_key_path;
 use crate::assignments::{load_assignments_cache, merge_assignments, save_assignments_cache};
-use crate::cert_ops::{cert_days_remaining, generate_key_and_csr, install_certificate, read_cert_fingerprint};
+use crate::cert_ops::{
+    cert_days_remaining, generate_key_and_csr, install_certificate, read_cert_fingerprint,
+};
 use crate::hooks::run_hooks;
 use crate::shepherd::ShepherdClient;
 use crate::state::AppState;
@@ -49,9 +51,7 @@ pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
 
     // Reconcile each cert
     for assignment in &assignments {
-        let entry = active_flock
-            .iter()
-            .find(|e| e.name == assignment.cert_name);
+        let entry = active_flock.iter().find(|e| e.name == assignment.cert_name);
 
         let entry = match entry {
             Some(e) => e,
@@ -103,7 +103,10 @@ pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
         }
 
         // Fetch cert material
-        let cert_response = match client.get_cert(&config.node_id, &assignment.cert_name).await {
+        let cert_response = match client
+            .get_cert(&config.node_id, &assignment.cert_name)
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(
@@ -125,14 +128,19 @@ pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
         //
         // If a pending key already exists (written by a prior flock_csr call) a CSR is
         // in flight; proceed with the install so install_to_archive can pick it up.
-        let key_is_archived = entry.key_path
+        let key_is_archived = entry
+            .key_path
             .symlink_metadata()
             .map(|m| m.file_type().is_symlink())
             .unwrap_or(false);
         let pending = pending_key_path(&config.cert_store_dir, &assignment.cert_name);
         if cert_response.key_pem.is_none() && !key_is_archived && !pending.exists() {
             let csr_req = CsrRequest {
-                sans: if assignment.sans.is_empty() { None } else { Some(assignment.sans.clone()) },
+                sans: if assignment.sans.is_empty() {
+                    None
+                } else {
+                    Some(assignment.sans.clone())
+                },
                 common_name: assignment.domain.clone(),
                 identity_uri: assignment.identity_uri.clone(),
                 csr_subject: assignment.csr_subject.clone(),
@@ -143,7 +151,10 @@ pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
                         cert_name = %assignment.cert_name,
                         "No key on disk — generated key+CSR, requesting re-issue from Shepherd"
                     );
-                    if let Err(e) = client.request_renew(&config.node_id, &assignment.cert_name, &csr_pem).await {
+                    if let Err(e) = client
+                        .request_renew(&config.node_id, &assignment.cert_name, &csr_pem)
+                        .await
+                    {
                         tracing::warn!(
                             cert_name = %assignment.cert_name,
                             error = %e,
@@ -214,7 +225,10 @@ pub async fn run_sync_loop(state: AppState) {
         return;
     }
 
-    tracing::info!(interval_seconds = config.shepherd_sync.interval_seconds, "Starting Shepherd sync loop");
+    tracing::info!(
+        interval_seconds = config.shepherd_sync.interval_seconds,
+        "Starting Shepherd sync loop"
+    );
 
     // Load from cache immediately before first sync
     if let Some(cached) = load_assignments_cache(&config) {
@@ -225,7 +239,8 @@ pub async fn run_sync_loop(state: AppState) {
         *stored = cached;
     }
 
-    let mut ticker = tokio::time::interval(Duration::from_secs(config.shepherd_sync.interval_seconds));
+    let mut ticker =
+        tokio::time::interval(Duration::from_secs(config.shepherd_sync.interval_seconds));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {

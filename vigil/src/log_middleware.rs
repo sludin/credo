@@ -27,7 +27,10 @@ pub async fn log_middleware(req: Request, next: Next) -> Response {
     let response = next.run(req).await;
     let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
     let status = response.status().as_u16();
-    let identity = response.extensions().get::<LogIdentity>().map(|i| i.0.clone());
+    let identity = response
+        .extensions()
+        .get::<LogIdentity>()
+        .map(|i| i.0.clone());
 
     RequestLogEntry {
         code: "V",

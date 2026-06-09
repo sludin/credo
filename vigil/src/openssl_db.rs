@@ -10,7 +10,11 @@ use std::path::{Path, PathBuf};
 
 fn normalize_serial(serial: &str) -> String {
     let s = serial.trim().to_uppercase().replace(' ', "");
-    if s.len() % 2 == 0 { s } else { format!("0{}", s) }
+    if s.len() % 2 == 0 {
+        s
+    } else {
+        format!("0{}", s)
+    }
 }
 
 fn to_openssl_date(iso: &str) -> String {
@@ -50,11 +54,19 @@ pub fn read_and_increment_serial(ca_dir: &Path) -> Result<String> {
 pub fn write_new_cert(ca_dir: &Path, serial_hex: &str, cert_pem: &str) -> Result<()> {
     let new_certs_dir = ca_dir.join("newcerts");
     std::fs::create_dir_all(&new_certs_dir)?;
-    std::fs::write(new_certs_dir.join(format!("{}.pem", normalize_serial(serial_hex))), cert_pem)?;
+    std::fs::write(
+        new_certs_dir.join(format!("{}.pem", normalize_serial(serial_hex))),
+        cert_pem,
+    )?;
     Ok(())
 }
 
-pub fn append_valid_entry(ca_dir: &Path, serial_hex: &str, expiry_date: &str, subject: &str) -> Result<()> {
+pub fn append_valid_entry(
+    ca_dir: &Path,
+    serial_hex: &str,
+    expiry_date: &str,
+    subject: &str,
+) -> Result<()> {
     let index_file = ca_dir.join("index.txt");
     let line = format!(
         "V\t{}\t\t{}\tunknown\t{}\n",
@@ -63,7 +75,10 @@ pub fn append_valid_entry(ca_dir: &Path, serial_hex: &str, expiry_date: &str, su
         to_openssl_subject(subject),
     );
     use std::io::Write;
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(index_file)?;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(index_file)?;
     f.write_all(line.as_bytes())?;
     Ok(())
 }

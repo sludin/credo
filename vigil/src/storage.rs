@@ -29,7 +29,11 @@ struct CertificatesDb {
 
 fn normalize_serial(s: &str) -> String {
     let n = s.trim().trim_start_matches('0').to_lowercase();
-    if n.is_empty() { "0".to_string() } else { n }
+    if n.is_empty() {
+        "0".to_string()
+    } else {
+        n
+    }
 }
 
 fn ensure_parent(path: &Path) -> Result<()> {
@@ -44,18 +48,16 @@ fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> Result<T> {
     if !path.exists() {
         return Ok(T::default());
     }
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("Reading {}", path.display()))?;
-    serde_json::from_str(&content)
-        .with_context(|| format!("Parsing {}", path.display()))
+    let content =
+        std::fs::read_to_string(path).with_context(|| format!("Reading {}", path.display()))?;
+    serde_json::from_str(&content).with_context(|| format!("Parsing {}", path.display()))
 }
 
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     ensure_parent(path)?;
     let json = serde_json::to_string_pretty(value)? + "\n";
     let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, &json)
-        .with_context(|| format!("Writing {}", tmp.display()))?;
+    std::fs::write(&tmp, &json).with_context(|| format!("Writing {}", tmp.display()))?;
     std::fs::rename(&tmp, path)
         .with_context(|| format!("Renaming {} to {}", tmp.display(), path.display()))
 }
@@ -109,9 +111,15 @@ pub fn add_user(path: &Path, user: VigilUser) -> Result<VigilUser> {
     Ok(created)
 }
 
-pub fn find_active_user_by_fingerprint(path: &Path, fingerprint: &str) -> Result<Option<VigilUser>> {
+pub fn find_active_user_by_fingerprint(
+    path: &Path,
+    fingerprint: &str,
+) -> Result<Option<VigilUser>> {
     let db = read_users_db(path)?;
-    Ok(db.users.into_iter().find(|u| u.active && u.public_key_fingerprint256 == fingerprint))
+    Ok(db
+        .users
+        .into_iter()
+        .find(|u| u.active && u.public_key_fingerprint256 == fingerprint))
 }
 
 // ---------------------------------------------------------------------------
@@ -135,7 +143,9 @@ fn read_certs_db(path: &Path) -> Result<CertificatesDb> {
     let raw: serde_json::Value = serde_json::from_str(&content)?;
     if raw.is_array() {
         let certs: Vec<CertificateRecord> = serde_json::from_value(raw)?;
-        return Ok(CertificatesDb { certificates: certs });
+        return Ok(CertificatesDb {
+            certificates: certs,
+        });
     }
     Ok(serde_json::from_value(raw)?)
 }
@@ -170,10 +180,16 @@ pub fn list_certificate_records(db_path: &Path) -> Result<Vec<CertificateRecord>
     Ok(read_certs_db(db_path)?.certificates)
 }
 
-pub fn find_certificate_by_serial(db_path: &Path, serial: &str) -> Result<Option<CertificateRecord>> {
+pub fn find_certificate_by_serial(
+    db_path: &Path,
+    serial: &str,
+) -> Result<Option<CertificateRecord>> {
     let wanted = normalize_serial(serial);
     let db = read_certs_db(db_path)?;
-    Ok(db.certificates.into_iter().find(|c| normalize_serial(&c.serial_number) == wanted))
+    Ok(db
+        .certificates
+        .into_iter()
+        .find(|c| normalize_serial(&c.serial_number) == wanted))
 }
 
 pub fn read_certificate_pem(cert_path: &str) -> Option<String> {
@@ -191,7 +207,9 @@ pub fn revoke_certificate(
 ) -> Result<Option<CertificateRecord>> {
     let mut db = read_certs_db(db_path)?;
     let pos = db.certificates.iter().position(|c| c.id == cert_id);
-    let Some(idx) = pos else { return Ok(None); };
+    let Some(idx) = pos else {
+        return Ok(None);
+    };
 
     if db.certificates[idx].revoked {
         return Ok(Some(db.certificates[idx].clone()));
@@ -246,7 +264,9 @@ pub fn read_acme_accounts(path: &Path) -> Result<Vec<AcmeAccountRecord>> {
 }
 
 pub fn write_acme_accounts(path: &Path, accounts: &[AcmeAccountRecord]) -> Result<()> {
-    let db = AcmeAccountsDb { accounts: accounts.to_vec() };
+    let db = AcmeAccountsDb {
+        accounts: accounts.to_vec(),
+    };
     write_json(path, &db)
 }
 

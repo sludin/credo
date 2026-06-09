@@ -32,7 +32,9 @@ pub async fn handle_bootstrap(
 
     let expected = match &*secret_guard {
         None => {
-            return Err(AppError::NotFound("Bootstrap endpoint is not available.".to_string()));
+            return Err(AppError::NotFound(
+                "Bootstrap endpoint is not available.".to_string(),
+            ));
         }
         Some(s) => s.clone(),
     };
@@ -40,7 +42,8 @@ pub async fn handle_bootstrap(
     // Timing-safe comparison
     let provided = hex::decode(body.secret.trim()).unwrap_or_default();
     let expected_bytes = hex::decode(&expected).unwrap_or_default();
-    let equal: bool = subtle::ConstantTimeEq::ct_eq(provided.as_slice(), expected_bytes.as_slice()).into();
+    let equal: bool =
+        subtle::ConstantTimeEq::ct_eq(provided.as_slice(), expected_bytes.as_slice()).into();
 
     if !equal {
         tracing::warn!("Bootstrap: attempt rejected — invalid secret");
@@ -59,8 +62,17 @@ pub async fn handle_bootstrap(
     validate_issuance_policy(&csr_pem, &extra_sans, &state.config().issuance_policy)
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
 
-    let signed = sign_csr(&csr_pem, 1, if extra_sans.is_empty() { None } else { Some(&extra_sans) }, &state.config())
-        .map_err(|e| AppError::Internal(e))?;
+    let signed = sign_csr(
+        &csr_pem,
+        1,
+        if extra_sans.is_empty() {
+            None
+        } else {
+            Some(&extra_sans)
+        },
+        &state.config(),
+    )
+    .map_err(|e| AppError::Internal(e))?;
 
     // Deactivate after first successful use
     *secret_guard = None;

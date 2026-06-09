@@ -42,9 +42,8 @@ pub async fn auth_middleware(
         ));
     };
 
-    let identity = credo_lib::auth::identity_from_der(&der).map_err(|e| {
-        AppError::Unauthorized(format!("Invalid client certificate: {}", e))
-    })?;
+    let identity = credo_lib::auth::identity_from_der(&der)
+        .map_err(|e| AppError::Unauthorized(format!("Invalid client certificate: {}", e)))?;
 
     let config = state.config();
     let matched = config

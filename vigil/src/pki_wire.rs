@@ -62,7 +62,10 @@ pub fn parse_ocsp_request(der_request: &[u8]) -> Result<ParsedOcspRequest> {
     let cert_id_der = find_first_cert_id(der_request)
         .ok_or_else(|| anyhow::anyhow!("OCSP request: CertID not found"))?;
     let serial_number = extract_serial_from_cert_id(&cert_id_der)?;
-    Ok(ParsedOcspRequest { cert_id_der, serial_number })
+    Ok(ParsedOcspRequest {
+        cert_id_der,
+        serial_number,
+    })
 }
 
 /// Walk the DER tree to find the first SEQUENCE that looks like a CertID.
@@ -73,7 +76,9 @@ fn find_first_cert_id(data: &[u8]) -> Option<Vec<u8>> {
         let (len_size, len) = decode_der_length_pub(&data[pos + 1..])?;
         let content_start = pos + 1 + len_size;
         let content_end = content_start + len;
-        if content_end > data.len() { break; }
+        if content_end > data.len() {
+            break;
+        }
         let content = &data[content_start..content_end];
 
         if tag == 0x30 {
@@ -100,7 +105,9 @@ fn looks_like_cert_id(content: &[u8]) -> bool {
     let expected = [0x30u8, 0x04, 0x04, 0x02];
     let mut pos = 0;
     for &expected_tag in &expected {
-        if pos >= content.len() || content[pos] != expected_tag { return false; }
+        if pos >= content.len() || content[pos] != expected_tag {
+            return false;
+        }
         let (ls, l) = match decode_der_length_pub(&content[pos + 1..]) {
             Some(x) => x,
             None => return false,
@@ -132,13 +139,19 @@ fn extract_serial_from_cert_id(cert_id_der: &[u8]) -> Result<String> {
     let (ls, l) = decode_der_length_pub(&cert_id_der[pos + 1..])
         .ok_or_else(|| anyhow::anyhow!("CertID serial length"))?;
     let serial_bytes = &cert_id_der[pos + 1 + ls..pos + 1 + ls + l];
-    let trimmed = if serial_bytes.first() == Some(&0x00) { &serial_bytes[1..] } else { serial_bytes };
+    let trimmed = if serial_bytes.first() == Some(&0x00) {
+        &serial_bytes[1..]
+    } else {
+        serial_bytes
+    };
     let hex = hex::encode(trimmed).trim_start_matches('0').to_string();
     Ok(if hex.is_empty() { "0".to_string() } else { hex })
 }
 
 fn skip_tlv(data: &[u8], pos: usize) -> Result<usize> {
-    if pos >= data.len() { bail!("skip_tlv: out of bounds"); }
+    if pos >= data.len() {
+        bail!("skip_tlv: out of bounds");
+    }
     let (ls, l) = decode_der_length_pub(&data[pos + 1..])
         .ok_or_else(|| anyhow::anyhow!("skip_tlv: invalid length"))?;
     Ok(pos + 1 + ls + l)
@@ -162,7 +175,13 @@ pub fn build_ocsp_response_from_request(
         Some(_) => ("good", None),
     };
 
-    build_ocsp_success_response(&parsed.cert_id_der, status, revoked_at, max_age_seconds, config)
+    build_ocsp_success_response(
+        &parsed.cert_id_der,
+        status,
+        revoked_at,
+        max_age_seconds,
+        config,
+    )
 }
 
 fn build_ocsp_success_response(
@@ -177,21 +196,28 @@ fn build_ocsp_success_response(
     let signing_key = load_signing_key(&key_pem)?;
 
     let now_iso = chrono::Utc::now().to_rfc3339();
-    let next_iso = (chrono::Utc::now() + chrono::Duration::seconds(max_age_seconds as i64)).to_rfc3339();
+    let next_iso =
+        (chrono::Utc::now() + chrono::Duration::seconds(max_age_seconds as i64)).to_rfc3339();
 
     // certStatus
     let cert_status: Vec<u8> = match status {
-        "good"    => vec![0x80, 0x00],
+        "good" => vec![0x80, 0x00],
         "revoked" => {
             let rt = revoked_at.unwrap_or(&now_iso);
             der_context_constructed(1, &der_sequence(&der_generalized_time(rt)))
         }
-        _         => vec![0x82, 0x00],
+        _ => vec![0x82, 0x00],
     };
 
     let next_update_der = der_context_constructed(0, &der_generalized_time(&next_iso));
     let single_response = der_sequence(
-        &[cert_id_der, &cert_status, &der_generalized_time(&now_iso), &next_update_der].concat()
+        &[
+            cert_id_der,
+            &cert_status,
+            &der_generalized_time(&now_iso),
+            &next_update_der,
+        ]
+        .concat(),
     );
 
     // issuer subject for responderID
@@ -200,7 +226,12 @@ fn build_ocsp_success_response(
     let responder_id = der_context_constructed(1, &issuer_subject);
 
     // ResponseData
-    let resp_data_content: Vec<u8> = [responder_id.as_slice(), der_generalized_time(&now_iso).as_slice(), der_sequence(&single_response).as_slice()].concat();
+    let resp_data_content: Vec<u8> = [
+        responder_id.as_slice(),
+        der_generalized_time(&now_iso).as_slice(),
+        der_sequence(&single_response).as_slice(),
+    ]
+    .concat();
     let response_data = der_sequence(&resp_data_content);
 
     // Sign
@@ -210,7 +241,13 @@ fn build_ocsp_success_response(
     // Attach CA cert
     let certs_field = der_context_constructed(0, &der_sequence(&ca_der));
 
-    let basic_content: Vec<u8> = [response_data.as_slice(), signing_key.sig_alg_identifier_der().as_slice(), sig_bit.as_slice(), certs_field.as_slice()].concat();
+    let basic_content: Vec<u8> = [
+        response_data.as_slice(),
+        signing_key.sig_alg_identifier_der().as_slice(),
+        sig_bit.as_slice(),
+        certs_field.as_slice(),
+    ]
+    .concat();
     let basic_ocsp = der_sequence(&basic_content);
 
     // responseBytes
@@ -248,10 +285,12 @@ pub fn build_signed_crl_der(
     let issuer_subject = issuer_subject_from_cert_der(&ca_der)?;
 
     let now_iso = chrono::Utc::now().to_rfc3339();
-    let next_iso = (chrono::Utc::now() + chrono::Duration::hours(next_update_hours as i64)).to_rfc3339();
+    let next_iso =
+        (chrono::Utc::now() + chrono::Duration::hours(next_update_hours as i64)).to_rfc3339();
 
     let records = storage::list_certificate_records(&config.cert_db_path)?;
-    let revoked_entries: Vec<u8> = records.iter()
+    let revoked_entries: Vec<u8> = records
+        .iter()
         .filter(|r| r.revoked)
         .flat_map(|r| {
             let ra = r.revoked_at.as_deref().unwrap_or(&now_iso);
@@ -274,10 +313,21 @@ pub fn build_signed_crl_der(
     let sig_bytes = signing_key.sign(&tbs_cert_list)?;
     let sig_bit = der_bit_string_raw(&sig_bytes);
 
-    Ok(der_sequence(&[tbs_cert_list.as_slice(), sig_alg.as_slice(), sig_bit.as_slice()].concat()))
+    Ok(der_sequence(
+        &[
+            tbs_cert_list.as_slice(),
+            sig_alg.as_slice(),
+            sig_bit.as_slice(),
+        ]
+        .concat(),
+    ))
 }
 
-pub fn build_signed_crl_pem(root_ca: &RootCAMetadata, next_update_hours: u32, config: &VigilConfig) -> Result<String> {
+pub fn build_signed_crl_pem(
+    root_ca: &RootCAMetadata,
+    next_update_hours: u32,
+    config: &VigilConfig,
+) -> Result<String> {
     let der = build_signed_crl_der(root_ca, next_update_hours, config)?;
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &der)
         .chars()
@@ -286,5 +336,8 @@ pub fn build_signed_crl_pem(root_ca: &RootCAMetadata, next_update_hours: u32, co
         .map(|c| c.iter().collect::<String>())
         .collect::<Vec<_>>()
         .join("\n");
-    Ok(format!("-----BEGIN X509 CRL-----\n{}\n-----END X509 CRL-----\n", b64))
+    Ok(format!(
+        "-----BEGIN X509 CRL-----\n{}\n-----END X509 CRL-----\n",
+        b64
+    ))
 }

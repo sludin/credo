@@ -7,7 +7,9 @@ use serde_json::{json, Value};
 use crate::archive::pending_key_path;
 use crate::assignments::find_flock_entry;
 use crate::auth::check_min_role;
-use crate::cert_ops::{generate_key_and_csr, install_certificate, read_cert_status, to_flock_summary};
+use crate::cert_ops::{
+    generate_key_and_csr, install_certificate, read_cert_status, to_flock_summary,
+};
 use crate::error::AppError;
 use crate::hooks::run_hooks;
 use crate::state::AppState;
@@ -177,10 +179,10 @@ pub async fn sync_assignments(
     role: Option<Extension<Role>>,
 ) -> Result<Json<Value>, AppError> {
     check_min_role(role.as_ref().map(|e| &e.0), &Role::Admin)?;
-    reconcile_once(&state)
-        .await
-        .map_err(anyhow::Error::from)?;
-    Ok(Json(json!({ "refreshed": true, "source": "shepherd-command" })))
+    reconcile_once(&state).await.map_err(anyhow::Error::from)?;
+    Ok(Json(
+        json!({ "refreshed": true, "source": "shepherd-command" }),
+    ))
 }
 
 pub async fn acme_challenge_create(
@@ -206,8 +208,16 @@ pub async fn acme_challenge_create(
         .ok_or_else(|| AppError::BadRequest("response is required".to_string()))?
         .to_string();
 
-    let domain = body.get("domain").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_string());
-    let file_path = body.get("filePath").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_string());
+    let domain = body
+        .get("domain")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_string());
+    let file_path = body
+        .get("filePath")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_string());
 
     if let Some(ref fp) = file_path {
         let path = std::path::Path::new(fp);

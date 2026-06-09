@@ -72,7 +72,10 @@ async fn cmd_bootstrap(_out: Option<String>, dry_run: bool) -> Result<()> {
     init_logging(config.log_level);
 
     if dry_run {
-        println!("Dry run: would start bootstrap server on {}:{}", config.bind, config.bootstrap_port);
+        println!(
+            "Dry run: would start bootstrap server on {}:{}",
+            config.bind, config.bootstrap_port
+        );
         println!("  Node ID:     {}", config.node_id);
         println!("  Common name: {}", config.common_name);
         println!("  Key path:    {}", config.tls.cert_path.display());
@@ -89,7 +92,7 @@ async fn cmd_bootstrap(_out: Option<String>, dry_run: bool) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 async fn cmd_server_start() -> Result<()> {
-    use tokio::signal::unix::{SignalKind, signal};
+    use tokio::signal::unix::{signal, SignalKind};
 
     let config = load_config().context("Loading config")?;
     init_logging(config.log_level);
@@ -132,10 +135,12 @@ async fn cmd_server_start() -> Result<()> {
         let challenge_handle = if cfg.http_challenge.enabled {
             let l = corgi::server::bind_tcp(&cfg.http_challenge.bind, cfg.http_challenge.port)
                 .await
-                .with_context(|| format!(
-                    "Binding challenge server on {}:{}",
-                    cfg.http_challenge.bind, cfg.http_challenge.port
-                ))?;
+                .with_context(|| {
+                    format!(
+                        "Binding challenge server on {}:{}",
+                        cfg.http_challenge.bind, cfg.http_challenge.port
+                    )
+                })?;
             tracing::info!(
                 addr = format!("{}:{}", cfg.http_challenge.bind, cfg.http_challenge.port),
                 "HTTP-01 challenge listener active"
@@ -206,7 +211,11 @@ async fn cmd_check_config() -> Result<()> {
     println!("  Control port:  {}:{}", config.bind, config.mtls_port);
     println!(
         "  Challenge:     {} (port {})",
-        if config.http_challenge.enabled { "enabled" } else { "disabled" },
+        if config.http_challenge.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
         config.http_challenge.port
     );
     println!("  Auth mode:     {:?}", config.auth.mode);

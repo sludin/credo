@@ -57,10 +57,12 @@ pub async fn get_cert(
         .clone();
     drop(assignments);
 
-    let material = read_cert_material(&state.config.load().cert_store_dir, &cert_name)
-        .ok_or_else(|| AppError::NotFound(
-            format!("No certificate material for {corgi_id}/{cert_name}")
-        ))?;
+    let material =
+        read_cert_material(&state.config.load().cert_store_dir, &cert_name).ok_or_else(|| {
+            AppError::NotFound(format!(
+                "No certificate material for {corgi_id}/{cert_name}"
+            ))
+        })?;
 
     Ok(Json(json!({
         "certName": cert_name,
@@ -93,25 +95,38 @@ pub async fn provision_cert(
         .clone();
     drop(assignments);
 
-    let _current_fp = body.get("currentFingerprint")
+    let _current_fp = body
+        .get("currentFingerprint")
         .and_then(|v| v.as_str())
         .map(|s| s.trim().to_uppercase())
         .unwrap_or_default();
     let key_algorithm = assignment.key_algorithm.as_deref().unwrap_or("rsa");
 
-    let ca_config = state.cas.read().await.get(&assignment.ca)
-        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("CA '{}' not configured", assignment.ca)))?
-        .config.clone();
+    let ca_config = state
+        .cas
+        .read()
+        .await
+        .get(&assignment.ca)
+        .ok_or_else(|| {
+            AppError::Internal(anyhow::anyhow!("CA '{}' not configured", assignment.ca))
+        })?
+        .config
+        .clone();
 
     // Get CSR from corgi
     #[derive(serde::Deserialize)]
-    struct CsrResponse { #[serde(rename = "csrPem")] csr_pem: String }
+    struct CsrResponse {
+        #[serde(rename = "csrPem")]
+        csr_pem: String,
+    }
     let csr: CsrResponse = corgi_post(
         &state.corgi_client_pool,
         &node,
         &format!("/flock/{}/csr", urlencoded(&cert_name)),
         &json!({ "keyAlgorithm": key_algorithm }),
-    ).await.map_err(|e| AppError::Internal(e))?;
+    )
+    .await
+    .map_err(|e| AppError::Internal(e))?;
 
     let corgis = state.corgis.read().await.clone();
     let domains = build_domains(&assignment);
@@ -128,7 +143,9 @@ pub async fn provision_cert(
         &state.corgi_client_pool,
         &corgis,
         &state.acme_accounts,
-    ).await.map_err(AppError::Internal)?;
+    )
+    .await
+    .map_err(AppError::Internal)?;
 
     // Install on corgi
     if result.changed {
@@ -141,7 +158,9 @@ pub async fn provision_cert(
                 "chainPem":     result.chain_pem,
                 "fullchainPem": result.fullchain_pem,
             }),
-        ).await {
+        )
+        .await
+        {
             tracing::warn!(corgi = %corgi_id, cert = %cert_name, error = %e,
                 "Cert issued but install failed; corgi will sync on next poll");
         } else {
@@ -177,11 +196,16 @@ pub async fn renew_cert(
         .clone();
     drop(assignments);
 
-    let csr_pem = body.get("csrPem").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let csr_pem = body
+        .get("csrPem")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     if csr_pem.trim().is_empty() {
         return Err(AppError::BadRequest("csrPem is required".to_string()));
     }
-    let _current_fp = body.get("currentFingerprint")
+    let _current_fp = body
+        .get("currentFingerprint")
         .and_then(|v| v.as_str())
         .map(|s| s.trim().to_uppercase())
         .unwrap_or_default();
@@ -189,22 +213,39 @@ pub async fn renew_cert(
     // Return existing active job if present
     {
         let jobs = state.renewal_jobs.read().await;
-        if let Some(job) = jobs.values().find(|j| {
-            j.cert_name == cert_name && !j.phase.is_terminal()
-        }) {
+        if let Some(job) = jobs
+            .values()
+            .find(|j| j.cert_name == cert_name && !j.phase.is_terminal())
+        {
             let id = job.id.to_string();
             let phase = format!("{:?}", job.phase).to_lowercase();
-            return Ok((axum::http::StatusCode::ACCEPTED, Json(json!({
-                "jobId": id, "status": "pending", "certName": cert_name, "phase": phase,
-            }))));
+            return Ok((
+                axum::http::StatusCode::ACCEPTED,
+                Json(json!({
+                    "jobId": id, "status": "pending", "certName": cert_name, "phase": phase,
+                })),
+            ));
         }
     }
 
-    let ca_config = state.cas.read().await.get(&assignment.ca)
-        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("CA '{}' not configured", assignment.ca)))?
-        .config.clone();
+    let ca_config = state
+        .cas
+        .read()
+        .await
+        .get(&assignment.ca)
+        .ok_or_else(|| {
+            AppError::Internal(anyhow::anyhow!("CA '{}' not configured", assignment.ca))
+        })?
+        .config
+        .clone();
     let domains = build_domains(&assignment);
-    let job_id = create_job(&state.renewal_jobs, &cert_name, domains.clone(), &assignment.ca).await;
+    let job_id = create_job(
+        &state.renewal_jobs,
+        &cert_name,
+        domains.clone(),
+        &assignment.ca,
+    )
+    .await;
 
     // Spawn async renewal
     let state2 = state.clone();
@@ -226,7 +267,9 @@ pub async fn renew_cert(
             &state2.corgi_client_pool,
             &corgis,
             &state2.acme_accounts,
-        ).await {
+        )
+        .await
+        {
             Ok(result) => {
                 complete_job(&state2.renewal_jobs, job_id, result.fingerprint256.clone()).await;
                 if result.changed {
@@ -239,7 +282,8 @@ pub async fn renew_cert(
                             "chainPem":     result.chain_pem,
                             "fullchainPem": result.fullchain_pem,
                         }),
-                    ).await;
+                    )
+                    .await;
                     if ok.is_ok() {
                         crate::corgi_client::evict(&state2.corgi_client_pool, &node2.name).await;
                     }
@@ -252,12 +296,15 @@ pub async fn renew_cert(
         }
     });
 
-    Ok((axum::http::StatusCode::ACCEPTED, Json(json!({
-        "jobId": job_id.to_string(),
-        "status": "pending",
-        "certName": cert_name,
-        "phase": "queued",
-    }))))
+    Ok((
+        axum::http::StatusCode::ACCEPTED,
+        Json(json!({
+            "jobId": job_id.to_string(),
+            "status": "pending",
+            "certName": cert_name,
+            "phase": "queued",
+        })),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -279,16 +326,22 @@ pub async fn renew_status(
     let jobs = state.renewal_jobs.read().await;
 
     // Active job first
-    if let Some(job) = jobs.values().find(|j| j.cert_name == cert_name && !j.phase.is_terminal()) {
+    if let Some(job) = jobs
+        .values()
+        .find(|j| j.cert_name == cert_name && !j.phase.is_terminal())
+    {
         return Ok(Json(renewal_job_response(job)));
     }
     // Last completed/failed job
-    let last = jobs.values()
+    let last = jobs
+        .values()
         .filter(|j| j.cert_name == cert_name)
         .max_by_key(|j| j.updated_at);
     match last {
         Some(job) => Ok(Json(renewal_job_response(job))),
-        None => Err(AppError::NotFound(format!("No renewal job for {cert_name}"))),
+        None => Err(AppError::NotFound(format!(
+            "No renewal job for {cert_name}"
+        ))),
     }
 }
 
@@ -297,9 +350,13 @@ pub async fn renew_status(
 // ---------------------------------------------------------------------------
 
 fn renewal_job_response(job: &crate::types::RenewalJob) -> serde_json::Value {
-    let status = if job.phase == RenewalPhase::Completed { "completed" }
-        else if job.phase.is_terminal() { "failed" }
-        else { "pending" };
+    let status = if job.phase == RenewalPhase::Completed {
+        "completed"
+    } else if job.phase.is_terminal() {
+        "failed"
+    } else {
+        "pending"
+    };
     json!({
         "jobId": job.id,
         "status": status,
@@ -375,7 +432,10 @@ mod tests {
 
     #[test]
     fn domain_already_in_sans_not_duplicated() {
-        let a = assignment(Some("origin.ludin.org"), &["origin.ludin.org", "www.ludin.org"]);
+        let a = assignment(
+            Some("origin.ludin.org"),
+            &["origin.ludin.org", "www.ludin.org"],
+        );
         assert_eq!(build_domains(&a), vec!["origin.ludin.org", "www.ludin.org"]);
     }
 

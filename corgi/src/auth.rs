@@ -1,16 +1,14 @@
-use axum::extract::{Request, State};
-use axum::middleware::Next;
-use axum::response::Response;
 use crate::config::{AuthMode, CorgiConfig};
 use crate::error::AppError;
 use crate::log_middleware::LogIdentity;
 use crate::server::PeerCertDer;
 use crate::types::{ClientIdentity, Role};
+use axum::extract::{Request, State};
+use axum::middleware::Next;
+use axum::response::Response;
 
 // Re-export shared helpers so existing call sites still compile.
-pub use credo_lib::auth::{
-    check_min_role, identity_from_der,
-};
+pub use credo_lib::auth::{check_min_role, identity_from_der};
 
 // ---------------------------------------------------------------------------
 // RBAC role resolution
@@ -68,25 +66,18 @@ pub async fn auth_middleware(
 }
 
 fn extract_mtls_identity(req: &Request) -> Result<ClientIdentity, AppError> {
-    let cert_der = req
-        .extensions()
-        .get::<PeerCertDer>()
-        .map(|p| p.0.clone());
+    let cert_der = req.extensions().get::<PeerCertDer>().map(|p| p.0.clone());
 
     match cert_der {
-        Some(der) => identity_from_der(&der).map_err(|e| {
-            AppError::Unauthorized(format!("Failed to parse client cert: {}", e))
-        }),
+        Some(der) => identity_from_der(&der)
+            .map_err(|e| AppError::Unauthorized(format!("Failed to parse client cert: {}", e))),
         None => Err(AppError::Unauthorized(
             "mTLS client certificate required".to_string(),
         )),
     }
 }
 
-fn extract_proxy_identity(
-    req: &Request,
-    config: &CorgiConfig,
-) -> Result<ClientIdentity, AppError> {
+fn extract_proxy_identity(req: &Request, config: &CorgiConfig) -> Result<ClientIdentity, AppError> {
     let cert_raw = req
         .headers()
         .get(&config.proxy_auth.client_cert_header)
@@ -106,4 +97,3 @@ fn extract_proxy_identity(
         san_dns: vec![],
     })
 }
-

@@ -19,7 +19,9 @@ impl HeProvider {
                     "DNS provider 'he' requires a non-empty 'ddnsKey' in providerConfig"
                 )
             })?;
-        Ok(Self { ddns_key: key.trim().to_string() })
+        Ok(Self {
+            ddns_key: key.trim().to_string(),
+        })
     }
 
     async fn update(ddns_key: String, record_name: String, txt_value: String) -> Result<()> {

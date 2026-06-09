@@ -10,11 +10,18 @@ use serde_json::Value;
 async fn agent_health_requires_auth() {
     let shepherd = TestShepherd::start().await.unwrap();
 
-    let resp = shepherd.client
+    let resp = shepherd
+        .client
         .get(shepherd.agent_health_url())
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
-    assert_eq!(resp.status(), 401, "agent /health must require corgi mTLS auth");
+    assert_eq!(
+        resp.status(),
+        401,
+        "agent /health must require corgi mTLS auth"
+    );
 }
 
 /// GET /health on the agent port returns 200 with a valid CorgiNodeConfig injected.
@@ -22,9 +29,12 @@ async fn agent_health_requires_auth() {
 async fn agent_health_returns_200_with_auth() {
     let shepherd = TestShepherd::start_authed().await.unwrap();
 
-    let resp = shepherd.client
+    let resp = shepherd
+        .client
         .get(shepherd.agent_health_url())
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
@@ -37,9 +47,15 @@ async fn agent_health_returns_200_with_auth() {
 async fn get_assignments_returns_empty_for_unassigned_corgi() {
     let shepherd = TestShepherd::start_authed().await.unwrap();
     // Injected corgi name is "test-corgi-01" (from start_authed)
-    let resp = shepherd.client
-        .get(format!("{}/agents/test-corgi-01/assignments", shepherd.agent_url))
-        .send().await.unwrap();
+    let resp = shepherd
+        .client
+        .get(format!(
+            "{}/agents/test-corgi-01/assignments",
+            shepherd.agent_url
+        ))
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
@@ -53,9 +69,15 @@ async fn get_assignments_returns_empty_for_unassigned_corgi() {
 async fn get_cert_returns_404_for_unknown_cert() {
     let shepherd = TestShepherd::start_authed().await.unwrap();
 
-    let resp = shepherd.client
-        .get(format!("{}/agents/test-corgi-01/certs/nonexistent", shepherd.agent_url))
-        .send().await.unwrap();
+    let resp = shepherd
+        .client
+        .get(format!(
+            "{}/agents/test-corgi-01/certs/nonexistent",
+            shepherd.agent_url
+        ))
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 404);
 }
@@ -68,9 +90,15 @@ async fn get_assignments_filtered_to_authenticated_corgi() {
 
     // Authenticated as test-corgi-01; requesting another corgi's assignments returns empty
     // (the handler returns assignments assigned to the requesting corgi's name)
-    let resp = shepherd.client
-        .get(format!("{}/agents/test-corgi-01/assignments", shepherd.agent_url))
-        .send().await.unwrap();
+    let resp = shepherd
+        .client
+        .get(format!(
+            "{}/agents/test-corgi-01/assignments",
+            shepherd.agent_url
+        ))
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();

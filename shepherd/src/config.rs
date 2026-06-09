@@ -64,7 +64,7 @@ pub struct TlsConfig {
     pub client_ca_path: PathBuf,
     /// Written by bootstrap; never inside the corgi certstore.
     pub bootstrap_cert_path: Option<PathBuf>,
-    pub bootstrap_key_path:  Option<PathBuf>,
+    pub bootstrap_key_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -79,8 +79,8 @@ impl LogLevel {
     pub fn as_tracing_filter(self) -> &'static str {
         match self {
             LogLevel::Fatal => "error",
-            LogLevel::Warn  => "warn",
-            LogLevel::Info  => "info",
+            LogLevel::Warn => "warn",
+            LogLevel::Info => "info",
             LogLevel::Debug => "debug",
         }
     }
@@ -151,7 +151,7 @@ struct RawTls {
     ca_path: Option<String>,
     // Bootstrap cert written to shepherdRoot/bootstrap/, NOT to the corgi certstore
     bootstrap_cert_path: Option<String>,
-    bootstrap_key_path:  Option<String>,
+    bootstrap_key_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -193,47 +193,67 @@ pub fn load_config() -> Result<ShepherdConfig> {
 // Build typed config from raw
 // ---------------------------------------------------------------------------
 
-fn build_config(raw: RawShepherdConfig, base_dir: PathBuf, config_path: PathBuf) -> Result<ShepherdConfig> {
+fn build_config(
+    raw: RawShepherdConfig,
+    base_dir: PathBuf,
+    config_path: PathBuf,
+) -> Result<ShepherdConfig> {
     let b = base_dir.as_path();
 
     // --- TLS ---
-    let tls_cert_path = raw.tls.as_ref().and_then(|t| t.cert_path.as_deref())
+    let tls_cert_path = raw
+        .tls
+        .as_ref()
+        .and_then(|t| t.cert_path.as_deref())
         .or(raw.tls_cert.as_deref())
         .ok_or_else(|| anyhow::anyhow!("Config missing tls.certPath"))?;
 
-    let tls_key_path = raw.tls.as_ref().and_then(|t| t.key_path.as_deref())
+    let tls_key_path = raw
+        .tls
+        .as_ref()
+        .and_then(|t| t.key_path.as_deref())
         .or(raw.tls_key.as_deref())
         .ok_or_else(|| anyhow::anyhow!("Config missing tls.keyPath"))?;
 
-    let client_ca_path = raw.tls.as_ref().and_then(|t| {
-        t.client_ca_path.as_deref()
-            .or(t.ca_path.as_deref())
-            .or(t.ca.as_deref())
-    })
-    .or(raw.tls_client_ca_path.as_deref())
-    .or(raw.client_ca.as_deref())
-    .ok_or_else(|| anyhow::anyhow!(
-        "Config missing tls.clientCaPath (required — mTLS client CA must be configured)"
-    ))?;
+    let client_ca_path = raw
+        .tls
+        .as_ref()
+        .and_then(|t| {
+            t.client_ca_path
+                .as_deref()
+                .or(t.ca_path.as_deref())
+                .or(t.ca.as_deref())
+        })
+        .or(raw.tls_client_ca_path.as_deref())
+        .or(raw.client_ca.as_deref())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Config missing tls.clientCaPath (required — mTLS client CA must be configured)"
+            )
+        })?;
 
     // --- Auth ---
-    let jwt_signing_key_path = raw.auth.as_ref()
+    let jwt_signing_key_path = raw
+        .auth
+        .as_ref()
         .and_then(|a| a.jwt_signing_key_path.as_deref())
         .ok_or_else(|| anyhow::anyhow!("Config missing auth.jwtSigningKeyPath"))?;
 
     // --- Ports ---
-    let agent_port = raw.agent_port
+    let agent_port = raw
+        .agent_port
         .unwrap_or_else(|| u16_from_env("SHEPHERD_AGENT_PORT", 7010));
-    let dashboard_port = raw.dashboard_port
+    let dashboard_port = raw
+        .dashboard_port
         .unwrap_or_else(|| u16_from_env("SHEPHERD_DASHBOARD_PORT", 7011));
     let bind = raw.bind.unwrap_or_else(|| "127.0.0.1".to_string());
 
     // --- Log level ---
     let log_level = match raw.log_level.as_deref().unwrap_or("info") {
         "fatal" => LogLevel::Fatal,
-        "warn"  => LogLevel::Warn,
+        "warn" => LogLevel::Warn,
         "debug" => LogLevel::Debug,
-        _       => LogLevel::Info,
+        _ => LogLevel::Info,
     };
 
     Ok(ShepherdConfig {
@@ -243,19 +263,31 @@ fn build_config(raw: RawShepherdConfig, base_dir: PathBuf, config_path: PathBuf)
         dashboard_port,
         bind,
         tls: TlsConfig {
-            cert_path:      resolve_path(b, tls_cert_path),
-            key_path:       resolve_path(b, tls_key_path),
+            cert_path: resolve_path(b, tls_cert_path),
+            key_path: resolve_path(b, tls_key_path),
             client_ca_path: resolve_path(b, client_ca_path),
-            bootstrap_cert_path: raw.tls.as_ref()
+            bootstrap_cert_path: raw
+                .tls
+                .as_ref()
                 .and_then(|t| t.bootstrap_cert_path.as_deref())
                 .map(|s| resolve_path(b, s)),
-            bootstrap_key_path: raw.tls.as_ref()
+            bootstrap_key_path: raw
+                .tls
+                .as_ref()
                 .and_then(|t| t.bootstrap_key_path.as_deref())
                 .map(|s| resolve_path(b, s)),
         },
         jwt_signing_key_path: resolve_path(b, jwt_signing_key_path),
-        corgis_config_path: resolve_path_or(b, raw.corgis_config_path.as_deref(), "shepherd.corgis.json"),
-        assignments_config_path: resolve_path_or(b, raw.assignments_config_path.as_deref(), "shepherd.assignments.json"),
+        corgis_config_path: resolve_path_or(
+            b,
+            raw.corgis_config_path.as_deref(),
+            "shepherd.corgis.json",
+        ),
+        assignments_config_path: resolve_path_or(
+            b,
+            raw.assignments_config_path.as_deref(),
+            "shepherd.assignments.json",
+        ),
         ca_config_path: resolve_path_or(b, raw.ca_config_path.as_deref(), "shepherd.ca.json"),
         accounts_path: resolve_path_or(b, raw.accounts_path.as_deref(), "shepherd.accounts.json"),
         cert_store_dir: resolve_path_or(b, raw.cert_store_dir.as_deref(), "store"),

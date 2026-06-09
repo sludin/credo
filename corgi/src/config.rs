@@ -66,10 +66,10 @@ pub enum ServiceHookDef {
 
 #[derive(Debug, Clone, Default)]
 pub struct FilePolicyConfig {
-    pub owner:     Option<String>,
-    pub group:     Option<String>,
+    pub owner: Option<String>,
+    pub group: Option<String>,
     pub cert_mode: Option<u32>,
-    pub key_mode:  Option<u32>,
+    pub key_mode: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -376,8 +376,8 @@ struct RawShepherdSync {
 // ---------------------------------------------------------------------------
 
 use credo_lib::config::{
-    bool_from_env, bool_from_value, load_json_config, resolve_path, str_from_env,
-    u16_from_env, u64_from_env, u64_from_value,
+    bool_from_env, bool_from_value, load_json_config, resolve_path, str_from_env, u16_from_env,
+    u64_from_env, u64_from_value,
 };
 
 fn parse_mode(s: &str) -> Option<u32> {
@@ -387,9 +387,7 @@ fn parse_mode(s: &str) -> Option<u32> {
 fn parse_hook_refs(raw: &[Value]) -> Vec<HookRef> {
     raw.iter()
         .filter_map(|v| match v {
-            Value::String(s) if !s.trim().is_empty() => {
-                Some(HookRef::Simple(s.trim().to_string()))
-            }
+            Value::String(s) if !s.trim().is_empty() => Some(HookRef::Simple(s.trim().to_string())),
             Value::Object(obj) => {
                 let name = obj.get("name")?.as_str()?.trim().to_string();
                 if name.is_empty() {
@@ -421,7 +419,10 @@ fn parse_hook_def(value: &Value, name: &str) -> Result<ServiceHookDef> {
             .filter(|s| !s.is_empty())
             .collect();
         if commands.is_empty() {
-            return Err(anyhow::anyhow!("serviceHooks['{}'] is an empty array", name));
+            return Err(anyhow::anyhow!(
+                "serviceHooks['{}'] is an empty array",
+                name
+            ));
         }
         return Ok(ServiceHookDef::Simple(commands));
     }
@@ -475,7 +476,13 @@ fn parse_role(v: &Value) -> crate::types::Role {
     }
 }
 
-fn parse_flock_entry(v: &Value, base_dir: &Path, cert_store_dir: &Path, index: usize, file_policy: &FilePolicyConfig) -> Result<FlockEntry> {
+fn parse_flock_entry(
+    v: &Value,
+    base_dir: &Path,
+    cert_store_dir: &Path,
+    index: usize,
+    file_policy: &FilePolicyConfig,
+) -> Result<FlockEntry> {
     let name = v["name"]
         .as_str()
         .filter(|s| !s.trim().is_empty())
@@ -486,7 +493,12 @@ fn parse_flock_entry(v: &Value, base_dir: &Path, cert_store_dir: &Path, index: u
         .as_str()
         .filter(|s| !s.trim().is_empty())
         .map(|s| resolve_path(base_dir, s))
-        .unwrap_or_else(|| cert_store_dir.join("live").join(&name).join("fullchain.pem"));
+        .unwrap_or_else(|| {
+            cert_store_dir
+                .join("live")
+                .join(&name)
+                .join("fullchain.pem")
+        });
 
     let key_path = v["keyPath"]
         .as_str()
@@ -496,9 +508,9 @@ fn parse_flock_entry(v: &Value, base_dir: &Path, cert_store_dir: &Path, index: u
 
     let hooks = parse_hook_refs(v["hooks"].as_array().unwrap_or(&vec![]));
 
-    let csr_subject: Option<CsrSubjectWire> = v.get("csrSubject").and_then(|v| {
-        serde_json::from_value(v.clone()).ok()
-    });
+    let csr_subject: Option<CsrSubjectWire> = v
+        .get("csrSubject")
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
 
     Ok(FlockEntry {
         name,
@@ -524,8 +536,14 @@ fn parse_flock_entry(v: &Value, base_dir: &Path, cert_store_dir: &Path, index: u
             .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
             .filter(|s| !s.is_empty())
             .collect(),
-        cert_mode: v["certMode"].as_str().and_then(parse_mode).or(file_policy.cert_mode),
-        key_mode: v["keyMode"].as_str().and_then(parse_mode).or(file_policy.key_mode),
+        cert_mode: v["certMode"]
+            .as_str()
+            .and_then(parse_mode)
+            .or(file_policy.cert_mode),
+        key_mode: v["keyMode"]
+            .as_str()
+            .and_then(parse_mode)
+            .or(file_policy.key_mode),
         cert_owner: v["certOwner"]
             .as_str()
             .map(|s| s.trim().to_string())
@@ -565,8 +583,8 @@ pub fn load_config() -> Result<CorgiConfig> {
     let raw_value = load_json_config(&config_path)
         .with_context(|| format!("Loading config: {}", config_path.display()))?;
 
-    let raw: RawConfig = serde_json::from_value(raw_value)
-        .with_context(|| "Deserializing config")?;
+    let raw: RawConfig =
+        serde_json::from_value(raw_value).with_context(|| "Deserializing config")?;
 
     let config_dir = config_path.parent().unwrap_or(Path::new("."));
     let base_dir = raw
@@ -653,14 +671,24 @@ pub fn load_config() -> Result<CorgiConfig> {
 
     // File policy defaults
     let file_policy = FilePolicyConfig {
-        owner: raw.file_policy.as_ref().and_then(|p| p.owner.clone())
+        owner: raw
+            .file_policy
+            .as_ref()
+            .and_then(|p| p.owner.clone())
             .filter(|s| !s.trim().is_empty()),
-        group: raw.file_policy.as_ref().and_then(|p| p.group.clone())
+        group: raw
+            .file_policy
+            .as_ref()
+            .and_then(|p| p.group.clone())
             .filter(|s| !s.trim().is_empty()),
-        cert_mode: raw.file_policy.as_ref()
+        cert_mode: raw
+            .file_policy
+            .as_ref()
             .and_then(|p| p.cert_mode.as_deref())
             .and_then(parse_mode),
-        key_mode: raw.file_policy.as_ref()
+        key_mode: raw
+            .file_policy
+            .as_ref()
             .and_then(|p| p.key_mode.as_deref())
             .and_then(parse_mode),
     };
@@ -775,9 +803,7 @@ pub fn load_config() -> Result<CorgiConfig> {
             Ok::<_, anyhow::Error>(
                 ss.and_then(|s| s.assignments_cache_path.as_deref())
                     .map(|p| resolve_path(&base_dir, p))
-                    .unwrap_or_else(|| {
-                        resolve_path(&base_dir, "corgi.assignments.cache.json")
-                    }),
+                    .unwrap_or_else(|| resolve_path(&base_dir, "corgi.assignments.cache.json")),
             )
         })?;
 
@@ -823,7 +849,11 @@ pub fn load_config() -> Result<CorgiConfig> {
         .or(raw.mtls_port)
         .unwrap_or(7001);
 
-    let bind = env::var("BIND").or_else(|_| env::var("CORGI_BIND")).ok().or(raw.bind).unwrap_or_else(|| "127.0.0.1".to_string());
+    let bind = env::var("BIND")
+        .or_else(|_| env::var("CORGI_BIND"))
+        .ok()
+        .or(raw.bind)
+        .unwrap_or_else(|| "127.0.0.1".to_string());
 
     let dns_override: HashMap<String, String> = raw
         .dns_override
@@ -841,19 +871,34 @@ pub fn load_config() -> Result<CorgiConfig> {
         .chain_path
         .map(|p| resolve_path(&base_dir, &p))
         .or_else(|| {
-            Some(cert_store_dir.join("live").join(&common_name).join("chain.pem"))
+            Some(
+                cert_store_dir
+                    .join("live")
+                    .join(&common_name)
+                    .join("chain.pem"),
+            )
         });
     let fullchain_path = raw
         .fullchain_path
         .map(|p| resolve_path(&base_dir, &p))
         .or_else(|| {
-            Some(cert_store_dir.join("live").join(&common_name).join("fullchain.pem"))
+            Some(
+                cert_store_dir
+                    .join("live")
+                    .join(&common_name)
+                    .join("fullchain.pem"),
+            )
         });
     let csr_path = raw
         .csr_path
         .map(|p| resolve_path(&base_dir, &p))
         .or_else(|| {
-            Some(cert_store_dir.join("live").join(&common_name).join("csr.pem"))
+            Some(
+                cert_store_dir
+                    .join("live")
+                    .join(&common_name)
+                    .join("csr.pem"),
+            )
         });
 
     let accounts_path = raw
@@ -890,9 +935,7 @@ pub fn load_config() -> Result<CorgiConfig> {
         service_hooks,
         default_hooks: parse_hook_refs(&raw.default_hooks),
         log_level,
-        auth: AuthConfig {
-            mode: auth_mode,
-        },
+        auth: AuthConfig { mode: auth_mode },
         rbac_identities,
         proxy_auth,
         shepherd_sync,

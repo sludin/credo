@@ -14,9 +14,12 @@ use serde_json::Value;
 async fn health_returns_200() {
     let shepherd = TestShepherd::start().await.unwrap();
 
-    let resp = shepherd.client
+    let resp = shepherd
+        .client
         .get(shepherd.dashboard_health_url())
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
@@ -29,9 +32,12 @@ async fn health_returns_200() {
 async fn flock_list_is_public() {
     let shepherd = TestShepherd::start().await.unwrap();
 
-    let resp = shepherd.client
+    let resp = shepherd
+        .client
         .get(format!("{}/flock", shepherd.dashboard_url))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200, "flock list must be public");
     let body: Value = resp.json().await.unwrap();
@@ -47,12 +53,24 @@ async fn flock_list_is_public() {
 async fn authenticated_routes_require_auth() {
     let shepherd = TestShepherd::start().await.unwrap();
 
-    for path in ["/admin/assignments", "/admin/certstore", "/accounts", "/accounts/me"] {
-        let resp = shepherd.client
+    for path in [
+        "/admin/assignments",
+        "/admin/certstore",
+        "/accounts",
+        "/accounts/me",
+    ] {
+        let resp = shepherd
+            .client
             .get(format!("{}{}", shepherd.dashboard_url, path))
-            .send().await.unwrap();
-        assert_eq!(resp.status(), 401,
-            "GET {path} must require auth, got {}", resp.status());
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            401,
+            "GET {path} must require auth, got {}",
+            resp.status()
+        );
     }
 }
 
@@ -65,14 +83,20 @@ async fn authenticated_routes_require_auth() {
 async fn get_assignments_returns_empty_list() {
     let shepherd = TestShepherd::start_authed().await.unwrap();
 
-    let resp = shepherd.client
+    let resp = shepherd
+        .client
         .get(format!("{}/admin/assignments", shepherd.dashboard_url))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
     let assignments = body["assignments"].as_array().expect("assignments array");
-    assert!(assignments.is_empty(), "fresh instance must have no assignments");
+    assert!(
+        assignments.is_empty(),
+        "fresh instance must have no assignments"
+    );
 }
 
 /// GET /admin/certstore returns an empty entries list on a fresh instance.
@@ -80,13 +104,19 @@ async fn get_assignments_returns_empty_list() {
 async fn get_certstore_returns_empty() {
     let shepherd = TestShepherd::start_authed().await.unwrap();
 
-    let resp = shepherd.client
+    let resp = shepherd
+        .client
         .get(format!("{}/admin/certstore", shepherd.dashboard_url))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
-    assert!(body["entries"].is_array(), "certstore must return entries array");
+    assert!(
+        body["entries"].is_array(),
+        "certstore must return entries array"
+    );
 }
 
 /// GET /admin/certstore/:name returns 404 for an unknown cert name.
@@ -94,9 +124,15 @@ async fn get_certstore_returns_empty() {
 async fn get_certstore_entry_404_for_unknown() {
     let shepherd = TestShepherd::start_authed().await.unwrap();
 
-    let resp = shepherd.client
-        .get(format!("{}/admin/certstore/nonexistent-cert", shepherd.dashboard_url))
-        .send().await.unwrap();
+    let resp = shepherd
+        .client
+        .get(format!(
+            "{}/admin/certstore/nonexistent-cert",
+            shepherd.dashboard_url
+        ))
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 404);
 }
@@ -106,14 +142,23 @@ async fn get_certstore_entry_404_for_unknown() {
 async fn config_summary_returns_fields() {
     let shepherd = TestShepherd::start_authed().await.unwrap();
 
-    let resp = shepherd.client
+    let resp = shepherd
+        .client
         .get(format!("{}/admin/config-summary", shepherd.dashboard_url))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
-    assert!(body["renewBeforeDays"].is_number(), "renewBeforeDays must be present");
-    assert!(body["certStoreDir"].is_string(),   "certStoreDir must be present");
+    assert!(
+        body["renewBeforeDays"].is_number(),
+        "renewBeforeDays must be present"
+    );
+    assert!(
+        body["certStoreDir"].is_string(),
+        "certStoreDir must be present"
+    );
 }
 
 /// GET /accounts returns an empty list on a fresh instance.
@@ -121,13 +166,19 @@ async fn config_summary_returns_fields() {
 async fn list_accounts_returns_empty() {
     let shepherd = TestShepherd::start_authed().await.unwrap();
 
-    let resp = shepherd.client
+    let resp = shepherd
+        .client
         .get(format!("{}/accounts", shepherd.dashboard_url))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
-    assert!(body["accounts"].is_array(), "response must have accounts array");
+    assert!(
+        body["accounts"].is_array(),
+        "response must have accounts array"
+    );
 }
 
 /// GET /accounts/me returns the identity of the authenticated user.
@@ -135,9 +186,12 @@ async fn list_accounts_returns_empty() {
 async fn get_me_returns_authenticated_identity() {
     let shepherd = TestShepherd::start_authed().await.unwrap();
 
-    let resp = shepherd.client
+    let resp = shepherd
+        .client
         .get(format!("{}/accounts/me", shepherd.dashboard_url))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
@@ -154,14 +208,20 @@ async fn get_me_returns_authenticated_identity() {
 async fn renewal_jobs_empty_on_fresh_instance() {
     let shepherd = TestShepherd::start_authed().await.unwrap();
 
-    let resp = shepherd.client
+    let resp = shepherd
+        .client
         .get(format!("{}/admin/renewal-jobs", shepherd.dashboard_url))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
     assert!(body["jobs"].is_array(), "response must have jobs array");
-    assert!(body["jobs"].as_array().unwrap().is_empty(), "no renewal jobs on fresh start");
+    assert!(
+        body["jobs"].as_array().unwrap().is_empty(),
+        "no renewal jobs on fresh start"
+    );
 }
 
 /// GET /admin/cas returns an empty list when no CAs are configured.
@@ -169,9 +229,12 @@ async fn renewal_jobs_empty_on_fresh_instance() {
 async fn get_cas_returns_empty_when_none_configured() {
     let shepherd = TestShepherd::start_authed().await.unwrap();
 
-    let resp = shepherd.client
+    let resp = shepherd
+        .client
         .get(format!("{}/admin/cas", shepherd.dashboard_url))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
@@ -183,9 +246,15 @@ async fn get_cas_returns_empty_when_none_configured() {
 async fn reload_assignments_returns_ok() {
     let shepherd = TestShepherd::start_authed().await.unwrap();
 
-    let resp = shepherd.client
-        .post(format!("{}/admin/reload-assignments", shepherd.dashboard_url))
-        .send().await.unwrap();
+    let resp = shepherd
+        .client
+        .post(format!(
+            "{}/admin/reload-assignments",
+            shepherd.dashboard_url
+        ))
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
 }
@@ -195,9 +264,12 @@ async fn reload_assignments_returns_ok() {
 async fn reload_corgis_returns_ok() {
     let shepherd = TestShepherd::start_authed().await.unwrap();
 
-    let resp = shepherd.client
+    let resp = shepherd
+        .client
         .post(format!("{}/admin/reload-corgis", shepherd.dashboard_url))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
 }

@@ -28,8 +28,7 @@ fn csr_path_for_entry(entry: &FlockEntry) -> std::path::PathBuf {
 fn save_csr(entry: &FlockEntry, csr_pem: &str) -> Result<()> {
     let path = csr_path_for_entry(entry);
     ensure_parent(&path)?;
-    std::fs::write(&path, csr_pem)
-        .with_context(|| format!("Writing CSR to {}", path.display()))?;
+    std::fs::write(&path, csr_pem).with_context(|| format!("Writing CSR to {}", path.display()))?;
     set_permissions(&path, 0o644)?;
     Ok(())
 }
@@ -209,7 +208,9 @@ fn build_params(
             params.distinguished_name.push(DnType::CountryName, c);
         }
         if let Some(st) = &s.state {
-            params.distinguished_name.push(DnType::StateOrProvinceName, st);
+            params
+                .distinguished_name
+                .push(DnType::StateOrProvinceName, st);
         }
         if let Some(l) = &s.locality {
             params.distinguished_name.push(DnType::LocalityName, l);
@@ -218,7 +219,9 @@ fn build_params(
             params.distinguished_name.push(DnType::OrganizationName, o);
         }
         if let Some(ou) = &s.organizational_unit {
-            params.distinguished_name.push(DnType::OrganizationalUnitName, ou);
+            params
+                .distinguished_name
+                .push(DnType::OrganizationalUnitName, ou);
         }
     }
 
@@ -246,7 +249,9 @@ pub fn generate_key_and_csr(
         .with_context(|| format!("Writing key to {}", key_path.display()))?;
     set_permissions(key_path, 0o600)?;
 
-    let csr_pem = cert.serialize_request_pem().context("Serializing CSR PEM")?;
+    let csr_pem = cert
+        .serialize_request_pem()
+        .context("Serializing CSR PEM")?;
     save_csr(entry, &csr_pem)?;
     Ok(csr_pem)
 }
@@ -278,7 +283,9 @@ pub fn generate_csr_with_keypair(
     let mut params = build_params(entry, req, config_identity_uri);
     params.key_pair = Some(key_pair);
     let cert = Certificate::from_params(params).context("Building CSR with key pair")?;
-    let csr_pem = cert.serialize_request_pem().context("Serializing CSR PEM")?;
+    let csr_pem = cert
+        .serialize_request_pem()
+        .context("Serializing CSR PEM")?;
     save_csr(entry, &csr_pem)?;
     Ok(csr_pem)
 }
@@ -294,14 +301,18 @@ pub fn generate_bootstrap_cert(
     identity_uri: Option<&str>,
 ) -> Result<(String, String)> {
     let mut params = CertificateParams::default();
-    params.distinguished_name.push(DnType::CommonName, common_name);
+    params
+        .distinguished_name
+        .push(DnType::CommonName, common_name);
 
     // 1-day validity
     let now = time::OffsetDateTime::now_utc();
     params.not_before = now;
     params.not_after = now + time::Duration::days(1);
 
-    params.subject_alt_names.push(SanType::DnsName("localhost".to_string()));
+    params
+        .subject_alt_names
+        .push(SanType::DnsName("localhost".to_string()));
     if let Some(uri) = identity_uri {
         params.subject_alt_names.push(SanType::URI(uri.to_string()));
     }
@@ -341,7 +352,8 @@ pub fn install_certificate(
 
     // Normalize both sides for comparison so format differences don't matter
     let normalize = |s: &str| s.replace(':', "").to_lowercase();
-    let changed = previous_fingerprint.as_deref().map(&normalize) != Some(normalize(&next_fingerprint));
+    let changed =
+        previous_fingerprint.as_deref().map(&normalize) != Some(normalize(&next_fingerprint));
 
     install_to_archive(
         entry,
@@ -426,7 +438,9 @@ pub fn read_cert_status(entry: &FlockEntry) -> crate::types::CertificateStatus {
         expires_in_days,
         hooks,
         // ISO format with ms + Z suffix — matches new Date().toISOString() from TypeScript.
-        last_checked_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+        last_checked_at: chrono::Utc::now()
+            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+            .to_string(),
     }
 }
 
@@ -461,12 +475,25 @@ pub fn to_flock_summary(entry: &FlockEntry) -> crate::types::FlockSummary {
                         }
                     }
                 }
-                CertFields { valid_to, lifetime_days: Some(lifetime_days), san_names }
+                CertFields {
+                    valid_to,
+                    lifetime_days: Some(lifetime_days),
+                    san_names,
+                }
             })
         })
-        .unwrap_or(CertFields { valid_to: None, lifetime_days: None, san_names: vec![] });
+        .unwrap_or(CertFields {
+            valid_to: None,
+            lifetime_days: None,
+            san_names: vec![],
+        });
 
-    let status = if fingerprint256.is_some() { "ok" } else { "not-ok" }.to_string();
+    let status = if fingerprint256.is_some() {
+        "ok"
+    } else {
+        "not-ok"
+    }
+    .to_string();
 
     crate::types::FlockSummary {
         name: entry.name.clone(),
@@ -502,8 +529,8 @@ fn get_cert_spki_bytes(cert_path: &Path) -> Option<Vec<u8>> {
 }
 
 fn get_key_public_point(key_path: &Path) -> Option<Vec<u8>> {
-    use p256::pkcs8::DecodePrivateKey;
     use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::pkcs8::DecodePrivateKey;
     let pem_str = std::fs::read_to_string(key_path).ok()?;
     let sk = p256::SecretKey::from_pkcs8_pem(&pem_str).ok()?;
     let point = sk.public_key().to_encoded_point(false);

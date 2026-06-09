@@ -33,14 +33,19 @@ pub fn identity_from_der(der: &[u8]) -> Result<ClientIdentity> {
             for name in &san.general_names {
                 match name {
                     GeneralName::DNSName(dns) => san_dns.push(dns.to_string()),
-                    GeneralName::URI(uri)     => san_uris.push(uri.to_string()),
+                    GeneralName::URI(uri) => san_uris.push(uri.to_string()),
                     _ => {}
                 }
             }
         }
     }
 
-    Ok(ClientIdentity { fingerprint256, subject, san_uris, san_dns })
+    Ok(ClientIdentity {
+        fingerprint256,
+        subject,
+        san_uris,
+        san_dns,
+    })
 }
 
 /// Parse the leaf cert from a PEM chain into a ClientIdentity.
@@ -66,8 +71,14 @@ pub fn identity_from_header(raw: &str) -> Option<ClientIdentity> {
     }
 
     use base64::{engine::general_purpose::STANDARD, Engine};
-    let clean: String = trimmed.chars().filter(|c| !c.is_ascii_whitespace()).collect();
-    STANDARD.decode(&clean).ok().and_then(|der| identity_from_der(&der).ok())
+    let clean: String = trimmed
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect();
+    STANDARD
+        .decode(&clean)
+        .ok()
+        .and_then(|der| identity_from_der(&der).ok())
 }
 
 fn percent_decode(s: &str) -> String {
@@ -80,7 +91,9 @@ fn percent_decode(s: &str) -> String {
             if let Ok(byte) = u8::from_str_radix(&format!("{}{}", h1, h2), 16) {
                 out.push(byte as char);
             } else {
-                out.push('%'); out.push(h1); out.push(h2);
+                out.push('%');
+                out.push(h1);
+                out.push(h2);
             }
         } else {
             out.push(c);

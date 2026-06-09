@@ -45,6 +45,7 @@ pub fn signing_config(tmp_dir: &Path) -> VigilConfig {
             allow_ip_sans: false,
         },
         config_dir: tmp_dir.to_path_buf(),
+        allow_none_validation: true,
     }
 }
 
@@ -53,7 +54,8 @@ pub fn signing_config(tmp_dir: &Path) -> VigilConfig {
 pub fn make_csr(cn: &str, dns_sans: &[&str], uri_sans: &[&str]) -> Result<(String, String)> {
     use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType, SanType};
 
-    let mut params = CertificateParams::new(dns_sans.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    let mut params =
+        CertificateParams::new(dns_sans.iter().map(|s| s.to_string()).collect::<Vec<_>>());
     let mut dn = DistinguishedName::new();
     dn.push(DnType::CommonName, cn);
     params.distinguished_name = dn;
@@ -68,7 +70,11 @@ pub fn make_csr(cn: &str, dns_sans: &[&str], uri_sans: &[&str]) -> Result<(Strin
 
 /// Sign a CSR with the test intermediate CA and return the SignedCertificate.
 /// This calls vigil's signing logic directly — no running vigil server needed.
-pub fn sign_csr_with_test_ca(csr_pem: &str, days: u32, tmp_dir: &Path) -> Result<vigil::types::SignedCertificate> {
+pub fn sign_csr_with_test_ca(
+    csr_pem: &str,
+    days: u32,
+    tmp_dir: &Path,
+) -> Result<vigil::types::SignedCertificate> {
     let config = signing_config(tmp_dir);
     std::fs::create_dir_all(&config.certs_dir).ok();
     vigil::ca::sign_csr(csr_pem, days, None, &config)
@@ -104,8 +110,8 @@ pub fn generate_signed_cert(
     std::fs::create_dir_all(&config.certs_dir).ok();
     std::fs::create_dir_all(&tmp_dir).ok();
 
-    let signed = vigil::ca::sign_csr(&csr_pem, days, None, &config)
-        .context("signing CSR with test CA")?;
+    let signed =
+        vigil::ca::sign_csr(&csr_pem, days, None, &config).context("signing CSR with test CA")?;
 
     Ok((signed.cert_pem, key_pem, signed.fullchain_pem))
 }

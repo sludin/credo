@@ -6,7 +6,10 @@
 /// This tool is intentionally simple and has no external deps beyond rcgen.
 /// Run once, commit the output, and regenerate only when certs expire (10 years).
 use anyhow::{Context, Result};
-use rcgen::{BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType, IsCa, KeyUsagePurpose, SanType};
+use rcgen::{
+    BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType, IsCa,
+    KeyUsagePurpose, SanType,
+};
 use std::fs;
 use std::path::Path;
 use time::OffsetDateTime;
@@ -46,12 +49,12 @@ fn make_intermediate_ca() -> Result<Certificate> {
 }
 
 fn write(path: &Path, contents: &str) -> Result<()> {
-    fs::write(path, contents)
-        .with_context(|| format!("writing {}", path.display()))
+    fs::write(path, contents).with_context(|| format!("writing {}", path.display()))
 }
 
 fn main() -> Result<()> {
-    let out_dir = std::env::args().nth(1)
+    let out_dir = std::env::args()
+        .nth(1)
         .unwrap_or_else(|| "tests/fixtures".to_string());
     let out = Path::new(&out_dir);
     fs::create_dir_all(out).context("creating output directory")?;
@@ -83,7 +86,11 @@ fn main() -> Result<()> {
     println!("  catrust.pem          (= root-ca.pem, trust anchor for all test services)");
     println!();
     println!("Verify chain with:");
-    println!("  openssl verify -CAfile {}/catrust.pem {}/intermediate-ca.pem", out.display(), out.display());
+    println!(
+        "  openssl verify -CAfile {}/catrust.pem {}/intermediate-ca.pem",
+        out.display(),
+        out.display()
+    );
 
     Ok(())
 }

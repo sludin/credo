@@ -29,7 +29,11 @@ pub async fn run_hooks(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResu
             HookRef::Parameterized { name, args } => {
                 let mut pairs: Vec<_> = args.iter().collect();
                 pairs.sort_by_key(|(k, _)| *k);
-                format!("{}:{}", name, serde_json::to_string(&pairs).unwrap_or_default())
+                format!(
+                    "{}:{}",
+                    name,
+                    serde_json::to_string(&pairs).unwrap_or_default()
+                )
             }
         };
         if seen.insert(key) {
@@ -54,7 +58,10 @@ pub async fn run_hooks(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResu
         };
 
         match hook_def {
-            ServiceHookDef::Parameterized { exec, args: arg_specs } => {
+            ServiceHookDef::Parameterized {
+                exec,
+                args: arg_specs,
+            } => {
                 let supplied_args = hook_ref.args();
 
                 // Validate args
@@ -114,7 +121,12 @@ pub async fn run_hooks(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResu
 
                 match spawn_no_shell(&argv).await {
                     Ok((stdout, stderr)) => {
-                        results.push(HookResult { hook: hook_name, command: command_str, stdout, stderr });
+                        results.push(HookResult {
+                            hook: hook_name,
+                            command: command_str,
+                            stdout,
+                            stderr,
+                        });
                     }
                     Err(e) => {
                         tracing::warn!(

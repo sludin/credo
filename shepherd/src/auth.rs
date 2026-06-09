@@ -2,8 +2,8 @@ use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 
-use credo_lib::auth::identity_from_der;
 pub use credo_lib::auth::check_min_role;
+use credo_lib::auth::identity_from_der;
 
 use crate::error::AppError;
 use crate::jwt::verify_jwt;
@@ -41,12 +41,15 @@ pub async fn corgi_auth_middleware(
 
     // URI SAN must match a configured corgi's identityUri
     let corgis = state.corgis.read().await;
-    let matched: Option<CorgiNodeConfig> = corgis.iter().find(|c| {
-        c.identity_uri
-            .as_ref()
-            .map(|uri| identity.san_uris.iter().any(|s| s == uri))
-            .unwrap_or(false)
-    }).cloned();
+    let matched: Option<CorgiNodeConfig> = corgis
+        .iter()
+        .find(|c| {
+            c.identity_uri
+                .as_ref()
+                .map(|uri| identity.san_uris.iter().any(|s| s == uri))
+                .unwrap_or(false)
+        })
+        .cloned();
     drop(corgis);
 
     let node = matched.ok_or_else(|| {
@@ -59,7 +62,9 @@ pub async fn corgi_auth_middleware(
 
     req.extensions_mut().insert(node.clone());
     let mut response = next.run(req).await;
-    response.extensions_mut().insert(LogIdentity(node.name.clone()));
+    response
+        .extensions_mut()
+        .insert(LogIdentity(node.name.clone()));
     Ok(response)
 }
 
@@ -108,17 +113,20 @@ pub async fn api_auth_middleware(
         .extensions()
         .get::<credo_lib::PeerCertDer>()
         .map(|p| p.0.clone())
-        .ok_or_else(|| AppError::Unauthorized(
-            "Authentication required: provide a JWT Bearer token or mTLS client certificate".to_string()
-        ))?;
+        .ok_or_else(|| {
+            AppError::Unauthorized(
+                "Authentication required: provide a JWT Bearer token or mTLS client certificate"
+                    .to_string(),
+            )
+        })?;
 
     let identity = identity_from_der(&cert_der)
         .map_err(|e| AppError::Unauthorized(format!("Invalid client certificate: {e}")))?;
 
     let accounts = state.accounts.read().await;
-    let matched_account = accounts.iter().find(|a| {
-        a.active && a.identities.iter().any(|id| identity.san_uris.contains(id))
-    });
+    let matched_account = accounts
+        .iter()
+        .find(|a| a.active && a.identities.iter().any(|id| identity.san_uris.contains(id)));
 
     let user = if let Some(account) = matched_account {
         AuthenticatedUser {
@@ -136,7 +144,9 @@ pub async fn api_auth_middleware(
         )));
     };
 
-    let identity = user.account_name.clone()
+    let identity = user
+        .account_name
+        .clone()
         .or_else(|| user.account_id.clone())
         .unwrap_or_else(|| user.identity_uri.clone());
     req.extensions_mut().insert(user);

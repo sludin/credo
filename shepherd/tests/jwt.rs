@@ -26,7 +26,13 @@ fn load_or_generate_creates_and_reloads() {
 #[test]
 fn sign_and_verify_round_trip() {
     let keys = tmp_keys();
-    let token = sign_jwt(&keys, "vigil://credo/test", &Role::Admin, Some("test-account")).unwrap();
+    let token = sign_jwt(
+        &keys,
+        "vigil://credo/test",
+        &Role::Admin,
+        Some("test-account"),
+    )
+    .unwrap();
 
     let claims = verify_jwt(&keys, &token).unwrap();
     assert_eq!(claims.sub, "vigil://credo/test");
@@ -58,11 +64,16 @@ fn verify_rejects_wrong_key() {
 /// The JWKS endpoint returns a JSON object with a `keys` array containing at least one key.
 #[tokio::test]
 async fn jwks_endpoint_returns_keys() {
-    let shepherd = credo_test::shepherd_harness::TestShepherd::start().await.unwrap();
+    let shepherd = credo_test::shepherd_harness::TestShepherd::start()
+        .await
+        .unwrap();
 
-    let resp = shepherd.client
+    let resp = shepherd
+        .client
         .get(format!("{}/auth/jwks", shepherd.dashboard_url))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
@@ -76,33 +87,48 @@ async fn jwks_endpoint_returns_keys() {
 /// The dashboard API accepts a valid JWT Bearer token on authenticated routes.
 #[tokio::test]
 async fn jwt_bearer_token_grants_access() {
-    let shepherd = credo_test::shepherd_harness::TestShepherd::start().await.unwrap();
+    let shepherd = credo_test::shepherd_harness::TestShepherd::start()
+        .await
+        .unwrap();
 
     let token = sign_jwt(
         &shepherd.jwt_keys,
         "vigil://credo/service/test",
         &Role::Admin,
         Some("test-admin"),
-    ).unwrap();
+    )
+    .unwrap();
 
-    let resp = shepherd.client
+    let resp = shepherd
+        .client
         .get(format!("{}/admin/assignments", shepherd.dashboard_url))
         .header("Authorization", format!("Bearer {}", token))
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     // 200 means auth succeeded (empty assignments list is fine)
-    assert_eq!(resp.status(), 200, "valid JWT must grant access to authenticated route");
+    assert_eq!(
+        resp.status(),
+        200,
+        "valid JWT must grant access to authenticated route"
+    );
 }
 
 /// An expired or invalid JWT is rejected with 401.
 #[tokio::test]
 async fn invalid_jwt_returns_401() {
-    let shepherd = credo_test::shepherd_harness::TestShepherd::start().await.unwrap();
+    let shepherd = credo_test::shepherd_harness::TestShepherd::start()
+        .await
+        .unwrap();
 
-    let resp = shepherd.client
+    let resp = shepherd
+        .client
         .get(format!("{}/admin/assignments", shepherd.dashboard_url))
         .header("Authorization", "Bearer not-a-valid-jwt")
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), 401, "invalid JWT must return 401");
 }

@@ -51,7 +51,9 @@ pub fn live_dir(cert_store_dir: &Path, cert_name: &str) -> PathBuf {
 /// Staging path for a private key while its CSR is in flight.
 /// Keyed by cert name; cleared when the cert arrives via install_to_archive.
 pub fn pending_key_path(cert_store_dir: &Path, cert_name: &str) -> PathBuf {
-    cert_store_dir.join("pending").join(format!("{}.pem", cert_name))
+    cert_store_dir
+        .join("pending")
+        .join(format!("{}.pem", cert_name))
 }
 
 pub fn ensure_parent(path: &Path) -> Result<()> {
@@ -152,9 +154,18 @@ pub fn install_to_archive(
 
     // Write cert
     let cert_archive_path = archive.join(format!("cert-{}.pem", sfx));
-    write_file(&cert_archive_path, cert_pem.as_bytes(), entry.cert_mode.unwrap_or(0o644))?;
+    write_file(
+        &cert_archive_path,
+        cert_pem.as_bytes(),
+        entry.cert_mode.unwrap_or(0o644),
+    )?;
     if entry.cert_owner.is_some() || entry.cert_group.is_some() {
-        set_owner(&cert_archive_path, entry.cert_owner.as_deref(), entry.cert_group.as_deref()).ok();
+        set_owner(
+            &cert_archive_path,
+            entry.cert_owner.as_deref(),
+            entry.cert_group.as_deref(),
+        )
+        .ok();
     }
 
     // Update live/cert.pem symlink
@@ -246,7 +257,12 @@ pub fn install_to_archive(
         // Key permissions
         set_permissions(&entry.key_path, entry.key_mode.unwrap_or(0o640))?;
         if entry.key_owner.is_some() || entry.key_group.is_some() {
-            set_owner(&entry.key_path, entry.key_owner.as_deref(), entry.key_group.as_deref()).ok();
+            set_owner(
+                &entry.key_path,
+                entry.key_owner.as_deref(),
+                entry.key_group.as_deref(),
+            )
+            .ok();
         }
     }
 

@@ -106,15 +106,21 @@ pub fn resolve_includes(
     seen: &mut Vec<PathBuf>,
 ) -> Result<serde_json::Value> {
     let includes: Vec<String> = match value.get("includes").and_then(|v| v.as_array()) {
-        Some(arr) => arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
-        None      => return Ok(value),
+        Some(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect(),
+        None => return Ok(value),
     };
 
     for include_str in includes {
         let include_path = if Path::new(&include_str).is_absolute() {
             PathBuf::from(&include_str)
         } else {
-            config_path.parent().unwrap_or(Path::new(".")).join(&include_str)
+            config_path
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join(&include_str)
         };
 
         let canonical = include_path.canonicalize().unwrap_or(include_path.clone());
@@ -144,7 +150,11 @@ pub fn resolve_includes(
 /// Resolve `raw` relative to `base`; absolute paths are returned unchanged.
 pub fn resolve_path(base: &Path, raw: &str) -> PathBuf {
     let p = Path::new(raw);
-    if p.is_absolute() { p.to_path_buf() } else { base.join(p) }
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        base.join(p)
+    }
 }
 
 /// Resolve an optional path string against `base`, returning `None` if missing.
@@ -163,7 +173,7 @@ pub fn resolve_path_or(base: &Path, raw: Option<&str>, fallback: &str) -> PathBu
 
 pub fn bool_from_value(v: &serde_json::Value, fallback: bool) -> bool {
     match v {
-        serde_json::Value::Bool(b)   => *b,
+        serde_json::Value::Bool(b) => *b,
         serde_json::Value::String(s) => matches!(s.as_str(), "true" | "1" | "yes" | "on"),
         serde_json::Value::Number(n) => n.as_i64().map(|n| n != 0).unwrap_or(fallback),
         _ => fallback,
@@ -184,18 +194,24 @@ pub fn str_from_env(env_key: &str, fallback: &str) -> String {
 
 pub fn bool_from_env(env_key: &str, fallback: bool) -> bool {
     match std::env::var(env_key).as_deref() {
-        Ok("1" | "true" | "yes" | "on")   => true,
-        Ok("0" | "false" | "no" | "off")  => false,
+        Ok("1" | "true" | "yes" | "on") => true,
+        Ok("0" | "false" | "no" | "off") => false,
         _ => fallback,
     }
 }
 
 pub fn u64_from_env(env_key: &str, fallback: u64) -> u64 {
-    std::env::var(env_key).ok().and_then(|s| s.parse().ok()).unwrap_or(fallback)
+    std::env::var(env_key)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(fallback)
 }
 
 pub fn u16_from_env(env_key: &str, fallback: u16) -> u16 {
-    std::env::var(env_key).ok().and_then(|s| s.parse().ok()).unwrap_or(fallback)
+    std::env::var(env_key)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(fallback)
 }
 
 // ---------------------------------------------------------------------------

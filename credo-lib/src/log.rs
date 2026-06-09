@@ -12,8 +12,8 @@ impl LogLevel {
     pub fn as_tracing_filter(self) -> &'static str {
         match self {
             LogLevel::Fatal => "error",
-            LogLevel::Warn  => "warn",
-            LogLevel::Info  => "info",
+            LogLevel::Warn => "warn",
+            LogLevel::Info => "info",
             LogLevel::Debug => "debug",
         }
     }
@@ -21,16 +21,16 @@ impl LogLevel {
     pub fn from_str(s: &str) -> Self {
         match s.trim().to_lowercase().as_str() {
             "fatal" => LogLevel::Fatal,
-            "warn"  => LogLevel::Warn,
+            "warn" => LogLevel::Warn,
             "debug" => LogLevel::Debug,
-            _       => LogLevel::Info,
+            _ => LogLevel::Info,
         }
     }
 }
 
 pub fn init_logging(level: LogLevel) {
-    let filter = std::env::var("RUST_LOG")
-        .unwrap_or_else(|_| level.as_tracing_filter().to_string());
+    let filter =
+        std::env::var("RUST_LOG").unwrap_or_else(|_| level.as_tracing_filter().to_string());
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new(filter))
         .with_target(false)
