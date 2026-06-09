@@ -101,3 +101,49 @@ Default canonical label strings (`needs-triage`, `needs-info`, `ready-for-agent`
 ### Domain docs
 
 Multi-context monorepo — one `CONTEXT.md` per package, `CONTEXT-MAP.md` at root, `docs/adr/` for system-wide decisions. See `docs/agents/domain.md`.
+
+## Claude Workflow
+
+These rules govern how Claude approaches code changes in this repo. They are enforced automatically where possible (see `.claude/hooks/`) but also apply as standing instructions.
+
+### Branching
+
+Before making non-trivial changes (multi-file edits, new features, bug fixes involving logic), create a feature branch:
+
+```bash
+git checkout -b <slug>-<short-description>
+```
+
+Single-file doc edits and trivial typo fixes may stay on the current branch. When in doubt, branch.
+
+### Committing
+
+After completing any code change task, commit with a meaningful message that explains *why* the change was made. Do not batch unrelated changes into one commit. The pre-commit hook (`.claude/hooks/pre-commit-check.sh`) runs quality gates automatically; fix any failures before retrying the commit.
+
+### Quality gates (pre-commit)
+
+The hook runs these checks when a `git commit` is attempted:
+
+| Changed files | Checks run |
+|---|---|
+| Any `*.rs` file | `cargo fmt --check`, `cargo clippy -- -D warnings` |
+| Any `dashboard/` file | `npm run typecheck` (from `dashboard/`) |
+
+Do not bypass these checks with `--no-verify`. Fix the underlying issue instead.
+
+**ESLint/Prettier note:** The dashboard does not yet have ESLint or Prettier configured. When that is added, update the hook and this table.
+
+### Security invariants
+
+Always preserve these patterns — flag any deviation before proceeding:
+
+- mTLS validation must not be bypassed or made optional on any inter-service path.
+- Auth uses URI-SAN-only matching; do not add fingerprint or fleet-wide fallbacks.
+- Cert files must respect the file-policy permissions set by `credo-lib::file_policy`.
+- Never log private key material or raw cert bytes at INFO or above.
+
+### Architecture invariants
+
+- **Pull-based only**: Shepherd never pushes config or cert material to Corgi. Corgi always pulls.
+- **Port discipline**: Respect the port assignments in the table above. Do not introduce new listeners without updating the table.
+- **No cross-service DB**: Services share no database. State is exchanged only via the defined HTTP/mTLS APIs.
