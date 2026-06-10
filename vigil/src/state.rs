@@ -1,4 +1,5 @@
 use arc_swap::ArcSwap;
+use hickory_resolver::TokioResolver;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
@@ -19,6 +20,9 @@ pub struct AppState {
 
 pub struct StateInner {
     pub ca_metadata: RootCAMetadata,
+
+    // DNS resolver shared across all dns-01 validations (avoids per-call setup cost).
+    pub dns_resolver: TokioResolver,
 
     // File-backed storage (protected by Mutex for write serialization)
     pub storage_lock: Mutex<()>,
@@ -43,10 +47,31 @@ impl AppState {
         ca_metadata: RootCAMetadata,
         bootstrap_secret: Option<String>,
     ) -> Self {
+        let dns_resolver = TokioResolver::builder_tokio()
+            .and_then(|b| b.build())
+            .unwrap_or_else(|_| {
+                use hickory_resolver::config::{NameServerConfig, ResolverConfig};
+                use std::net::{IpAddr, Ipv4Addr};
+                let mut config = ResolverConfig::default();
+                config.add_name_server(NameServerConfig::udp_and_tcp(IpAddr::V4(Ipv4Addr::new(
+                    8, 8, 8, 8,
+                ))));
+                config.add_name_server(NameServerConfig::udp_and_tcp(IpAddr::V4(Ipv4Addr::new(
+                    8, 8, 4, 4,
+                ))));
+                TokioResolver::builder_with_config(
+                    config,
+                    hickory_resolver::net::runtime::TokioRuntimeProvider::default(),
+                )
+                .build()
+                .expect("building fallback DNS resolver")
+            });
+
         AppState {
             config: Arc::new(ArcSwap::from_pointee(config)),
             inner: Arc::new(StateInner {
                 ca_metadata,
+                dns_resolver,
                 storage_lock: Mutex::new(()),
                 acme_accounts: RwLock::new(HashMap::new()),
                 acme_orders: RwLock::new(HashMap::new()),

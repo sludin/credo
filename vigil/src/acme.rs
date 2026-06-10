@@ -1056,10 +1056,12 @@ async fn validate_http_01(domain: &str, token: &str, expected_key_auth: &str) ->
     }
 }
 
-async fn validate_dns_01(domain: &str, key_auth: &str) -> bool {
-    use hickory_resolver::config::ResolverConfig;
+async fn validate_dns_01(
+    domain: &str,
+    key_auth: &str,
+    resolver: &hickory_resolver::TokioResolver,
+) -> bool {
     use hickory_resolver::proto::rr::RData;
-    use hickory_resolver::TokioResolver;
     use sha2::{Digest, Sha256};
 
     let expected = B64.encode(Sha256::digest(key_auth.as_bytes()));
@@ -1067,19 +1069,6 @@ async fn validate_dns_01(domain: &str, key_auth: &str) -> bool {
         format!("_acme-challenge.{}", domain)
     } else {
         format!("_acme-challenge.{}.", domain)
-    };
-
-    let resolver = match TokioResolver::builder_with_config(
-        ResolverConfig::default(),
-        hickory_resolver::net::runtime::TokioRuntimeProvider::new(),
-    )
-    .build()
-    {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(domain = %domain, error = %e, "dns-01: failed to build DNS resolver");
-            return false;
-        }
     };
 
     match resolver.txt_lookup(&lookup_name).await {
@@ -1167,7 +1156,14 @@ pub async fn respond_challenge(
             )
             .await
         }
-        "dns-01" => validate_dns_01(&domain, &challenge_snap.key_authorization).await,
+        "dns-01" => {
+            validate_dns_01(
+                &domain,
+                &challenge_snap.key_authorization,
+                &state.inner.dns_resolver,
+            )
+            .await
+        }
         "none-01" => state.config().allow_none_validation,
         _ => false,
     };
@@ -1700,6 +1696,27 @@ mod tests {
     #[tokio::test]
     async fn dns_01_nonexistent_domain_returns_false() {
         // RFC 2606 reserves .invalid for guaranteed NXDOMAIN
-        assert!(!validate_dns_01("nonexistent-credo-test.invalid", "fake-key-auth").await);
+        let resolver = hickory_resolver::TokioResolver::builder_tokio()
+            .and_then(|b| b.build())
+            .unwrap_or_else(|_| {
+                use hickory_resolver::config::{NameServerConfig, ResolverConfig};
+                use std::net::{IpAddr, Ipv4Addr};
+                let mut config = ResolverConfig::default();
+                config.add_name_server(NameServerConfig::udp_and_tcp(IpAddr::V4(Ipv4Addr::new(
+                    8, 8, 8, 8,
+                ))));
+                config.add_name_server(NameServerConfig::udp_and_tcp(IpAddr::V4(Ipv4Addr::new(
+                    8, 8, 4, 4,
+                ))));
+                hickory_resolver::TokioResolver::builder_with_config(
+                    config,
+                    hickory_resolver::net::runtime::TokioRuntimeProvider::default(),
+                )
+                .build()
+                .expect("building fallback DNS resolver")
+            });
+        assert!(
+            !validate_dns_01("nonexistent-credo-test.invalid", "fake-key-auth", &resolver).await
+        );
     }
 }
