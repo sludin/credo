@@ -24,6 +24,10 @@ pub async fn challenge_health() -> Json<Value> {
     Json(json!({ "status": "healthy", "service": "corgi-http-challenge" }))
 }
 
+pub async fn challenge_test() -> impl IntoResponse {
+    (StatusCode::OK, [("content-type", "text/plain")], "test")
+}
+
 pub async fn challenge_get(
     State(state): State<AppState>,
     Path(token): Path<String>,
