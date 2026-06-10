@@ -87,6 +87,7 @@ fn test_ca_metadata() -> RootCAMetadata {
         },
         config_dir: tmp.path().to_path_buf(),
         allow_none_validation: true,
+        default_validation_method: "none-01".to_string(),
     };
     vigil::ca::load_ca_metadata(&config).unwrap()
 }

@@ -777,22 +777,36 @@ pub async fn new_order(
         .unwrap_or("")
         .trim()
         .to_lowercase();
+    let config = state.config();
     let validation_method = match requested_method.as_str() {
         "http-01" => "http-01",
         "dns-01" => "dns-01",
-        "none-01" | "" => {
-            // none-01 (or absent) is only allowed when explicitly enabled in config.
-            // An absent field is treated as none-01 so that callers that omit it
-            // get a clear rejection rather than a silent fallback.
-            if !state.config().allow_none_validation {
+        "none-01" => {
+            if !config.allow_none_validation {
                 return acme_error(
                     StatusCode::BAD_REQUEST,
                     "unauthorized",
-                    "none-01 validation is not permitted; set validationMethod to http-01 or dns-01",
+                    "none-01 validation is not permitted",
                 );
             }
             "none-01"
         }
+        // Absent or unrecognised: use the server-configured default. Standard ACME
+        // clients (e.g. instant-acme) never send validationMethod; the server decides.
+        "" => match config.default_validation_method.as_str() {
+            "http-01" => "http-01",
+            "dns-01" => "dns-01",
+            _ => {
+                if !config.allow_none_validation {
+                    return acme_error(
+                        StatusCode::BAD_REQUEST,
+                        "unauthorized",
+                        "none-01 validation is not permitted; set defaultValidationMethod in vigil config",
+                    );
+                }
+                "none-01"
+            }
+        },
         _ => {
             return acme_error(
                 StatusCode::BAD_REQUEST,

@@ -56,6 +56,9 @@ pub struct VigilConfig {
     pub config_dir: PathBuf,
     /// Allow none-01 challenge auto-approval. Off by default; emit a startup warning when enabled.
     pub allow_none_validation: bool,
+    /// Validation method used when the ACME client omits validationMethod. Defaults to "none-01".
+    /// Set to "http-01" or "dns-01" when allow_none_validation is false.
+    pub default_validation_method: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -137,6 +140,7 @@ struct RawConfig {
     rbac_identities: Option<Vec<RawRbacIdentity>>,
     issuance_policy: Option<RawIssuancePolicy>,
     allow_none_validation: Option<bool>,
+    default_validation_method: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -312,5 +316,8 @@ pub fn load_config() -> Result<VigilConfig> {
         issuance_policy: policy,
         config_dir,
         allow_none_validation: raw.allow_none_validation.unwrap_or(false),
+        default_validation_method: raw
+            .default_validation_method
+            .unwrap_or_else(|| "none-01".to_string()),
     })
 }
