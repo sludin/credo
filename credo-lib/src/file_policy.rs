@@ -26,23 +26,19 @@ pub fn apply_file_policy(
     }
 
     if owner.is_some() || group.is_some() {
-        let uid = owner
-            .map(|name| {
-                nix::unistd::User::from_name(name)
-                    .ok()
-                    .flatten()
-                    .map(|u| u.uid)
-            })
-            .flatten();
+        let uid = owner.and_then(|name| {
+            nix::unistd::User::from_name(name)
+                .ok()
+                .flatten()
+                .map(|u| u.uid)
+        });
 
-        let gid = group
-            .map(|name| {
-                nix::unistd::Group::from_name(name)
-                    .ok()
-                    .flatten()
-                    .map(|g| g.gid)
-            })
-            .flatten();
+        let gid = group.and_then(|name| {
+            nix::unistd::Group::from_name(name)
+                .ok()
+                .flatten()
+                .map(|g| g.gid)
+        });
 
         nix::unistd::chown(path, uid, gid).with_context(|| {
             format!(

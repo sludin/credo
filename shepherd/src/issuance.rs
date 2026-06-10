@@ -298,12 +298,19 @@ async fn run_issuance(
         anyhow::bail!("ACME order became invalid for '{cert_name}'");
     }
 
-    // Finalize with CSR
-    tracing::info!(cert = %cert_name, ca = %ca_name, "Finalizing ACME order");
-    order
-        .finalize(csr_der)
-        .await
-        .context("Finalizing ACME order")?;
+    // Only finalize when the order is Ready. Valid means the CA has already
+    // processed the CSR (e.g. a concurrent issuance beat us to it) and the
+    // certificate is available to download — calling finalize again would
+    // produce an "orderNotReady" / "already processing" rejection.
+    if order_state == OrderStatus::Ready {
+        tracing::info!(cert = %cert_name, ca = %ca_name, "Finalizing ACME order");
+        order
+            .finalize(csr_der)
+            .await
+            .context("Finalizing ACME order")?;
+    } else {
+        tracing::debug!(cert = %cert_name, ca = %ca_name, "Order already past Ready; skipping finalize");
+    }
 
     // Get certificate (poll until available)
     let cert_chain = wait_for_certificate(cert_name, ca_name, &mut order).await?;
@@ -330,7 +337,7 @@ async fn wait_for_order_ready(
         let state = order.refresh().await.context("Refreshing order status")?;
         match state.status {
             OrderStatus::Ready | OrderStatus::Valid | OrderStatus::Invalid => {
-                return Ok(state.status.clone());
+                return Ok(state.status);
             }
             _ => {
                 tracing::debug!(cert = %cert_name, ca = %ca_name, attempt = %attempt, "Waiting for order ready");
@@ -345,9 +352,8 @@ async fn wait_for_certificate(cert_name: &str, ca_name: &str, order: &mut Order)
         if let Some(cert) = order.certificate().await.context("Fetching certificate")? {
             return Ok(cert);
         }
-        match order.state().status {
-            OrderStatus::Invalid => anyhow::bail!("ACME order invalid while waiting for cert"),
-            _ => {}
+        if order.state().status == OrderStatus::Invalid {
+            anyhow::bail!("ACME order invalid while waiting for cert");
         }
         tracing::debug!(cert = %cert_name, ca = %ca_name, attempt = %attempt, "Waiting for certificate");
         sleep(Duration::from_secs(5)).await;

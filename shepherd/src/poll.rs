@@ -286,6 +286,21 @@ async fn cert_maintenance(
         return Ok(());
     }
 
+    // Don't start a second issuance if one is already in flight for this cert.
+    {
+        let jobs = state.renewal_jobs.read().await;
+        if jobs
+            .values()
+            .any(|j| j.cert_name == assignment.cert_name && !j.phase.is_terminal())
+        {
+            tracing::debug!(
+                cert = %assignment.cert_name,
+                "Renewal already in progress; skipping poll-triggered renewal"
+            );
+            return Ok(());
+        }
+    }
+
     let renewal_reason = if local_cert.is_none() {
         "no cert in store"
     } else if corgi_missing_key {
