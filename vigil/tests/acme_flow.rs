@@ -129,6 +129,21 @@ impl AcmeTestClient {
         resp.json().await.unwrap()
     }
 
+    async fn try_new_order(
+        &self,
+        domain: &str,
+        validation_method: Option<&str>,
+    ) -> reqwest::Response {
+        let url = format!("{}/acme/new-order", self.base);
+        let nonce = self.nonce().await;
+        let mut payload = json!({"identifiers": [{"type": "dns", "value": domain}]});
+        if let Some(m) = validation_method {
+            payload["validationMethod"] = json!(m);
+        }
+        let body = self.jws_with_kid(&nonce, &url, payload);
+        self.http.post(&url).json(&body).send().await.unwrap()
+    }
+
     async fn get_authz(&self, authz_url: &str) -> Value {
         let url = Self::norm(authz_url);
         let nonce = self.nonce().await;
@@ -208,23 +223,20 @@ async fn start_challenge_server() -> (
 // Tests
 // ---------------------------------------------------------------------------
 
-/// none-01 (default) is rejected by respond_challenge when allowNoneValidation is false.
+/// none-01 (default, or explicit) is rejected at new-order time when allowNoneValidation is false.
 #[tokio::test]
 async fn none_01_rejected_when_allow_none_validation_false() {
     let vigil = TestVigil::start_authed_strict().await.unwrap();
     let mut client = AcmeTestClient::new(&vigil.url);
 
     client.register().await;
-    let order = client.new_order("test.credo.test", None).await;
-    let authz_url = order["authorizations"][0].as_str().unwrap();
-    let authz = client.get_authz(authz_url).await;
-    let (chall_url, _token) = AcmeTestClient::find_challenge(&authz, "http-01");
 
-    let resp = client.respond_challenge(&chall_url).await;
+    // Absent validationMethod defaults to none-01 and must be rejected at order creation.
+    let resp = client.try_new_order("test.credo.test", None).await;
     assert_eq!(
         resp.status(),
-        403,
-        "none-01 challenge must be rejected when allowNoneValidation is false"
+        400,
+        "none-01 order must be rejected at new-order when allowNoneValidation is false"
     );
     let body: Value = resp.json().await.unwrap();
     assert!(
@@ -232,6 +244,12 @@ async fn none_01_rejected_when_allow_none_validation_false() {
         "error type must be unauthorized, got: {}",
         body["type"]
     );
+
+    // Explicit none-01 must also be rejected.
+    let resp = client
+        .try_new_order("test.credo.test", Some("none-01"))
+        .await;
+    assert_eq!(resp.status(), 400, "explicit none-01 must be rejected");
 }
 
 /// none-01 (default) is accepted by respond_challenge when allowNoneValidation is true.

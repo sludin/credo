@@ -771,14 +771,35 @@ pub async fn new_order(
         );
     }
 
-    let validation_method = payload
+    let requested_method = payload
         .get("validationMethod")
         .and_then(|v| v.as_str())
-        .unwrap_or("none-01");
-    let validation_method = match validation_method.trim().to_lowercase().as_str() {
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+    let validation_method = match requested_method.as_str() {
         "http-01" => "http-01",
         "dns-01" => "dns-01",
-        _ => "none-01",
+        "none-01" | "" => {
+            // none-01 (or absent) is only allowed when explicitly enabled in config.
+            // An absent field is treated as none-01 so that callers that omit it
+            // get a clear rejection rather than a silent fallback.
+            if !state.config().allow_none_validation {
+                return acme_error(
+                    StatusCode::BAD_REQUEST,
+                    "unauthorized",
+                    "none-01 validation is not permitted; set validationMethod to http-01 or dns-01",
+                );
+            }
+            "none-01"
+        }
+        _ => {
+            return acme_error(
+                StatusCode::BAD_REQUEST,
+                "malformed",
+                "unsupported validationMethod; expected http-01, dns-01, or none-01",
+            );
+        }
     };
 
     let order_id = {
