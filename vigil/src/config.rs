@@ -56,6 +56,13 @@ pub struct VigilConfig {
     pub config_dir: PathBuf,
     /// Allow none-01 challenge auto-approval. Off by default; emit a startup warning when enabled.
     pub allow_none_validation: bool,
+    /// How many times to poll for a challenge before declaring it invalid. Default 5.
+    pub challenge_check_count: u32,
+    /// Seconds between challenge polling attempts (after the first immediate check). Default 60.
+    pub challenge_check_interval_secs: u64,
+    /// Explicit recursive resolver IPs for http-01 validation and dns-01 NS lookups.
+    /// Empty (default) means use the system resolver from /etc/resolv.conf.
+    pub dns_resolver_addrs: Vec<std::net::IpAddr>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -137,6 +144,9 @@ struct RawConfig {
     rbac_identities: Option<Vec<RawRbacIdentity>>,
     issuance_policy: Option<RawIssuancePolicy>,
     allow_none_validation: Option<bool>,
+    challenge_check_count: Option<u32>,
+    challenge_check_interval_secs: Option<u64>,
+    dns_resolver_addrs: Option<Vec<String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -312,5 +322,13 @@ pub fn load_config() -> Result<VigilConfig> {
         issuance_policy: policy,
         config_dir,
         allow_none_validation: raw.allow_none_validation.unwrap_or(false),
+        challenge_check_count: raw.challenge_check_count.unwrap_or(5),
+        challenge_check_interval_secs: raw.challenge_check_interval_secs.unwrap_or(60),
+        dns_resolver_addrs: raw
+            .dns_resolver_addrs
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|s| s.parse().ok())
+            .collect(),
     })
 }

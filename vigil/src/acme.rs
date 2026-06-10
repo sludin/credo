@@ -1056,44 +1056,107 @@ async fn validate_http_01(domain: &str, token: &str, expected_key_auth: &str) ->
     }
 }
 
+/// Resolve the authoritative NS IPs for a domain by walking up the label hierarchy.
+/// Uses the recursive resolver (for NS record lookup and NS hostname → IP resolution).
+async fn find_authoritative_ns_ips(
+    domain: &str,
+    resolver: &hickory_resolver::TokioResolver,
+) -> Vec<std::net::IpAddr> {
+    use hickory_resolver::proto::rr::RData;
+
+    let domain_clean = domain.trim_end_matches('.');
+    let labels: Vec<&str> = domain_clean.split('.').collect();
+
+    // Walk from the full domain up to the 2nd-level domain (don't query TLD nameservers).
+    for start in 0..labels.len().saturating_sub(1) {
+        let zone = format!("{}.", labels[start..].join("."));
+        let Ok(ns_lookup) = resolver.ns_lookup(&zone).await else {
+            continue;
+        };
+        let mut ips: Vec<std::net::IpAddr> = Vec::new();
+        for rec in ns_lookup.answers() {
+            if let RData::NS(ns_name) = &rec.data {
+                let host = ns_name.to_string();
+                if let Ok(ip_lookup) = resolver.lookup_ip(host.trim_end_matches('.')).await {
+                    ips.extend(ip_lookup.iter());
+                }
+            }
+        }
+        if !ips.is_empty() {
+            tracing::debug!(domain = %domain, zone = %zone, ns_count = %ips.len(),
+                           "dns-01: found authoritative NS");
+            return ips;
+        }
+    }
+    Vec::new()
+}
+
+/// Query a TXT record directly from a specific nameserver IP, bypassing the recursive resolver cache.
+async fn query_txt_from_ns(ns_ip: std::net::IpAddr, lookup_name: &str, expected: &str) -> bool {
+    use hickory_resolver::config::{NameServerConfig, ResolverConfig};
+    use hickory_resolver::proto::rr::RData;
+
+    let mut config = ResolverConfig::default();
+    config.add_name_server(NameServerConfig::udp_and_tcp(ns_ip));
+    let auth_resolver = match hickory_resolver::TokioResolver::builder_with_config(
+        config,
+        hickory_resolver::net::runtime::TokioRuntimeProvider::default(),
+    )
+    .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::debug!(ns_ip = %ns_ip, error = %e, "dns-01: failed to build NS resolver");
+            return false;
+        }
+    };
+
+    match auth_resolver.txt_lookup(lookup_name).await {
+        Ok(records) => records.answers().iter().any(|rec| {
+            if let RData::TXT(txt) = &rec.data {
+                txt.txt_data.iter().any(|d| {
+                    std::str::from_utf8(d)
+                        .map(|s| s.trim() == expected)
+                        .unwrap_or(false)
+                })
+            } else {
+                false
+            }
+        }),
+        Err(e) => {
+            tracing::debug!(ns_ip = %ns_ip, lookup = %lookup_name, error = %e,
+                           "dns-01: TXT lookup from authoritative NS failed");
+            false
+        }
+    }
+}
+
+/// Validate a dns-01 challenge by querying the authoritative nameservers directly,
+/// bypassing any recursive resolver cache.
 async fn validate_dns_01(
     domain: &str,
     key_auth: &str,
     resolver: &hickory_resolver::TokioResolver,
 ) -> bool {
-    use hickory_resolver::proto::rr::RData;
     use sha2::{Digest, Sha256};
 
     let expected = B64.encode(Sha256::digest(key_auth.as_bytes()));
-    let lookup_name = if domain.ends_with('.') {
-        format!("_acme-challenge.{}", domain)
-    } else {
-        format!("_acme-challenge.{}.", domain)
-    };
+    let lookup_name = format!("_acme-challenge.{}.", domain.trim_end_matches('.'));
 
-    match resolver.txt_lookup(&lookup_name).await {
-        Ok(records) => {
-            let found = records.answers().iter().any(|rec| {
-                if let RData::TXT(txt) = &rec.data {
-                    txt.txt_data.iter().any(|d| {
-                        std::str::from_utf8(d)
-                            .map(|s| s.trim() == expected)
-                            .unwrap_or(false)
-                    })
-                } else {
-                    false
-                }
-            });
-            if !found {
-                tracing::warn!(domain = %domain, "dns-01: expected TXT record not found");
-            }
-            found
-        }
-        Err(e) => {
-            tracing::warn!(domain = %domain, error = %e, "dns-01: TXT lookup failed");
-            false
+    let ns_ips = find_authoritative_ns_ips(domain, resolver).await;
+    if ns_ips.is_empty() {
+        tracing::warn!(domain = %domain, "dns-01: could not find authoritative NS");
+        return false;
+    }
+
+    for ns_ip in ns_ips {
+        if query_txt_from_ns(ns_ip, &lookup_name, &expected).await {
+            return true;
         }
     }
+
+    tracing::warn!(domain = %domain, "dns-01: TXT record not found on any authoritative NS");
+    false
 }
 
 pub async fn respond_challenge(
@@ -1146,65 +1209,84 @@ pub async fn respond_challenge(
             .unwrap_or_default()
     };
 
-    // Validate based on method
-    let valid = match challenge_snap.validation_method.as_str() {
-        "http-01" => {
-            validate_http_01(
-                &domain,
-                &challenge_snap.token,
-                &challenge_snap.key_authorization,
-            )
-            .await
-        }
-        "dns-01" => {
-            validate_dns_01(
-                &domain,
-                &challenge_snap.key_authorization,
-                &state.inner.dns_resolver,
-            )
-            .await
-        }
-        "none-01" => state.config().allow_none_validation,
-        _ => false,
-    };
+    let (scheme, host) = extract_host_scheme(&headers);
+    let challenge_url = absolute(
+        &host,
+        scheme,
+        &format!("/acme/challenge/{}", challenge_snap.id),
+    );
 
-    if !valid {
-        tracing::warn!(
-            domain = %domain,
-            method = %challenge_snap.validation_method,
-            "ACME challenge validation failed"
-        );
-        return acme_error(
-            StatusCode::FORBIDDEN,
-            "unauthorized",
-            "challenge validation failed",
-        );
+    // none-01 is a server-side decision — validate synchronously and return immediately.
+    if challenge_snap.validation_method == "none-01" {
+        if !state.config().allow_none_validation {
+            return acme_error(
+                StatusCode::FORBIDDEN,
+                "unauthorized",
+                "none-01 validation is not permitted",
+            );
+        }
+        mark_challenge_valid(&state, &id, &authz_id, &order_id).await;
+        return (
+            resp_headers,
+            Json(json!({
+                "type": challenge_snap.challenge_type,
+                "status": "valid",
+                "url": challenge_url,
+                "token": challenge_snap.token,
+            })),
+        )
+            .into_response();
     }
 
-    // Mark challenge valid
+    // For http-01 and dns-01: if already resolved, return current status immediately.
+    {
+        let challenges = state.inner.acme_challenges.read().await;
+        if let Some(c) = challenges.get(&id) {
+            if c.status == "valid" || c.status == "invalid" || c.status == "processing" {
+                return (
+                    resp_headers,
+                    Json(json!({
+                        "type": challenge_snap.challenge_type,
+                        "status": c.status,
+                        "url": challenge_url,
+                        "token": challenge_snap.token,
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    // Mark as processing and spawn background validation task.
     {
         let mut challenges = state.inner.acme_challenges.write().await;
-        if let Some(chall) = challenges.get_mut(&id) {
-            chall.status = "valid".to_string();
+        if let Some(c) = challenges.get_mut(&id) {
+            c.status = "processing".to_string();
         }
     }
 
-    // Mark authz valid + update order
-    {
-        let mut authzs = state.inner.acme_authzs.write().await;
-        if let Some(authz) = authzs.get_mut(&authz_id) {
-            authz.status = "valid".to_string();
-        }
-    }
-    update_order_status(&state, &order_id).await;
+    let config = state.config();
+    let check_count = config.challenge_check_count;
+    let check_interval = std::time::Duration::from_secs(config.challenge_check_interval_secs);
+    drop(config);
 
-    let (scheme, host) = extract_host_scheme(&headers);
+    tokio::spawn(validate_challenge_background(
+        state,
+        id.clone(),
+        domain,
+        challenge_snap.clone(),
+        authz_id,
+        order_id,
+        check_count,
+        check_interval,
+    ));
+
     (
         resp_headers,
         Json(json!({
             "type": challenge_snap.challenge_type,
-            "status": "valid",
-            "url": absolute(&host, scheme, &format!("/acme/challenge/{}", challenge_snap.id)),
+            "status": "processing",
+            "url": challenge_url,
             "token": challenge_snap.token,
         })),
     )
@@ -1558,20 +1640,147 @@ async fn update_order_status(state: &AppState, order_id: &str) {
             .map(|o| o.authz_ids.clone())
             .unwrap_or_default()
     };
-    let all_valid = {
+    let (all_valid, any_invalid) = {
         let authzs = state.inner.acme_authzs.read().await;
-        authz_ids
+        let all_valid = authz_ids
             .iter()
-            .all(|id| authzs.get(id).map(|a| a.status == "valid").unwrap_or(false))
+            .all(|id| authzs.get(id).map(|a| a.status == "valid").unwrap_or(false));
+        let any_invalid = authz_ids.iter().any(|id| {
+            authzs
+                .get(id)
+                .map(|a| a.status == "invalid")
+                .unwrap_or(false)
+        });
+        (all_valid, any_invalid)
     };
-    if all_valid {
+    if all_valid || any_invalid {
         let mut orders = state.inner.acme_orders.write().await;
         if let Some(o) = orders.get_mut(order_id) {
             if o.status != "valid" {
-                o.status = "ready".to_string();
+                o.status = if any_invalid {
+                    "invalid".to_string()
+                } else {
+                    "ready".to_string()
+                };
             }
         }
     }
+}
+
+async fn mark_challenge_valid(
+    state: &AppState,
+    challenge_id: &str,
+    authz_id: &str,
+    order_id: &str,
+) {
+    {
+        let mut challenges = state.inner.acme_challenges.write().await;
+        if let Some(c) = challenges.get_mut(challenge_id) {
+            c.status = "valid".to_string();
+        }
+    }
+    {
+        let mut authzs = state.inner.acme_authzs.write().await;
+        if let Some(a) = authzs.get_mut(authz_id) {
+            a.status = "valid".to_string();
+        }
+    }
+    update_order_status(state, order_id).await;
+}
+
+async fn mark_challenge_invalid(
+    state: &AppState,
+    challenge_id: &str,
+    authz_id: &str,
+    order_id: &str,
+) {
+    {
+        let mut challenges = state.inner.acme_challenges.write().await;
+        if let Some(c) = challenges.get_mut(challenge_id) {
+            c.status = "invalid".to_string();
+        }
+    }
+    {
+        let mut authzs = state.inner.acme_authzs.write().await;
+        if let Some(a) = authzs.get_mut(authz_id) {
+            a.status = "invalid".to_string();
+        }
+    }
+    update_order_status(state, order_id).await;
+}
+
+/// Background task: poll challenge validation up to `check_count` times, sleeping
+/// `check_interval` between attempts (first attempt runs immediately).
+async fn validate_challenge_background(
+    state: AppState,
+    challenge_id: String,
+    domain: String,
+    challenge_snap: AcmeChallenge,
+    authz_id: String,
+    order_id: String,
+    check_count: u32,
+    check_interval: std::time::Duration,
+) {
+    for attempt in 0..check_count {
+        if attempt > 0 {
+            tokio::time::sleep(check_interval).await;
+        }
+
+        // Bail if another request already resolved this challenge
+        {
+            let challenges = state.inner.acme_challenges.read().await;
+            match challenges.get(&challenge_id).map(|c| c.status.as_str()) {
+                Some("valid") | Some("invalid") | None => return,
+                _ => {}
+            }
+        }
+
+        let valid = match challenge_snap.validation_method.as_str() {
+            "http-01" => {
+                validate_http_01(
+                    &domain,
+                    &challenge_snap.token,
+                    &challenge_snap.key_authorization,
+                )
+                .await
+            }
+            "dns-01" => {
+                validate_dns_01(
+                    &domain,
+                    &challenge_snap.key_authorization,
+                    &state.inner.dns_resolver,
+                )
+                .await
+            }
+            _ => false,
+        };
+
+        if valid {
+            tracing::info!(
+                domain = %domain,
+                method = %challenge_snap.validation_method,
+                attempt = attempt + 1,
+                "ACME challenge validated successfully"
+            );
+            mark_challenge_valid(&state, &challenge_id, &authz_id, &order_id).await;
+            return;
+        }
+
+        tracing::debug!(
+            domain = %domain,
+            method = %challenge_snap.validation_method,
+            attempt = attempt + 1,
+            total = check_count,
+            "ACME challenge validation attempt failed"
+        );
+    }
+
+    tracing::warn!(
+        domain = %domain,
+        method = %challenge_snap.validation_method,
+        "ACME challenge validation exhausted all attempts"
+    );
+    mark_challenge_invalid(&state, &challenge_id, &authz_id, &order_id).await;
 }
 
 async fn save_accounts(state: &AppState) -> anyhow::Result<()> {
@@ -1695,26 +1904,9 @@ mod tests {
 
     #[tokio::test]
     async fn dns_01_nonexistent_domain_returns_false() {
-        // RFC 2606 reserves .invalid for guaranteed NXDOMAIN
-        let resolver = hickory_resolver::TokioResolver::builder_tokio()
-            .and_then(|b| b.build())
-            .unwrap_or_else(|_| {
-                use hickory_resolver::config::{NameServerConfig, ResolverConfig};
-                use std::net::{IpAddr, Ipv4Addr};
-                let mut config = ResolverConfig::default();
-                config.add_name_server(NameServerConfig::udp_and_tcp(IpAddr::V4(Ipv4Addr::new(
-                    8, 8, 8, 8,
-                ))));
-                config.add_name_server(NameServerConfig::udp_and_tcp(IpAddr::V4(Ipv4Addr::new(
-                    8, 8, 4, 4,
-                ))));
-                hickory_resolver::TokioResolver::builder_with_config(
-                    config,
-                    hickory_resolver::net::runtime::TokioRuntimeProvider::default(),
-                )
-                .build()
-                .expect("building fallback DNS resolver")
-            });
+        // RFC 2606 reserves .invalid for guaranteed NXDOMAIN — NS lookup will fail,
+        // find_authoritative_ns_ips returns empty, validate_dns_01 returns false.
+        let resolver = crate::state::build_dns_resolver(&[]);
         assert!(
             !validate_dns_01("nonexistent-credo-test.invalid", "fake-key-auth", &resolver).await
         );

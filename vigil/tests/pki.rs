@@ -53,6 +53,9 @@ fn signing_config(tmp: &TempDir) -> VigilConfig {
         },
         config_dir: tmp.path().to_path_buf(),
         allow_none_validation: true,
+        challenge_check_count: 1,
+        challenge_check_interval_secs: 0,
+        dns_resolver_addrs: vec![],
     }
 }
 

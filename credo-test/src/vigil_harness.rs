@@ -172,5 +172,8 @@ pub fn build_vigil_config(tmp: &PathBuf) -> VigilConfig {
         },
         config_dir: tmp.clone(),
         allow_none_validation: true,
+        challenge_check_count: 3,
+        challenge_check_interval_secs: 0,
+        dns_resolver_addrs: vec![],
     }
 }

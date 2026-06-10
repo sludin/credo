@@ -175,6 +175,24 @@ impl AcmeTestClient {
         let body = self.jws_with_kid(&nonce, &url, json!({}));
         self.http.post(&url).json(&body).send().await.unwrap()
     }
+
+    /// Poll the authz URL every 50 ms until status is "valid" or "invalid", or timeout.
+    async fn poll_authz_until_terminal(&self, authz_url: &str, timeout_ms: u64) -> Value {
+        use std::time::{Duration, Instant};
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        loop {
+            let authz = self.get_authz(authz_url).await;
+            match authz["status"].as_str().unwrap_or("pending") {
+                "valid" | "invalid" => return authz,
+                _ => {}
+            }
+            assert!(
+                Instant::now() < deadline,
+                "authz did not reach terminal status within {timeout_ms}ms"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -307,16 +325,20 @@ async fn http_01_correct_key_auth_validates() {
     *challenge.lock().unwrap() = Some((token, key_auth));
 
     let resp = client.respond_challenge(&chall_url).await;
-    assert_eq!(
-        resp.status(),
-        200,
-        "http-01 challenge must be accepted with correct key authorization"
-    );
+    assert_eq!(resp.status(), 200, "respond_challenge must return 200");
     let body: Value = resp.json().await.unwrap();
     assert_eq!(
         body["status"].as_str(),
+        Some("processing"),
+        "challenge must be processing after respond_challenge"
+    );
+
+    // Background task validates immediately; poll authz until it becomes valid.
+    let authz = client.poll_authz_until_terminal(authz_url, 5000).await;
+    assert_eq!(
+        authz["status"].as_str(),
         Some("valid"),
-        "challenge status must be valid"
+        "authz must be valid after successful http-01 validation"
     );
 }
 
@@ -340,15 +362,19 @@ async fn http_01_wrong_key_auth_rejected() {
     *challenge.lock().unwrap() = Some((token, "wrong-key-auth".to_string()));
 
     let resp = client.respond_challenge(&chall_url).await;
-    assert_eq!(
-        resp.status(),
-        403,
-        "http-01 challenge must be rejected when key authorization is wrong"
-    );
+    assert_eq!(resp.status(), 200, "respond_challenge must return 200");
     let body: Value = resp.json().await.unwrap();
-    assert!(
-        body["type"].as_str().unwrap_or("").contains("unauthorized"),
-        "error type must be unauthorized, got: {}",
-        body["type"]
+    assert_eq!(
+        body["status"].as_str(),
+        Some("processing"),
+        "challenge must be processing after respond_challenge"
+    );
+
+    // Background task retries and exhausts attempts; poll authz until it becomes invalid.
+    let authz = client.poll_authz_until_terminal(authz_url, 5000).await;
+    assert_eq!(
+        authz["status"].as_str(),
+        Some("invalid"),
+        "authz must be invalid after failed http-01 validation"
     );
 }

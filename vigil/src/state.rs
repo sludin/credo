@@ -47,25 +47,7 @@ impl AppState {
         ca_metadata: RootCAMetadata,
         bootstrap_secret: Option<String>,
     ) -> Self {
-        let dns_resolver = TokioResolver::builder_tokio()
-            .and_then(|b| b.build())
-            .unwrap_or_else(|_| {
-                use hickory_resolver::config::{NameServerConfig, ResolverConfig};
-                use std::net::{IpAddr, Ipv4Addr};
-                let mut config = ResolverConfig::default();
-                config.add_name_server(NameServerConfig::udp_and_tcp(IpAddr::V4(Ipv4Addr::new(
-                    8, 8, 8, 8,
-                ))));
-                config.add_name_server(NameServerConfig::udp_and_tcp(IpAddr::V4(Ipv4Addr::new(
-                    8, 8, 4, 4,
-                ))));
-                TokioResolver::builder_with_config(
-                    config,
-                    hickory_resolver::net::runtime::TokioRuntimeProvider::default(),
-                )
-                .build()
-                .expect("building fallback DNS resolver")
-            });
+        let dns_resolver = build_dns_resolver(&config.dns_resolver_addrs);
 
         AppState {
             config: Arc::new(ArcSwap::from_pointee(config)),
@@ -92,4 +74,41 @@ impl AppState {
     pub fn ca_metadata(&self) -> &RootCAMetadata {
         &self.inner.ca_metadata
     }
+}
+
+/// Build a DNS resolver from explicit IPs, or fall back to the system resolver.
+/// Used for http-01 validation and for NS lookups in dns-01.
+pub fn build_dns_resolver(addrs: &[std::net::IpAddr]) -> TokioResolver {
+    use hickory_resolver::config::{NameServerConfig, ResolverConfig};
+
+    if !addrs.is_empty() {
+        let mut config = ResolverConfig::default();
+        for &ip in addrs {
+            config.add_name_server(NameServerConfig::udp_and_tcp(ip));
+        }
+        return TokioResolver::builder_with_config(
+            config,
+            hickory_resolver::net::runtime::TokioRuntimeProvider::default(),
+        )
+        .build()
+        .expect("building configured DNS resolver");
+    }
+
+    TokioResolver::builder_tokio()
+        .and_then(|b| b.build())
+        .unwrap_or_else(|_| {
+            let mut config = ResolverConfig::default();
+            config.add_name_server(NameServerConfig::udp_and_tcp(std::net::IpAddr::V4(
+                std::net::Ipv4Addr::new(8, 8, 8, 8),
+            )));
+            config.add_name_server(NameServerConfig::udp_and_tcp(std::net::IpAddr::V4(
+                std::net::Ipv4Addr::new(8, 8, 4, 4),
+            )));
+            TokioResolver::builder_with_config(
+                config,
+                hickory_resolver::net::runtime::TokioRuntimeProvider::default(),
+            )
+            .build()
+            .expect("building fallback DNS resolver")
+        })
 }
