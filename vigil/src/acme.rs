@@ -791,22 +791,13 @@ pub async fn new_order(
             }
             "none-01"
         }
-        // Absent or unrecognised: use the server-configured default. Standard ACME
-        // clients (e.g. instant-acme) never send validationMethod; the server decides.
-        "" => match config.default_validation_method.as_str() {
-            "http-01" => "http-01",
-            "dns-01" => "dns-01",
-            _ => {
-                if !config.allow_none_validation {
-                    return acme_error(
-                        StatusCode::BAD_REQUEST,
-                        "unauthorized",
-                        "none-01 validation is not permitted; set defaultValidationMethod in vigil config",
-                    );
-                }
-                "none-01"
-            }
-        },
+        "" => {
+            return acme_error(
+                StatusCode::BAD_REQUEST,
+                "malformed",
+                "validationMethod is required; expected http-01, dns-01, or none-01",
+            );
+        }
         _ => {
             return acme_error(
                 StatusCode::BAD_REQUEST,

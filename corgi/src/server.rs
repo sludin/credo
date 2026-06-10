@@ -28,6 +28,10 @@ pub fn build_challenge_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(routes::challenge_health))
         .route(
+            "/.well-known/acme-challenge/test",
+            get(routes::challenge_test),
+        )
+        .route(
             "/.well-known/acme-challenge/:token",
             get(routes::challenge_get),
         )

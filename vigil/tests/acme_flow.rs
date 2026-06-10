@@ -223,7 +223,8 @@ async fn start_challenge_server() -> (
 // Tests
 // ---------------------------------------------------------------------------
 
-/// none-01 (default, or explicit) is rejected at new-order time when allowNoneValidation is false.
+/// none-01 (explicit) is rejected at new-order time when allowNoneValidation is false.
+/// Absent validationMethod is a malformed request regardless of allowNoneValidation.
 #[tokio::test]
 async fn none_01_rejected_when_allow_none_validation_false() {
     let vigil = TestVigil::start_authed_strict().await.unwrap();
@@ -231,35 +232,41 @@ async fn none_01_rejected_when_allow_none_validation_false() {
 
     client.register().await;
 
-    // Absent validationMethod defaults to none-01 and must be rejected at order creation.
+    // Absent validationMethod is always a malformed request — callers must specify a method.
     let resp = client.try_new_order("test.credo.test", None).await;
     assert_eq!(
         resp.status(),
         400,
-        "none-01 order must be rejected at new-order when allowNoneValidation is false"
+        "absent validationMethod must return 400"
     );
     let body: Value = resp.json().await.unwrap();
     assert!(
-        body["type"].as_str().unwrap_or("").contains("unauthorized"),
-        "error type must be unauthorized, got: {}",
+        body["type"].as_str().unwrap_or("").contains("malformed"),
+        "error type must be malformed, got: {}",
         body["type"]
     );
 
-    // Explicit none-01 must also be rejected.
+    // Explicit none-01 must be rejected with unauthorized when allowNoneValidation is false.
     let resp = client
         .try_new_order("test.credo.test", Some("none-01"))
         .await;
     assert_eq!(resp.status(), 400, "explicit none-01 must be rejected");
+    let body: Value = resp.json().await.unwrap();
+    assert!(
+        body["type"].as_str().unwrap_or("").contains("unauthorized"),
+        "error type must be unauthorized for explicit none-01, got: {}",
+        body["type"]
+    );
 }
 
-/// none-01 (default) is accepted by respond_challenge when allowNoneValidation is true.
+/// none-01 (explicit) is accepted when allowNoneValidation is true.
 #[tokio::test]
 async fn none_01_accepted_when_allow_none_validation_true() {
     let vigil = TestVigil::start_authed().await.unwrap();
     let mut client = AcmeTestClient::new(&vigil.url);
 
     client.register().await;
-    let order = client.new_order("test.credo.test", None).await;
+    let order = client.new_order("test.credo.test", Some("none-01")).await;
     let authz_url = order["authorizations"][0].as_str().unwrap();
     let authz = client.get_authz(authz_url).await;
     let (chall_url, _token) = AcmeTestClient::find_challenge(&authz, "http-01");

@@ -298,6 +298,10 @@ pub struct OrderState {
 pub struct NewOrder<'a> {
     /// Identifiers to be included in the order
     pub identifiers: &'a [Identifier],
+    /// CA-specific validation method hint (e.g. "dns-01", "http-01").
+    /// Omitted when None; used by private CAs such as Vigil.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validation_method: Option<&'a str>,
 }
 
 /// Payload for a certificate revocation request

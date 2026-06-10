@@ -131,6 +131,7 @@ async fn run_issuance(
     let mut order = account
         .new_order(&NewOrder {
             identifiers: &identifiers,
+            validation_method: Some(validation_method),
         })
         .await
         .context("Creating ACME order")?;

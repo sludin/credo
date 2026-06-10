@@ -53,7 +53,6 @@ fn signing_config(tmp: &TempDir) -> VigilConfig {
         },
         config_dir: tmp.path().to_path_buf(),
         allow_none_validation: true,
-        default_validation_method: "none-01".to_string(),
     }
 }
 

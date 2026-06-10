@@ -172,6 +172,5 @@ pub fn build_vigil_config(tmp: &PathBuf) -> VigilConfig {
         },
         config_dir: tmp.clone(),
         allow_none_validation: true,
-        default_validation_method: "none-01".to_string(),
     }
 }
