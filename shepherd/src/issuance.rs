@@ -6,7 +6,7 @@ use tokio::time::{sleep, Duration};
 
 use crate::acme_client::AcmeAccountCache;
 use crate::cert_store::persist_issued_material;
-use crate::corgi_client::{corgi_post, CorgiClientPool};
+use crate::corgi_client::{corgi_delete, corgi_post, CorgiClientPool};
 use crate::dns_providers::{create_provider, DnsProviderContext};
 use crate::types::{AcmeCaConfig, CorgiNodeConfig, ManagedAssignment};
 
@@ -250,6 +250,7 @@ async fn run_issuance(
                     .find(|c| c.name == corgi_name)
                     .ok_or_else(|| anyhow::anyhow!("Corgi '{corgi_name}' not found in config"))?;
 
+                tracing::info!(cert = %cert_name, domain = %domain, corgi = %corgi_name, token = %token, "Publishing HTTP-01 challenge token to corgi");
                 corgi_post::<serde_json::Value>(
                     pool,
                     node,
@@ -270,13 +271,7 @@ async fn run_issuance(
                     Box::pin(async move {
                         let path = format!("/acme-challenges/{}", urlencoded(&cleanup_token));
                         // DELETE via corgi — best-effort
-                        let _ = corgi_post::<serde_json::Value>(
-                            &cleanup_pool,
-                            &cleanup_node,
-                            &path,
-                            &serde_json::json!({}),
-                        )
-                        .await;
+                        let _ = corgi_delete(&cleanup_pool, &cleanup_node, &path).await;
                     })
                 }));
             }
@@ -375,12 +370,23 @@ async fn verify_dns_propagation(
     use hickory_resolver::config::{NameServerConfig, ResolverConfig};
     use hickory_resolver::TokioResolver;
 
-    let resolver = TokioResolver::builder_with_config(
-        ResolverConfig::default(),
-        hickory_resolver::net::runtime::TokioRuntimeProvider::new(),
-    )
-    .build()
-    .context("Building DNS resolver")?;
+    let resolver = TokioResolver::builder_tokio()
+        .and_then(|b| b.build())
+        .unwrap_or_else(|_| {
+            let mut config = ResolverConfig::default();
+            config.add_name_server(NameServerConfig::udp_and_tcp(std::net::IpAddr::V4(
+                std::net::Ipv4Addr::new(8, 8, 8, 8),
+            )));
+            config.add_name_server(NameServerConfig::udp_and_tcp(std::net::IpAddr::V4(
+                std::net::Ipv4Addr::new(8, 8, 4, 4),
+            )));
+            TokioResolver::builder_with_config(
+                config,
+                hickory_resolver::net::runtime::TokioRuntimeProvider::default(),
+            )
+            .build()
+            .expect("DNS fallback resolver")
+        });
 
     // Walk up labels to find authoritative NS
     let ns_names = resolve_authoritative_ns(&resolver, record_name).await;

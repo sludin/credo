@@ -218,3 +218,50 @@ pub async fn corgi_post<T: DeserializeOwned>(
     }
     serde_json::from_str::<T>(&resp_body).with_context(|| format!("Parsing response from {url}"))
 }
+
+pub async fn corgi_delete(
+    pool: &Arc<RwLock<CorgiClientPool>>,
+    node: &CorgiNodeConfig,
+    path: &str,
+) -> Result<()> {
+    let client = get_or_create(pool, node).await?;
+    let url = format!("{}{}", node.url.trim_end_matches('/'), path);
+    let host = url_hostname(&url);
+    let start = Instant::now();
+    let resp = match client.delete(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            RequestLogEntry {
+                code: "F",
+                direction: "<",
+                status: 0,
+                method: "DELETE",
+                path,
+                host: &host,
+                peer_ip: "-",
+                identity: Some(node.name.as_str()),
+                duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+            }
+            .log();
+            return Err(anyhow::anyhow!("DELETE {url}: {e}"));
+        }
+    };
+    let status = resp.status();
+    RequestLogEntry {
+        code: "F",
+        direction: "<",
+        status: status.as_u16(),
+        method: "DELETE",
+        path,
+        host: &host,
+        peer_ip: "-",
+        identity: Some(node.name.as_str()),
+        duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+    }
+    .log();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("DELETE {url} → {status}: {body}");
+    }
+    Ok(())
+}
