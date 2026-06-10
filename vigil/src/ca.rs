@@ -72,7 +72,7 @@ pub fn der_integer_bytes(bytes: &[u8]) -> Vec<u8> {
 /// Integer from a hex string (positive).
 pub fn der_integer_hex(hex: &str) -> Vec<u8> {
     let normalized = hex.trim().trim_start_matches("0x");
-    let padded = if normalized.len() % 2 != 0 {
+    let padded = if !normalized.len().is_multiple_of(2) {
         format!("0{}", normalized)
     } else {
         normalized.to_string()
@@ -396,10 +396,8 @@ fn extract_csr_fields(csr_der: &[u8]) -> Result<CsrFields> {
                     x509_parser::extensions::GeneralName::URI(uri) => {
                         san_names.push(uri.trim().to_string());
                     }
-                    x509_parser::extensions::GeneralName::IPAddress(ip) => {
-                        if ip.len() == 4 {
-                            san_names.push(format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]));
-                        }
+                    x509_parser::extensions::GeneralName::IPAddress(ip) if ip.len() == 4 => {
+                        san_names.push(format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]));
                     }
                     _ => {}
                 }

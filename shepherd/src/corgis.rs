@@ -32,6 +32,7 @@ struct RawCorgi {
     #[serde(default)]
     mtls: RawMtls,
     insecure_skip_verify: Option<bool>,
+    http_challenge_port: Option<u16>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,6 +109,7 @@ pub fn load_corgis(path: &Path) -> Result<Vec<CorgiNodeConfig>> {
                 .insecure_skip_verify
                 .or_else(|| defaults.and_then(|d| d.insecure_skip_verify))
                 .unwrap_or(false),
+            http_challenge_port: raw.http_challenge_port,
         });
     }
 

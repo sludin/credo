@@ -56,6 +56,9 @@ pub struct VigilConfig {
     pub config_dir: PathBuf,
     /// Allow none-01 challenge auto-approval. Off by default; emit a startup warning when enabled.
     pub allow_none_validation: bool,
+    /// Ports Vigil may contact for http-01 challenge validation. Default [80].
+    /// Add non-privileged ports (e.g. 7080) to allow Corgi's challenge listener without a proxy.
+    pub allowed_http_challenge_ports: Vec<u16>,
     /// How many times to poll for a challenge before declaring it invalid. Default 5.
     pub challenge_check_count: u32,
     /// Seconds between challenge polling attempts (after the first immediate check). Default 60.
@@ -144,6 +147,7 @@ struct RawConfig {
     rbac_identities: Option<Vec<RawRbacIdentity>>,
     issuance_policy: Option<RawIssuancePolicy>,
     allow_none_validation: Option<bool>,
+    allowed_http_challenge_ports: Option<Vec<u16>>,
     challenge_check_count: Option<u32>,
     challenge_check_interval_secs: Option<u64>,
     dns_resolver_addrs: Option<Vec<String>>,
@@ -322,6 +326,7 @@ pub fn load_config() -> Result<VigilConfig> {
         issuance_policy: policy,
         config_dir,
         allow_none_validation: raw.allow_none_validation.unwrap_or(false),
+        allowed_http_challenge_ports: raw.allowed_http_challenge_ports.unwrap_or_else(|| vec![80]),
         challenge_check_count: raw.challenge_check_count.unwrap_or(5),
         challenge_check_interval_secs: raw.challenge_check_interval_secs.unwrap_or(60),
         dns_resolver_addrs: raw

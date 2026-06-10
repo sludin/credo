@@ -50,6 +50,7 @@ impl TestShepherd {
                 bootstrap_key_path: None,
             },
             insecure_skip_verify: false,
+            http_challenge_port: None,
         };
 
         let admin_user = AuthenticatedUser {

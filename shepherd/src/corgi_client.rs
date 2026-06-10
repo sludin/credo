@@ -29,6 +29,12 @@ pub struct CorgiClientPool {
     bootstrap_identity_pem: Option<Vec<u8>>,
 }
 
+impl Default for CorgiClientPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CorgiClientPool {
     pub fn new() -> Self {
         Self {

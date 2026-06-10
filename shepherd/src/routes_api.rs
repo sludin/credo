@@ -249,7 +249,7 @@ pub async fn refresh_token(
         &role,
         entry.account_name.as_deref(),
     )
-    .map_err(|e| AppError::Internal(e))?;
+    .map_err(AppError::Internal)?;
 
     // Revoke old, issue new
     state.refresh_tokens.revoke_token(token).await;
@@ -437,8 +437,8 @@ pub async fn get_cas(
     check_min_role(Some(&user.role), &Role::Readonly)?;
     let cas_guard = state.cas.read().await;
     let cas: Vec<_> = cas_guard
-        .iter()
-        .map(|(_, ca)| {
+        .values()
+        .map(|ca| {
             json!({
                 "name": ca.name,
                 "protocol": ca.protocol,
@@ -514,8 +514,8 @@ pub async fn config_summary(
     let config = state.config.load_full();
     let cas_guard = state.cas.read().await;
     let cas: Vec<_> = cas_guard
-        .iter()
-        .map(|(_, ca)| {
+        .values()
+        .map(|ca| {
             json!({
                 "name": ca.name,
                 "protocol": ca.protocol,
@@ -708,7 +708,7 @@ pub async fn create_account(
     drop(accounts);
     let all = state.accounts.read().await;
     crate::accounts::save_accounts(&state.config.load().accounts_path, &all)
-        .map_err(|e| AppError::Internal(e))?;
+        .map_err(AppError::Internal)?;
     Ok(Json(serde_json::to_value(&account).unwrap()))
 }
 
@@ -746,7 +746,7 @@ pub async fn update_account(
     drop(accounts);
     let all = state.accounts.read().await;
     crate::accounts::save_accounts(&state.config.load().accounts_path, &all)
-        .map_err(|e| AppError::Internal(e))?;
+        .map_err(AppError::Internal)?;
     Ok(Json(serde_json::to_value(&updated).unwrap()))
 }
 
@@ -765,7 +765,7 @@ pub async fn delete_account(
     drop(accounts);
     let all = state.accounts.read().await;
     crate::accounts::save_accounts(&state.config.load().accounts_path, &all)
-        .map_err(|e| AppError::Internal(e))?;
+        .map_err(AppError::Internal)?;
     Ok(Json(json!({ "deleted": true })))
 }
 
@@ -873,6 +873,97 @@ fn verify_pop_cert(cert_der: &[u8], ca_path: &std::path::Path) -> anyhow::Result
 }
 
 use anyhow::Context as AnyhowContext;
+
+// ---------------------------------------------------------------------------
+// Identity cert issuance (POST /admin/identity-cert)
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityCertRequest {
+    csr_pem: String,
+    #[serde(default = "default_identity_cert_days")]
+    days: u32,
+}
+
+fn default_identity_cert_days() -> u32 {
+    365
+}
+
+pub async fn issue_identity_cert(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Json(body): Json<IdentityCertRequest>,
+) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
+    check_min_role(Some(&user.role), &Role::Admin)?;
+
+    csr_has_no_dns_sans(&body.csr_pem)
+        .map_err(|e| AppError::BadRequest(format!("CSR rejected: {e}")))?;
+
+    let config = state.config.load_full();
+    let vigil_url = config
+        .vigil_url
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("Vigil not configured".to_string()))?
+        .to_string();
+    let client = state
+        .vigil_client
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| AppError::BadRequest("Vigil client unavailable".to_string()))?;
+
+    let cert_pem =
+        crate::routes_bootstrap::sign_csr_via_vigil(&client, &vigil_url, &body.csr_pem, body.days)
+            .await
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("Vigil signing failed: {e}")))?;
+
+    tracing::info!(
+        issued_by = %user.identity_uri,
+        "Identity cert issued via /admin/identity-cert"
+    );
+
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(json!({ "certPem": cert_pem })),
+    ))
+}
+
+/// Reject CSRs that contain any DNS SAN. Identity certs must use URI SANs only.
+fn csr_has_no_dns_sans(csr_pem: &str) -> anyhow::Result<()> {
+    use rustls_pemfile::Item;
+    use x509_parser::prelude::*;
+
+    let der = {
+        let mut rd = std::io::BufReader::new(csr_pem.as_bytes());
+        rustls_pemfile::read_one(&mut rd)
+            .context("Reading CSR PEM")?
+            .and_then(|item| match item {
+                Item::Csr(d) => Some(d.to_vec()),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("No CSR found in PEM input"))?
+    };
+
+    let (_, csr) = X509CertificationRequest::from_der(&der)
+        .map_err(|e| anyhow::anyhow!("Could not parse CSR DER: {e:?}"))?;
+
+    if let Some(extensions) = csr.requested_extensions() {
+        for ext in extensions {
+            if let ParsedExtension::SubjectAlternativeName(san) = ext {
+                for name in &san.general_names {
+                    if matches!(name, GeneralName::DNSName(_)) {
+                        anyhow::bail!(
+                            "identity certs must not contain DNS SANs; \
+                             use URI SANs (e.g. vigil://credo/admin/<name>) instead"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Verify the PoP signature:
 ///   message = hex_decode(challenge) || identityUri_bytes || issuedAt_bytes

@@ -46,6 +46,7 @@ pub fn signing_config(tmp_dir: &Path) -> VigilConfig {
         },
         config_dir: tmp_dir.to_path_buf(),
         allow_none_validation: true,
+        allowed_http_challenge_ports: vec![80],
         challenge_check_count: 1,
         challenge_check_interval_secs: 0,
         dns_resolver_addrs: vec![],

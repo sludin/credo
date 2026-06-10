@@ -807,6 +807,22 @@ pub async fn new_order(
         }
     };
 
+    let http_challenge_port = payload
+        .get("httpChallengePort")
+        .and_then(|v| v.as_u64())
+        .and_then(|p| u16::try_from(p).ok())
+        .unwrap_or(80);
+    if !config
+        .allowed_http_challenge_ports
+        .contains(&http_challenge_port)
+    {
+        return acme_error(
+            StatusCode::BAD_REQUEST,
+            "unauthorized",
+            "httpChallengePort is not in allowedHttpChallengePorts",
+        );
+    }
+
     let order_id = {
         let mut counter = state.inner.acme_id_counter.lock().await;
         *counter += 1;
@@ -862,6 +878,7 @@ pub async fn new_order(
             status: chall_status.to_string(),
             token,
             key_authorization,
+            http_challenge_port,
         };
 
         let authz = AcmeAuthz {
@@ -1019,8 +1036,15 @@ pub async fn get_authz(
 // Challenge validation
 // ---------------------------------------------------------------------------
 
-async fn validate_http_01(domain: &str, token: &str, expected_key_auth: &str) -> bool {
-    let url = format!("http://{}/.well-known/acme-challenge/{}", domain, token);
+async fn validate_http_01(domain: &str, token: &str, expected_key_auth: &str, port: u16) -> bool {
+    let url = if port == 80 {
+        format!("http://{}/.well-known/acme-challenge/{}", domain, token)
+    } else {
+        format!(
+            "http://{}:{}/.well-known/acme-challenge/{}",
+            domain, port, token
+        )
+    };
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -1711,6 +1735,7 @@ async fn mark_challenge_invalid(
 
 /// Background task: poll challenge validation up to `check_count` times, sleeping
 /// `check_interval` between attempts (first attempt runs immediately).
+#[allow(clippy::too_many_arguments)]
 async fn validate_challenge_background(
     state: AppState,
     challenge_id: String,
@@ -1741,6 +1766,7 @@ async fn validate_challenge_background(
                     &domain,
                     &challenge_snap.token,
                     &challenge_snap.key_authorization,
+                    challenge_snap.http_challenge_port,
                 )
                 .await
             }
@@ -1875,21 +1901,21 @@ mod tests {
     async fn http_01_correct_response_returns_true() {
         let (port, challenge, _s) = start_mock_server().await;
         *challenge.lock().unwrap() = Some(("tok1".to_string(), "tok1.thumbprint".to_string()));
-        assert!(validate_http_01(&format!("127.0.0.1:{}", port), "tok1", "tok1.thumbprint").await);
+        assert!(validate_http_01("127.0.0.1", "tok1", "tok1.thumbprint", port).await);
     }
 
     #[tokio::test]
     async fn http_01_wrong_body_returns_false() {
         let (port, challenge, _s) = start_mock_server().await;
         *challenge.lock().unwrap() = Some(("tok2".to_string(), "wrong-key-auth".to_string()));
-        assert!(!validate_http_01(&format!("127.0.0.1:{}", port), "tok2", "tok2.thumbprint").await);
+        assert!(!validate_http_01("127.0.0.1", "tok2", "tok2.thumbprint", port).await);
     }
 
     #[tokio::test]
     async fn http_01_not_found_returns_false() {
         let (port, _challenge, _s) = start_mock_server().await;
         // challenge is None → server returns 404 for any token
-        assert!(!validate_http_01(&format!("127.0.0.1:{}", port), "tok3", "k").await);
+        assert!(!validate_http_01("127.0.0.1", "tok3", "k", port).await);
     }
 
     #[tokio::test]
@@ -1899,7 +1925,7 @@ mod tests {
         let port = l.local_addr().unwrap().port();
         drop(l);
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        assert!(!validate_http_01(&format!("127.0.0.1:{}", port), "tok", "k").await);
+        assert!(!validate_http_01("127.0.0.1", "tok", "k", port).await);
     }
 
     #[tokio::test]

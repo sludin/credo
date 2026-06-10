@@ -37,7 +37,7 @@ pub fn create_account(accounts: &mut Vec<Account>, account: Account) {
 }
 
 pub fn update_account(
-    accounts: &mut Vec<Account>,
+    accounts: &mut [Account],
     id: &str,
     mut updater: impl FnMut(&mut Account),
 ) -> bool {

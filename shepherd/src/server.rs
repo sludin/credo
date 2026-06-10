@@ -83,6 +83,7 @@ pub fn build_api_router(state: AppState) -> Router {
         .route("/admin/reload-assignments", post(api::reload_assignments))
         .route("/admin/reload-accounts", post(api::reload_accounts))
         .route("/admin/reload-cas", post(api::reload_cas))
+        .route("/admin/identity-cert", post(api::issue_identity_cert))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             api_auth_middleware,

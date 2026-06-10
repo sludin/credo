@@ -121,6 +121,20 @@ pub async fn run_server_start(bootstrap: bool) -> Result<()> {
     if config.allow_none_validation {
         tracing::warn!("allowNoneValidation is enabled — ACME challenges are not verified. Do not use in production.");
     }
+    {
+        let non_standard: Vec<u16> = config
+            .allowed_http_challenge_ports
+            .iter()
+            .copied()
+            .filter(|&p| p != 80)
+            .collect();
+        if !non_standard.is_empty() {
+            tracing::info!(
+                ports = ?config.allowed_http_challenge_ports,
+                "http-01 validation allowed on non-standard ports"
+            );
+        }
+    }
 
     // Generate or load TLS material
     let (tls_key_pem, tls_cert_pem, bootstrap_secret) = if bootstrap {
@@ -264,7 +278,7 @@ pub fn run_check_config() -> Result<()> {
             .map(|p| p.exists())
             .unwrap_or(false)
     {
-        ok(&format!("tls.keyPath parent writable"));
+        ok("tls.keyPath parent writable");
     } else {
         println!(
             "  ✗ tls.keyPath parent not writable: {}",

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 fn normalize_serial(serial: &str) -> String {
     let s = serial.trim().to_uppercase().replace(' ', "");
-    if s.len() % 2 == 0 {
+    if s.len().is_multiple_of(2) {
         s
     } else {
         format!("0{}", s)

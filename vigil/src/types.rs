@@ -133,6 +133,8 @@ pub struct AcmeChallenge {
     pub status: String,
     pub token: String,
     pub key_authorization: String,
+    /// Port to use when fetching the http-01 challenge response. Defaults to 80 if not set.
+    pub http_challenge_port: u16,
 }
 
 // ---------------------------------------------------------------------------

@@ -302,6 +302,10 @@ pub struct NewOrder<'a> {
     /// Omitted when None; used by private CAs such as Vigil.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub validation_method: Option<&'a str>,
+    /// Port to use for http-01 challenge validation. Omitted when None (CA uses its default).
+    /// Used by private CAs such as Vigil to validate on a non-privileged port.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_challenge_port: Option<u16>,
 }
 
 /// Payload for a certificate revocation request

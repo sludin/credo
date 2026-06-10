@@ -72,7 +72,7 @@ pub async fn handle_bootstrap(
         },
         &state.config(),
     )
-    .map_err(|e| AppError::Internal(e))?;
+    .map_err(AppError::Internal)?;
 
     // Deactivate after first successful use
     *secret_guard = None;

@@ -47,6 +47,9 @@ pub struct CorgiNodeConfig {
     pub identity_uri: Option<String>,
     pub mtls: CorgiMtlsConfig,
     pub insecure_skip_verify: bool,
+    /// Port Corgi's http-01 challenge listener runs on. Forwarded to Vigil in ACME orders.
+    /// None means use Vigil's default (80 unless Vigil is configured otherwise).
+    pub http_challenge_port: Option<u16>,
 }
 
 #[derive(Debug, Clone)]
@@ -216,6 +219,12 @@ pub struct CorgiNodeState {
     pub last_health_check: Option<i64>,
     pub flock: Vec<CorgiFlockEntry>,
     pub error: Option<String>,
+}
+
+impl Default for CorgiNodeState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CorgiNodeState {

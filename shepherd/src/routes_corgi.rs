@@ -126,7 +126,7 @@ pub async fn provision_cert(
         &json!({ "keyAlgorithm": key_algorithm }),
     )
     .await
-    .map_err(|e| AppError::Internal(e))?;
+    .map_err(AppError::Internal)?;
 
     let corgis = state.corgis.read().await.clone();
     let domains = build_domains(&assignment);

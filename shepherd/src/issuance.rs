@@ -27,6 +27,7 @@ pub struct IssuanceResult {
 // Public entry point
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 pub async fn issue_cert(
     ca_config: &AcmeCaConfig,
     ca_name: &str,
@@ -58,6 +59,13 @@ pub async fn issue_cert(
         .map(|v| v.force_revalidate)
         .unwrap_or(false);
 
+    // Resolve the http challenge port from the assigned Corgi (if any).
+    let http_challenge_port = assignment
+        .corgi
+        .as_deref()
+        .and_then(|name| corgis.iter().find(|c| c.name == name))
+        .and_then(|c| c.http_challenge_port);
+
     let cert_chain = run_issuance(
         &account,
         ca_config,
@@ -66,6 +74,7 @@ pub async fn issue_cert(
         domains,
         &csr_der,
         &validation_method,
+        http_challenge_port,
         force_revalidate,
         assignment,
         pool,
@@ -107,6 +116,7 @@ pub async fn issue_cert(
 // Core ACME flow
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 async fn run_issuance(
     account: &instant_acme::Account,
     ca_config: &AcmeCaConfig,
@@ -115,6 +125,7 @@ async fn run_issuance(
     domains: &[String],
     csr_der: &[u8],
     validation_method: &str,
+    http_challenge_port: Option<u16>,
     _force_revalidate: bool,
     assignment: &ManagedAssignment,
     pool: &Arc<RwLock<CorgiClientPool>>,
@@ -132,6 +143,7 @@ async fn run_issuance(
         .new_order(&NewOrder {
             identifiers: &identifiers,
             validation_method: Some(validation_method),
+            http_challenge_port,
         })
         .await
         .context("Creating ACME order")?;
@@ -143,14 +155,13 @@ async fn run_issuance(
     tracing::debug!(cert = %cert_name, count = authorizations.len(), "ACME authorizations loaded");
 
     // DNS cleanups deferred until after cert is issued
+    #[allow(clippy::type_complexity)]
     let mut deferred_cleanups: Vec<
         Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>,
     > = vec![];
 
     for authz in &authorizations {
-        let domain = match &authz.identifier {
-            Identifier::Dns(d) => d,
-        };
+        let Identifier::Dns(domain) = &authz.identifier;
 
         match authz.status {
             AuthorizationStatus::Valid => {

@@ -143,7 +143,7 @@ fn build_eab(config: &AcmeCaConfig) -> Result<Option<ExternalAccountKey>> {
     .or_else(|_| {
         base64::engine::Engine::decode(&base64::engine::general_purpose::STANDARD, &eab.hmac_key)
     })
-    .with_context(|| format!("Decoding EAB HMAC key (expected base64url)"))?;
+    .with_context(|| "Decoding EAB HMAC key (expected base64url)")?;
     Ok(Some(ExternalAccountKey::new(eab.kid.clone(), &key_bytes)))
 }
 
