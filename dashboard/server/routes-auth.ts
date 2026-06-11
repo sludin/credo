@@ -328,6 +328,31 @@ export function createAuthRouter(
       saveUsers({ users: freshUsers });
     }
 
+    // Refresh Shepherd JWT tokens at every login so sessions survive restarts
+    // and role changes take effect without re-enrollment.
+    const { users: tokenUsers } = loadUsers();
+    const tokenIdx = tokenUsers.findIndex((u) => u.id === user.id);
+    if (tokenIdx !== -1 && tokenUsers[tokenIdx].shepherdRefreshToken) {
+      try {
+        const resp = await shepherdApi.post<{
+          accessToken: string;
+          refreshToken: string;
+          expiresAt?: string;
+        }>('/auth/refresh', { refreshToken: tokenUsers[tokenIdx].shepherdRefreshToken });
+        tokenUsers[tokenIdx] = {
+          ...tokenUsers[tokenIdx],
+          shepherdAccessToken: resp.data.accessToken,
+          shepherdRefreshToken: resp.data.refreshToken,
+          shepherdTokenExpiresAt: resp.data.expiresAt,
+        };
+        saveUsers({ users: tokenUsers });
+      } catch {
+        // Refresh token invalid — user can still log in, but admin writes will fail
+        // until they re-enroll. This happens if the token store was lost (e.g. Shepherd
+        // was misconfigured with no persistent refresh token path and was restarted).
+      }
+    }
+
     const roleResult = await fetchShepherdRole(user.shepherdAccount, shepherdApi, serviceCert);
     if ('error' in roleResult) {
       res.status(401).json({ error: `Could not resolve shepherd account role: ${roleResult.error}` });

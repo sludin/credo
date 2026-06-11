@@ -60,7 +60,15 @@ impl AppState {
         let refresh_token_path = config
             .renewal_jobs_dir
             .as_ref()
-            .map(|d| d.join("refresh-tokens.json"));
+            .map(|d| d.join("refresh-tokens.json"))
+            .or_else(|| {
+                // Default alongside the assignments config so tokens survive restarts
+                // even when renewalJobsDir is not configured.
+                config
+                    .assignments_config_path
+                    .parent()
+                    .map(|p| p.join("shepherd-refresh-tokens.json"))
+            });
 
         let vigil_client = if config.vigil_url.is_some() {
             match build_vigil_client(&config, &cas, cert_pem.as_deref(), key_pem.as_deref()) {

@@ -6,7 +6,7 @@ use serde_json::json;
 use axum::http::header;
 use axum::response::IntoResponse;
 
-use crate::assignments::{file_mtime, load_assignments};
+use crate::assignments::{file_mtime, load_assignments, save_assignments};
 use crate::auth::check_min_role;
 use crate::cert_store;
 use crate::corgi_client::corgi_post;
@@ -157,7 +157,7 @@ pub async fn token(
 
     if !tls_match {
         // No matching TLS cert — verify CA chain then verify PoP signature
-        verify_pop_cert(&cert_der, &state.config.load().tls.client_ca_path).map_err(|e| {
+        verify_pop_cert(cert_pem, &state.config.load().tls.client_ca_path).map_err(|e| {
             AppError::Unauthorized(format!("Certificate not signed by configured CA: {e}"))
         })?;
 
@@ -242,7 +242,17 @@ pub async fn refresh_token(
         .await
         .ok_or_else(|| AppError::Unauthorized("Invalid or expired refresh token".to_string()))?;
 
-    let role = Role::from_str(&entry.role);
+    // Use the current account role rather than the role baked in at issuance,
+    // so that role changes in shepherd.accounts.json take effect at the next refresh.
+    let current_role = {
+        let accounts = state.accounts.read().await;
+        accounts
+            .iter()
+            .find(|a| a.active && a.identities.iter().any(|id| id == &entry.identity_uri))
+            .map(|a| a.role.clone())
+            .unwrap_or_else(|| Role::from_str(&entry.role))
+    };
+    let role = current_role;
     let access = sign_jwt(
         &state.jwt_keys,
         &entry.identity_uri,
@@ -784,6 +794,79 @@ pub async fn reload_corgis(
     ))
 }
 
+pub async fn create_assignment(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Admin)?;
+    let mut assignment: crate::types::ManagedAssignment = serde_json::from_value(body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid assignment: {e}")))?;
+    if assignment.cert_name.is_empty() {
+        assignment.cert_name = assignment.domain.clone().unwrap_or_default();
+    }
+    if assignment.cert_name.is_empty() {
+        return Err(AppError::BadRequest(
+            "Assignment must have certName or domain".into(),
+        ));
+    }
+    let mut assignments = state.assignments.write().await;
+    if assignments.iter().any(|a| a.cert_name == assignment.cert_name) {
+        return Err(AppError::BadRequest(format!(
+            "Assignment '{}' already exists",
+            assignment.cert_name
+        )));
+    }
+    assignments.push(assignment.clone());
+    let path = state.config.load().assignments_config_path.clone();
+    save_assignments(&path, &assignments).map_err(AppError::Internal)?;
+    *state.assignments_mtime.lock().unwrap() = file_mtime(&path);
+    Ok(Json(serde_json::to_value(&assignment).unwrap()))
+}
+
+pub async fn update_assignment(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Path(cert_name): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Admin)?;
+    let mut assignments = state.assignments.write().await;
+    let assignment = assignments
+        .iter_mut()
+        .find(|a| a.cert_name == cert_name)
+        .ok_or_else(|| AppError::NotFound(format!("No assignment for '{cert_name}'")))?;
+    // Replace the whole record with the incoming body, preserving cert_name
+    let mut updated: crate::types::ManagedAssignment = serde_json::from_value(body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid assignment: {e}")))?;
+    updated.cert_name = cert_name.clone();
+    *assignment = updated.clone();
+    let path = state.config.load().assignments_config_path.clone();
+    save_assignments(&path, &assignments).map_err(AppError::Internal)?;
+    *state.assignments_mtime.lock().unwrap() = file_mtime(&path);
+    Ok(Json(serde_json::to_value(&updated).unwrap()))
+}
+
+pub async fn delete_assignment(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Path(cert_name): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Admin)?;
+    let mut assignments = state.assignments.write().await;
+    let before = assignments.len();
+    assignments.retain(|a| a.cert_name != cert_name);
+    if assignments.len() == before {
+        return Err(AppError::NotFound(format!(
+            "No assignment for '{cert_name}'"
+        )));
+    }
+    let path = state.config.load().assignments_config_path.clone();
+    save_assignments(&path, &assignments).map_err(AppError::Internal)?;
+    *state.assignments_mtime.lock().unwrap() = file_mtime(&path);
+    Ok(Json(json!({ "deleted": true })))
+}
+
 pub async fn reload_assignments(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
@@ -848,27 +931,62 @@ fn pop_pem_to_der(pem: &str) -> Option<Vec<u8>> {
         })
 }
 
-/// Verify that `cert_der` was signed by at least one cert in `ca_path`.
-fn verify_pop_cert(cert_der: &[u8], ca_path: &std::path::Path) -> anyhow::Result<()> {
+/// Verify that the leaf cert (first in `chain_pem`) chains to a cert in `ca_path`.
+/// Intermediates embedded in `chain_pem` are trusted as signers if they are
+/// themselves anchored in the CA bundle, mirroring how browsers handle cert chains.
+fn verify_pop_cert(chain_pem: &str, ca_path: &std::path::Path) -> anyhow::Result<()> {
     use x509_parser::prelude::*;
 
     let ca_pem = std::fs::read_to_string(ca_path)
         .with_context(|| format!("Reading client CA: {}", ca_path.display()))?;
 
-    let (_, user_cert) = X509Certificate::from_der(cert_der)
-        .map_err(|e| anyhow::anyhow!("Parsing pop.cert: {e:?}"))?;
+    // Collect all DERs from the CA bundle as the initial trusted set.
+    let mut trusted: Vec<Vec<u8>> = rustls_pemfile::certs(
+        &mut std::io::BufReader::new(ca_pem.as_bytes()),
+    )
+    .flatten()
+    .map(|d| d.to_vec())
+    .collect();
 
-    // Try each cert in the CA bundle
-    for block in rustls_pemfile::certs(&mut std::io::BufReader::new(ca_pem.as_bytes())).flatten() {
-        if let Ok((_, ca_cert)) = X509Certificate::from_der(block.as_ref()) {
-            if user_cert
-                .verify_signature(Some(ca_cert.public_key()))
-                .is_ok()
+    // Collect all certs from the submitted chain (leaf first, then intermediates).
+    let chain_ders: Vec<Vec<u8>> = rustls_pemfile::certs(
+        &mut std::io::BufReader::new(chain_pem.as_bytes()),
+    )
+    .flatten()
+    .map(|d| d.to_vec())
+    .collect();
+
+    if chain_ders.is_empty() {
+        anyhow::bail!("pop.cert contains no parseable certificates");
+    }
+
+    let is_signed_by = |cert_der: &[u8], issuer_der: &[u8]| -> bool {
+        let Ok((_, cert)) = X509Certificate::from_der(cert_der) else { return false };
+        let Ok((_, issuer)) = X509Certificate::from_der(issuer_der) else { return false };
+        cert.verify_signature(Some(issuer.public_key())).is_ok()
+    };
+
+    // Promote any chain-provided intermediate that is anchored by a currently
+    // trusted cert. Repeat until stable (handles arbitrary ordering and depth).
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for candidate in &chain_ders[1..] {
+            if !trusted.contains(candidate)
+                && trusted.iter().any(|t| is_signed_by(candidate, t))
             {
-                return Ok(());
+                trusted.push(candidate.clone());
+                changed = true;
             }
         }
     }
+
+    // Check the leaf against the expanded trusted pool.
+    let leaf = &chain_ders[0];
+    if trusted.iter().any(|t| is_signed_by(leaf, t)) {
+        return Ok(());
+    }
+
     anyhow::bail!("Certificate not signed by any cert in client CA bundle")
 }
 
@@ -927,6 +1045,39 @@ pub async fn issue_identity_cert(
         axum::http::StatusCode::CREATED,
         Json(json!({ "certPem": cert_pem })),
     ))
+}
+
+// ---------------------------------------------------------------------------
+// POST /admin/enroll-corgi
+// ---------------------------------------------------------------------------
+// Authenticate with mTLS admin cert (or JWT); enrolls a corgi the same way
+// the bootstrap endpoint does, but available outside the bootstrap window.
+
+pub async fn enroll_corgi_admin(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Json(body): Json<crate::routes_bootstrap::BootstrapCorgiRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Admin)?;
+    let vc = state.vigil_client.read().await.clone();
+    let vigil_client = vc
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("Vigil client not available")))?;
+    let config = state.config.load_full();
+    let vigil_url = config
+        .vigil_url
+        .as_deref()
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("vigilUrl not configured")))?
+        .to_string();
+    crate::routes_bootstrap::enroll_corgi(&state, &vigil_client, &vigil_url, &body)
+        .await
+        .map_err(AppError::Internal)?;
+    tracing::info!(
+        name = %body.name,
+        identity_uri = %body.identity_uri,
+        issued_by = %user.identity_uri,
+        "Corgi enrolled via admin endpoint"
+    );
+    Ok(Json(json!({ "enrolled": true })))
 }
 
 /// Reject CSRs that contain any DNS SAN. Identity certs must use URI SANs only.
