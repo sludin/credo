@@ -9,6 +9,7 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
+use uuid::Uuid;
 
 use crate::state::AppState;
 
@@ -64,6 +65,8 @@ fn vigil_unavailable() -> (StatusCode, Json<serde_json::Value>) {
 pub struct AdminCertRequest {
     pub csr_pem: String,
     pub days: Option<u32>,
+    pub identity_uri: String,
+    pub name: Option<String>,
 }
 
 pub async fn bootstrap_admin_cert(
@@ -83,18 +86,64 @@ pub async fn bootstrap_admin_cert(
         return vigil_unavailable().into_response();
     };
 
-    match sign_csr_via_vigil(&client, vigil_url, &body.csr_pem, body.days.unwrap_or(365)).await {
-        Ok(cert_pem) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "certPem": cert_pem })),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+    let cert_pem =
+        match sign_csr_via_vigil(&client, vigil_url, &body.csr_pem, body.days.unwrap_or(365)).await
+        {
+            Ok(pem) => pem,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response()
+            }
+        };
+
+    let name = body
+        .name
+        .clone()
+        .unwrap_or_else(|| derive_name_from_uri(&body.identity_uri));
+    let account = crate::types::Account {
+        id: Uuid::new_v4().to_string(),
+        name: name.clone(),
+        display_name: name,
+        role: credo_lib::types::Role::Admin,
+        active: true,
+        identities: vec![body.identity_uri.clone()],
+        notes: String::new(),
+        created_at: Some(chrono::Utc::now()),
+    };
+
+    {
+        let mut accounts = state.accounts.write().await;
+        accounts.push(account);
+        if let Err(e) =
+            crate::accounts::save_accounts(&state.config.load().accounts_path, &accounts)
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Failed to persist account: {e}") })),
+            )
+                .into_response();
+        }
     }
+
+    tracing::info!(identity_uri = %body.identity_uri, "Bootstrap admin account registered");
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "certPem": cert_pem })),
+    )
+        .into_response()
+}
+
+fn derive_name_from_uri(uri: &str) -> String {
+    uri.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("admin")
+        .to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -155,7 +204,7 @@ pub async fn bootstrap_corgi(
     }
 }
 
-async fn enroll_corgi(
+pub async fn enroll_corgi(
     state: &AppState,
     vigil_client: &reqwest::Client,
     vigil_url: &str,

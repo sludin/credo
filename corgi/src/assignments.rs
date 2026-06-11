@@ -55,27 +55,33 @@ pub fn merge_assignments(
                 .cert_mode
                 .as_deref()
                 .and_then(parse_mode)
+                .or_else(|| config_entry.and_then(|e| e.cert_mode))
                 .or(config.file_policy.cert_mode),
             key_mode: assignment
                 .key_mode
                 .as_deref()
                 .and_then(parse_mode)
+                .or_else(|| config_entry.and_then(|e| e.key_mode))
                 .or(config.file_policy.key_mode),
             cert_owner: assignment
                 .cert_owner
                 .clone()
+                .or_else(|| config_entry.and_then(|e| e.cert_owner.clone()))
                 .or_else(|| config.file_policy.owner.clone()),
             cert_group: assignment
                 .cert_group
                 .clone()
+                .or_else(|| config_entry.and_then(|e| e.cert_group.clone()))
                 .or_else(|| config.file_policy.group.clone()),
             key_owner: assignment
                 .key_owner
                 .clone()
+                .or_else(|| config_entry.and_then(|e| e.key_owner.clone()))
                 .or_else(|| config.file_policy.owner.clone()),
             key_group: assignment
                 .key_group
                 .clone()
+                .or_else(|| config_entry.and_then(|e| e.key_group.clone()))
                 .or_else(|| config.file_policy.group.clone()),
         };
 

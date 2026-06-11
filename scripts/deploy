@@ -74,7 +74,7 @@ run_cmd() {
 }
 
 ensure_dir() {
-  run_cmd "$1" "$2" "$3" "mkdir -p '$4'"
+  run_cmd "$1" "$2" "$3" "mkdir -p '$4' && chmod 755 '$4'"
 }
 
 npm_install_remote() {
@@ -91,6 +91,12 @@ chown_dir() {
   local host="$1" port="$2" ssh_opts="$3" dir="$4" owner="$5"
   echo "[deploy] chown -R $owner $dir"
   run_cmd "$host" "$port" "$ssh_opts" "sudo chown -R '$owner' '$dir'"
+}
+
+chmod_dir() {
+  local host="$1" port="$2" ssh_opts="$3" dir="$4" mode="$5"
+  echo "[deploy] chmod $mode $dir"
+  run_cmd "$host" "$port" "$ssh_opts" "sudo chmod '$mode' '$dir'"
 }
 
 run_post_deploy() {
@@ -146,6 +152,7 @@ build_ts_staging() {
   local service_dir="$1" service_name="$2" files_str="$3"
   local d
   d=$(mktemp -d "/tmp/credo-deploy-${service_name}-XXXXXX")
+  chmod 755 "$d"
   STAGING_DIRS+=("$d")
   STAGING_DIR="$d"
 
@@ -184,6 +191,7 @@ build_shell_staging() {
   local service_dir="$1" service_name="$2" files_str="$3"
   local d
   d=$(mktemp -d "/tmp/credo-deploy-${service_name}-XXXXXX")
+  chmod 755 "$d"
   STAGING_DIRS+=("$d")
   STAGING_DIR="$d"
 
@@ -211,6 +219,7 @@ build_rust_binary_staging() {
   local crate_dir="$1" binary_name="$2" arch="$3" profile="$4" files_str="${5:-}"
   local d
   d=$(mktemp -d "/tmp/credo-deploy-${binary_name}-XXXXXX")
+  chmod 755 "$d"
   STAGING_DIRS+=("$d")
   STAGING_DIR="$d"
 
@@ -245,7 +254,7 @@ build_rust_binary_staging() {
 _deploy_rust() {
   local label="$1" crate_dir="$2" binary="$3" arch="$4" profile="$5"
   local host="$6" remote_dir="$7" port="$8" ssh_opts="$9" rsync_opts="${10}"
-  local owner="${11}" post_deploy="${12}" files_str="${13:-}"
+  local owner="${11}" post_deploy="${12}" files_str="${13:-}" dir_mode="${14:-}"
 
   build_rust_binary_staging "$crate_dir" "$binary" "$arch" "$profile" "$files_str"
   local staging_dir="$STAGING_DIR"
@@ -255,6 +264,7 @@ _deploy_rust() {
 
   if ! $DRY_RUN; then
     if [[ -n "$owner" ]]; then chown_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$owner"; fi
+    if [[ -n "$dir_mode" ]]; then chmod_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$dir_mode"; fi
     if [[ -n "$post_deploy" ]]; then run_post_deploy "$host" "$port" "$ssh_opts" "$remote_dir" "$post_deploy"; fi
   fi
 
@@ -272,7 +282,7 @@ _deploy_rust() {
 _deploy_ts() {
   local label="$1" service_key="$2" files_str="$3"
   local host="$4" remote_dir="$5" port="$6" ssh_opts="$7" rsync_opts="$8"
-  local owner="$9" post_deploy="${10}"
+  local owner="$9" post_deploy="${10}" dir_mode="${11:-}"
 
   local service_dir="$REPO_DIR/$service_key"
   build_ts_staging "$service_dir" "$service_key" "$files_str"
@@ -284,6 +294,7 @@ _deploy_ts() {
   if ! $DRY_RUN; then
     npm_install_remote "$host" "$port" "$ssh_opts" "$remote_dir"
     if [[ -n "$owner" ]]; then chown_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$owner"; fi
+    if [[ -n "$dir_mode" ]]; then chmod_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$dir_mode"; fi
     if [[ -n "$post_deploy" ]]; then run_post_deploy "$host" "$port" "$ssh_opts" "$remote_dir" "$post_deploy"; fi
   fi
 
@@ -301,7 +312,7 @@ _deploy_ts() {
 _deploy_shell() {
   local label="$1" service_key="$2" files_str="$3"
   local host="$4" remote_dir="$5" port="$6" ssh_opts="$7" rsync_opts="$8"
-  local owner="$9" post_deploy="${10}"
+  local owner="$9" post_deploy="${10}" dir_mode="${11:-}"
 
   local service_dir="$REPO_DIR/$service_key"
   build_shell_staging "$service_dir" "$service_key" "$files_str"
@@ -312,6 +323,7 @@ _deploy_shell() {
 
   if ! $DRY_RUN; then
     if [[ -n "$owner" ]]; then chown_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$owner"; fi
+    if [[ -n "$dir_mode" ]]; then chmod_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$dir_mode"; fi
     if [[ -n "$post_deploy" ]]; then run_post_deploy "$host" "$port" "$ssh_opts" "$remote_dir" "$post_deploy"; fi
   fi
 
@@ -334,7 +346,7 @@ deploy_service() {
   local svc_json
   svc_json=$(jq -c --arg k "$service_key" '.[$k]' "$CONFIG_PATH")
 
-  local host remote_dir port ssh_opts rsync_opts owner post_deploy rust_target rust_profile files_str
+  local host remote_dir port ssh_opts rsync_opts owner post_deploy rust_target rust_profile files_str dir_mode
   host=$(jq -r '.host // empty' <<< "$svc_json")
   remote_dir=$(jq -r '.remoteDir // empty' <<< "$svc_json")
   port=$(jq -r '.sshPort // 22' <<< "$svc_json")
@@ -345,6 +357,7 @@ deploy_service() {
   rust_target=$(jq -r '.rustTarget // empty' <<< "$svc_json")
   rust_profile=$(jq -r '.rustProfile // "release"' <<< "$svc_json")
   files_str=$(jq -r '.files[]? // empty' <<< "$svc_json" | tr '\n' ' ')
+  dir_mode=$(jq -r '.dirMode // empty' <<< "$svc_json")
 
   if [[ -n "$rust_target" ]]; then
     local crate_dir binary
@@ -361,7 +374,7 @@ deploy_service() {
     fi
     _deploy_rust "$label" "$crate_dir" "$binary" "$rust_target" "$rust_profile" \
       "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts" \
-      "$owner" "$post_deploy" "$files_str"
+      "$owner" "$post_deploy" "$files_str" "$dir_mode"
   elif [[ -f "$REPO_DIR/$service_key/package.json" ]]; then
     if [[ -z "${files_str// /}" ]]; then
       local default_var="DEFAULT_FILES_${service_key}"
@@ -369,7 +382,7 @@ deploy_service() {
     fi
     _deploy_ts "$label" "$service_key" "$files_str" \
       "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts" \
-      "$owner" "$post_deploy"
+      "$owner" "$post_deploy" "$dir_mode"
   else
     if [[ -z "${files_str// /}" ]]; then
       local default_var="DEFAULT_FILES_${service_key}"
@@ -377,7 +390,7 @@ deploy_service() {
     fi
     _deploy_shell "$label" "$service_key" "$files_str" \
       "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts" \
-      "$owner" "$post_deploy"
+      "$owner" "$post_deploy" "$dir_mode"
   fi
 }
 
@@ -401,7 +414,7 @@ deploy_corgi_by_name() {
   local corgi_json
   corgi_json=$(jq -c --arg n "$name" '.corgis[] | select(.name == $n)' "$CONFIG_PATH")
 
-  local host remote_dir port ssh_opts rsync_opts owner post_deploy rust_target rust_profile files_str
+  local host remote_dir port ssh_opts rsync_opts owner post_deploy rust_target rust_profile files_str dir_mode
   host=$(jq -r '.host // empty' <<< "$corgi_json")
   remote_dir=$(jq -r '.remoteDir // empty' <<< "$corgi_json")
   port=$(jq -r '.sshPort // 22' <<< "$corgi_json")
@@ -412,17 +425,18 @@ deploy_corgi_by_name() {
   rust_target=$(jq -r '.rustTarget // empty' <<< "$corgi_json")
   rust_profile=$(jq -r '.rustProfile // "release"' <<< "$corgi_json")
   files_str=$(jq -r '.files[]?' <<< "$corgi_json" | tr '\n' ' ')
+  dir_mode=$(jq -r '.dirMode // empty' <<< "$corgi_json")
 
   if [[ -n "$rust_target" ]]; then
     if [[ -z "${files_str// /}" ]]; then files_str="$DEFAULT_FILES_corgi"; fi
     _deploy_rust "$label" "$CORGI_DIR" "corgi" "$rust_target" "$rust_profile" \
       "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts" \
-      "$owner" "$post_deploy" "$files_str"
+      "$owner" "$post_deploy" "$files_str" "$dir_mode"
   else
     if [[ -z "${files_str// /}" ]]; then files_str="$DEFAULT_FILES_corgi"; fi
     _deploy_ts "$label" "corgi" "$files_str" \
       "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts" \
-      "$owner" "$post_deploy"
+      "$owner" "$post_deploy" "$dir_mode"
   fi
 }
 
@@ -558,7 +572,8 @@ Config:
     files          list of paths to deploy, relative to service root
     sshPort        SSH port, default 22
     sshOpts        extra SSH flags string, e.g. "-o StrictHostKeyChecking=no"
-    owner          "user:group" — sudo chown -R after npm install
+    owner          "user:group" — sudo chown -R after sync
+    dirMode        octal mode string — sudo chmod applied to remoteDir after chown, e.g. "750"
     rsyncOpts      extra rsync flags, e.g. "-O" for OpenWRT targets
     postDeploy     remote shell command after install, e.g. "sudo systemctl restart credo-shepherd"
     rustTarget     e.g. "aarch64-unknown-linux-musl" — enables Rust binary build

@@ -39,6 +39,11 @@ enum Commands {
         #[command(subcommand)]
         cmd: CertCommands,
     },
+    /// Account management commands
+    Account {
+        #[command(subcommand)]
+        cmd: AccountCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -69,10 +74,20 @@ enum BootstrapCommands {
         #[arg(long)]
         domain: String,
     },
-    /// Enroll a Corgi node via the running bootstrap server
+    /// Enroll a Corgi node
+    ///
+    /// Bootstrap window: supply --admin-token (one-time token from `bootstrap server`).
+    /// Production: supply --admin-cert + --admin-key (your admin mTLS credentials).
     Corgi {
+        /// One-time admin token (bootstrap window only)
         #[arg(long)]
-        admin_token: String,
+        admin_token: Option<String>,
+        /// Path to admin cert PEM (production mTLS auth)
+        #[arg(long)]
+        admin_cert: Option<String>,
+        /// Path to admin key PEM (production mTLS auth)
+        #[arg(long)]
+        admin_key: Option<String>,
         #[arg(long)]
         name: String,
         #[arg(long)]
@@ -81,19 +96,58 @@ enum BootstrapCommands {
         fingerprint: String,
         #[arg(long)]
         identity_uri: String,
+        /// Corgi API URL; if omitted, looked up from shepherd.corgis.json by name
         #[arg(long)]
-        corgi_url: String,
+        corgi_url: Option<String>,
     },
 }
 
 #[derive(Subcommand)]
 enum CertCommands {
     /// Trigger renewal for a certificate
-    Renew { cert_name: String },
+    Renew {
+        cert_name: String,
+        /// Path to admin PEM certificate for mTLS auth
+        #[arg(long)]
+        admin_cert: String,
+        /// Path to admin PEM private key for mTLS auth
+        #[arg(long)]
+        admin_key: String,
+    },
     /// List certstore entries
     Store,
     /// Inspect a certstore entry
     Inspect { cert_name: String },
+}
+
+#[derive(Subcommand)]
+enum AccountCommands {
+    /// Add an account by reading identity URIs from a PEM certificate
+    Add {
+        /// Path to the PEM certificate whose URI SANs become the account's identities
+        #[arg(long)]
+        cert: String,
+        /// Short account name (used in logs and as a key)
+        #[arg(long)]
+        name: String,
+        /// Human-readable display name
+        #[arg(long)]
+        display_name: String,
+        /// Role: admin | operator | readonly
+        #[arg(long, default_value = "admin")]
+        role: String,
+        /// Optional notes
+        #[arg(long, default_value = "")]
+        notes: String,
+    },
+    /// List all accounts
+    List,
+    /// Remove an account by name
+    Remove {
+        /// Account name to remove
+        #[arg(long)]
+        name: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -124,27 +178,46 @@ async fn main() -> Result<()> {
             }
             BootstrapCommands::Corgi {
                 admin_token,
+                admin_cert,
+                admin_key,
                 name,
                 token,
                 fingerprint,
                 identity_uri,
                 corgi_url,
             } => {
-                cmd_bootstrap_corgi(
-                    &admin_token,
-                    &name,
-                    &token,
-                    &fingerprint,
-                    &identity_uri,
-                    &corgi_url,
-                )
+                cmd_bootstrap_corgi(BootstrapCorgiArgs {
+                    admin_token: admin_token.as_deref(),
+                    admin_cert: admin_cert.as_deref(),
+                    admin_key: admin_key.as_deref(),
+                    name: &name,
+                    token: &token,
+                    fingerprint: &fingerprint,
+                    identity_uri: &identity_uri,
+                    corgi_url: corgi_url.as_deref(),
+                })
                 .await
             }
         },
         Commands::Cert { cmd } => match cmd {
-            CertCommands::Renew { cert_name } => cmd_cert_renew(&cert_name).await,
+            CertCommands::Renew {
+                cert_name,
+                admin_cert,
+                admin_key,
+            } => cmd_cert_renew(&cert_name, &admin_cert, &admin_key).await,
             CertCommands::Store => cmd_cert_store().await,
             CertCommands::Inspect { cert_name } => cmd_cert_inspect(&cert_name).await,
+        },
+        Commands::Account { cmd } => match cmd {
+            AccountCommands::Add {
+                cert,
+                name,
+                display_name,
+                role,
+                notes,
+            } => cmd_account_add(&cert, &name, &display_name, &role, &notes),
+            AccountCommands::List => cmd_account_list(),
+            AccountCommands::Remove { name } => cmd_account_remove(&name),
         },
     }
 }
@@ -353,6 +426,38 @@ fn build_shepherd_plain_client(
         .context("Building plain shepherd API client")
 }
 
+/// Build an mTLS HTTPS client that presents admin cert+key to the shepherd server.
+fn build_shepherd_mtls_client(
+    config: &shepherd::config::ShepherdConfig,
+    cert_path: &str,
+    key_path: &str,
+) -> Result<reqwest::Client> {
+    let ca_path = config
+        .shepherd_ca_path
+        .as_ref()
+        .unwrap_or(&config.tls.client_ca_path);
+    let ca_pem = std::fs::read(ca_path)
+        .with_context(|| format!("Reading CA bundle: {}", ca_path.display()))?;
+    let ca_cert = reqwest::Certificate::from_pem(&ca_pem).context("Parsing CA cert")?;
+    let mut identity_pem =
+        std::fs::read(cert_path).with_context(|| format!("Reading admin cert: {cert_path}"))?;
+    identity_pem.extend_from_slice(
+        &std::fs::read(key_path).with_context(|| format!("Reading admin key: {key_path}"))?,
+    );
+    let identity = reqwest::Identity::from_pem(&identity_pem).context("Building mTLS identity")?;
+    let host = config.common_name.as_deref().unwrap_or("localhost");
+    reqwest::Client::builder()
+        .identity(identity)
+        .add_root_certificate(ca_cert)
+        .resolve(
+            host,
+            format!("127.0.0.1:{}", config.dashboard_port).parse()?,
+        )
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("Building mTLS shepherd API client")
+}
+
 // ---------------------------------------------------------------------------
 // bootstrap commands
 // ---------------------------------------------------------------------------
@@ -461,7 +566,7 @@ async fn cmd_bootstrap_admin(
     let resp = client
         .post(format!("{}/bootstrap/admin-cert", shepherd_url))
         .header("Authorization", format!("Bearer {}", admin_token))
-        .json(&serde_json::json!({ "csrPem": csr_pem, "days": 365 }))
+        .json(&serde_json::json!({ "csrPem": csr_pem, "days": 365, "identityUri": identity_uri }))
         .send()
         .await
         .context("POST /bootstrap/admin-cert")?;
@@ -489,36 +594,89 @@ async fn cmd_bootstrap_admin(
     Ok(())
 }
 
-async fn cmd_bootstrap_corgi(
-    admin_token: &str,
-    name: &str,
-    token: &str,
-    fingerprint: &str,
-    identity_uri: &str,
-    corgi_url: &str,
-) -> Result<()> {
+struct BootstrapCorgiArgs<'a> {
+    admin_token: Option<&'a str>,
+    admin_cert: Option<&'a str>,
+    admin_key: Option<&'a str>,
+    name: &'a str,
+    token: &'a str,
+    fingerprint: &'a str,
+    identity_uri: &'a str,
+    corgi_url: Option<&'a str>,
+}
+
+async fn cmd_bootstrap_corgi(args: BootstrapCorgiArgs<'_>) -> Result<()> {
+    let BootstrapCorgiArgs {
+        admin_token,
+        admin_cert,
+        admin_key,
+        name,
+        token,
+        fingerprint,
+        identity_uri,
+        corgi_url,
+    } = args;
     let config = load_config().context("Loading config")?;
     let shepherd_url = shepherd_dashboard_url(&config);
 
-    // Delegate the full enrollment sequence to the running shepherd server
-    let client = build_shepherd_plain_client(&config)?;
-    let resp = client
-        .post(format!("{}/bootstrap/corgi", shepherd_url))
-        .header("Authorization", format!("Bearer {}", admin_token))
-        .json(&serde_json::json!({
-            "name":        name,
-            "token":       token,
-            "fingerprint": fingerprint,
-            "identityUri": identity_uri,
-            "corgiUrl":    corgi_url,
-        }))
-        .send()
-        .await
-        .context("POST /bootstrap/corgi")?;
+    // Resolve corgi URL: use explicit arg or look up from local corgis config by name
+    let resolved_url: String = match corgi_url {
+        Some(u) => u.to_string(),
+        None => {
+            let corgis = shepherd::corgis::load_corgis(&config.corgis_config_path)
+                .context("Loading corgis config")?;
+            corgis
+                .into_iter()
+                .find(|c| c.name == name)
+                .map(|c| c.url)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Corgi '{name}' not found in corgis config; supply --corgi-url explicitly"
+                    )
+                })?
+        }
+    };
+
+    let payload = serde_json::json!({
+        "name":        name,
+        "token":       token,
+        "fingerprint": fingerprint,
+        "identityUri": identity_uri,
+        "corgiUrl":    resolved_url,
+    });
+
+    let (client, endpoint, auth_header) = match admin_token {
+        Some(t) => (
+            build_shepherd_plain_client(&config)?,
+            format!("{shepherd_url}/bootstrap/corgi"),
+            Some(format!("Bearer {t}")),
+        ),
+        None => {
+            let cert = admin_cert.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Provide --admin-token (bootstrap mode) or --admin-cert + --admin-key (production)"
+                )
+            })?;
+            let key = admin_key.ok_or_else(|| {
+                anyhow::anyhow!("--admin-key is required when using --admin-cert")
+            })?;
+            (
+                build_shepherd_mtls_client(&config, cert, key)?,
+                format!("{shepherd_url}/admin/enroll-corgi"),
+                None,
+            )
+        }
+    };
+
+    let mut req = client.post(&endpoint).json(&payload);
+    if let Some(h) = auth_header {
+        req = req.header("Authorization", h);
+    }
+    let resp = req.send().await.context("POST corgi enrollment")?;
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("bootstrap corgi returned {}: {}", status, body);
+        anyhow::bail!("corgi enrollment returned {}: {}", status, body);
     }
 
     println!("Corgi '{}' enrolled successfully.", name);
@@ -532,8 +690,28 @@ fn shepherd_dashboard_url(config: &shepherd::config::ShepherdConfig) -> String {
     format!("https://{}:{}", host, config.dashboard_port)
 }
 
-async fn cmd_cert_renew(cert_name: &str) -> Result<()> {
-    println!("Renew cert '{cert_name}' — not yet implemented.");
+async fn cmd_cert_renew(cert_name: &str, admin_cert: &str, admin_key: &str) -> Result<()> {
+    let config = load_config().context("Loading config")?;
+    let shepherd_url = shepherd_dashboard_url(&config);
+    let client = build_shepherd_mtls_client(&config, admin_cert, admin_key)?;
+    let url = format!("{}/admin/renew/{}", shepherd_url, cert_name);
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .context("POST /admin/renew")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("renew returned {}: {}", status, body);
+    }
+    let body: serde_json::Value = resp.json().await.context("Parsing response")?;
+    println!(
+        "Renewal triggered for '{}': job {}",
+        cert_name,
+        body["jobId"].as_str().unwrap_or("?")
+    );
     Ok(())
 }
 
@@ -556,6 +734,108 @@ async fn cmd_cert_inspect(cert_name: &str) -> Result<()> {
         Some(entry) => println!("{}", serde_json::to_string_pretty(&entry)?),
         None => println!("Cert '{cert_name}' not found in store."),
     }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// account commands
+// ---------------------------------------------------------------------------
+
+fn cmd_account_add(
+    cert_path: &str,
+    name: &str,
+    display_name: &str,
+    role_str: &str,
+    notes: &str,
+) -> Result<()> {
+    let config = load_config().context("Loading config")?;
+
+    let pem =
+        std::fs::read_to_string(cert_path).with_context(|| format!("Reading cert: {cert_path}"))?;
+    let identity = credo_lib::auth::identity_from_pem(&pem)
+        .with_context(|| format!("Parsing cert: {cert_path}"))?;
+
+    if identity.san_uris.is_empty() {
+        anyhow::bail!("Certificate has no URI SANs — cannot derive identities from it");
+    }
+
+    let role = credo_lib::types::Role::from_str(role_str);
+    let account = shepherd::types::Account {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: name.to_string(),
+        display_name: display_name.to_string(),
+        role,
+        active: true,
+        identities: identity.san_uris.clone(),
+        notes: notes.to_string(),
+        created_at: Some(chrono::Utc::now()),
+    };
+
+    let mut accounts =
+        shepherd::accounts::load_accounts(&config.accounts_path).context("Loading accounts")?;
+
+    if accounts.iter().any(|a| a.name == name) {
+        anyhow::bail!("An account named '{name}' already exists");
+    }
+
+    println!("Adding account '{name}':");
+    for uri in &identity.san_uris {
+        println!("  identity: {uri}");
+    }
+
+    shepherd::accounts::create_account(&mut accounts, account);
+    shepherd::accounts::save_accounts(&config.accounts_path, &accounts)
+        .context("Saving accounts")?;
+
+    println!(
+        "Account '{name}' added to {}",
+        config.accounts_path.display()
+    );
+    Ok(())
+}
+
+fn cmd_account_list() -> Result<()> {
+    let config = load_config().context("Loading config")?;
+    let accounts =
+        shepherd::accounts::load_accounts(&config.accounts_path).context("Loading accounts")?;
+
+    if accounts.is_empty() {
+        println!("No accounts found in {}", config.accounts_path.display());
+        return Ok(());
+    }
+
+    for account in &accounts {
+        let role_str = serde_json::to_value(&account.role)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        let active = if account.active { "active" } else { "inactive" };
+        println!(
+            "{} ({}) — {} {}",
+            account.name, account.display_name, role_str, active
+        );
+        for uri in &account.identities {
+            println!("  {uri}");
+        }
+    }
+    Ok(())
+}
+
+fn cmd_account_remove(name: &str) -> Result<()> {
+    let config = load_config().context("Loading config")?;
+    let mut accounts =
+        shepherd::accounts::load_accounts(&config.accounts_path).context("Loading accounts")?;
+
+    let id = accounts
+        .iter()
+        .find(|a| a.name == name)
+        .map(|a| a.id.clone())
+        .ok_or_else(|| anyhow::anyhow!("No account named '{name}' found"))?;
+
+    shepherd::accounts::delete_account(&mut accounts, &id);
+    shepherd::accounts::save_accounts(&config.accounts_path, &accounts)
+        .context("Saving accounts")?;
+    println!("Account '{name}' removed.");
     Ok(())
 }
 

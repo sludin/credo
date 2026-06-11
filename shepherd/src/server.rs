@@ -52,6 +52,9 @@ pub fn build_api_router(state: AppState) -> Router {
     // Authenticated routes
     let authenticated = Router::new()
         .route("/admin/assignments", get(api::get_assignments))
+        .route("/admin/assignments", post(api::create_assignment))
+        .route("/admin/assignments/:name", put(api::update_assignment))
+        .route("/admin/assignments/:name", delete(api::delete_assignment))
         .route("/admin/certstore", get(api::get_certstore))
         .route("/admin/certstore/:name", get(api::get_certstore_entry))
         .route("/admin/certstore/:name/pem", get(api::get_certstore_pem))
@@ -84,6 +87,7 @@ pub fn build_api_router(state: AppState) -> Router {
         .route("/admin/reload-accounts", post(api::reload_accounts))
         .route("/admin/reload-cas", post(api::reload_cas))
         .route("/admin/identity-cert", post(api::issue_identity_cert))
+        .route("/admin/enroll-corgi", post(api::enroll_corgi_admin))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             api_auth_middleware,

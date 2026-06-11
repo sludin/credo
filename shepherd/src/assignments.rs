@@ -6,12 +6,11 @@ use std::time::SystemTime;
 
 use crate::types::ManagedAssignment;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct AssignmentsFile {
     #[serde(default)]
     assignments: Vec<ManagedAssignment>,
 }
-use serde::Deserialize;
 
 pub fn load_assignments(path: &Path) -> Result<Vec<ManagedAssignment>> {
     if !path.exists() {
@@ -27,6 +26,15 @@ pub fn load_assignments(path: &Path) -> Result<Vec<ManagedAssignment>> {
         }
     }
     Ok(file.assignments)
+}
+
+pub fn save_assignments(path: &Path, assignments: &[ManagedAssignment]) -> Result<()> {
+    let file = AssignmentsFile {
+        assignments: assignments.to_vec(),
+    };
+    let content = serde_json::to_string_pretty(&file).context("Serializing assignments")?;
+    std::fs::write(path, content)
+        .with_context(|| format!("Writing assignments: {}", path.display()))
 }
 
 pub fn file_mtime(path: &Path) -> Option<SystemTime> {

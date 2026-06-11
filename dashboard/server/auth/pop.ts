@@ -34,6 +34,36 @@ function parseCertsFromBundle(bundlePem: string): X509Certificate[] {
   return certs;
 }
 
+function isSigned(cert: X509Certificate, issuer: X509Certificate): boolean {
+  try { return cert.verify(issuer.publicKey); } catch { return false; }
+}
+
+// Verify that the leaf cert (first in chainPem) chains to one of trustedCas,
+// using any intermediates embedded in chainPem to bridge the gap.
+function verifyCertChain(chainPem: string, trustedCas: X509Certificate[]): boolean {
+  const chain = parseCertsFromBundle(chainPem);
+  if (chain.length === 0) return false;
+  const leaf = chain[0];
+  const intermediates = chain.slice(1);
+
+  // Iteratively promote chain-provided intermediates that are signed by a
+  // currently trusted cert. Repeat until no new certs are added (handles
+  // chains of arbitrary depth regardless of ordering in the PEM).
+  const trusted: X509Certificate[] = [...trustedCas];
+  let added = true;
+  while (added) {
+    added = false;
+    for (const intermediate of intermediates) {
+      if (!trusted.includes(intermediate) && trusted.some((ca) => isSigned(intermediate, ca))) {
+        trusted.push(intermediate);
+        added = true;
+      }
+    }
+  }
+
+  return trusted.some((ca) => isSigned(leaf, ca));
+}
+
 function buildSignedMessage(challenge: string, identityUri: string, issuedAt: string): Buffer {
   return Buffer.concat([
     Buffer.from(challenge, 'hex'),
@@ -67,6 +97,8 @@ export function verifyPopToken(
   }
 
   // 4. Verify cert against Vigil CA trust chain.
+  // token.cert may be a full chain (leaf + intermediates); verifyCertChain
+  // anchors intermediates to the CA bundle before checking the leaf.
   if (config.mtls.caPath) {
     try {
       const caPem = fs.readFileSync(config.mtls.caPath, 'utf8');
@@ -74,9 +106,7 @@ export function verifyPopToken(
       if (caCerts.length === 0) {
         return { ok: false, error: 'CA bundle contains no valid certificates.' };
       }
-      // Try each cert in the bundle — the user cert may be signed by an intermediate, not the root.
-      const signedByBundle = caCerts.some((ca) => { try { return x509.verify(ca.publicKey); } catch { return false; } });
-      if (!signedByBundle) {
+      if (!verifyCertChain(token.cert, caCerts)) {
         return { ok: false, error: 'Certificate was not signed by the configured Vigil CA.' };
       }
     } catch (err) {

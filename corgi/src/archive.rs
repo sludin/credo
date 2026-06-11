@@ -99,25 +99,29 @@ pub fn set_permissions(path: &Path, mode: u32) -> Result<()> {
 pub fn set_owner(path: &Path, owner: Option<&str>, group: Option<&str>) -> Result<()> {
     use nix::unistd::{chown, Group, User};
 
-    let uid = if let Some(owner_str) = owner {
-        User::from_name(owner_str)
-            .with_context(|| format!("Looking up user '{}'", owner_str))?
-            .map(|u| u.uid)
+    let gid = if let Some(group_str) = group {
+        let g = Group::from_name(group_str)
+            .with_context(|| format!("Looking up group '{}'", group_str))?
+            .with_context(|| format!("Group '{}' not found", group_str))?;
+        Some(g.gid)
     } else {
         None
     };
 
-    let gid = if let Some(group_str) = group {
-        Group::from_name(group_str)
-            .with_context(|| format!("Looking up group '{}'", group_str))?
-            .map(|g| g.gid)
+    let uid = if let Some(owner_str) = owner {
+        use std::os::unix::fs::MetadataExt;
+        let target = User::from_name(owner_str)
+            .with_context(|| format!("Looking up user '{}'", owner_str))?
+            .map(|u| u.uid);
+        let current_uid = std::fs::metadata(path).map(|m| m.uid()).unwrap_or(u32::MAX);
+        target.filter(|u| u.as_raw() != current_uid)
     } else {
         None
     };
 
     if uid.is_some() || gid.is_some() {
         chown(path, uid, gid)
-            .with_context(|| format!("chown {} {:?}:{:?}", path.display(), owner, group))?;
+            .with_context(|| format!("chown {}:{} {}", owner.unwrap_or("-"), group.unwrap_or("-"), path.display()))?;
     }
 
     Ok(())
@@ -160,12 +164,13 @@ pub fn install_to_archive(
         entry.cert_mode.unwrap_or(0o644),
     )?;
     if entry.cert_owner.is_some() || entry.cert_group.is_some() {
-        set_owner(
+        if let Err(e) = set_owner(
             &cert_archive_path,
             entry.cert_owner.as_deref(),
             entry.cert_group.as_deref(),
-        )
-        .ok();
+        ) {
+            tracing::warn!(path = %cert_archive_path.display(), error = %e, "Failed to apply cert ownership");
+        }
     }
 
     // Update live/cert.pem symlink
@@ -183,7 +188,9 @@ pub fn install_to_archive(
         let p = archive.join(format!("fullchain-{}.pem", sfx));
         write_file(&p, fc.as_bytes(), entry.cert_mode.unwrap_or(0o644)).ok();
         if entry.cert_owner.is_some() || entry.cert_group.is_some() {
-            set_owner(&p, entry.cert_owner.as_deref(), entry.cert_group.as_deref()).ok();
+            if let Err(e) = set_owner(&p, entry.cert_owner.as_deref(), entry.cert_group.as_deref()) {
+                tracing::warn!(path = %p.display(), error = %e, "Failed to apply fullchain ownership");
+            }
         }
         p
     });
@@ -226,7 +233,9 @@ pub fn install_to_archive(
         let p = archive.join(format!("privkey-{}.pem", sfx));
         write_file(&p, k.as_bytes(), entry.key_mode.unwrap_or(0o640))?;
         if entry.key_owner.is_some() || entry.key_group.is_some() {
-            set_owner(&p, entry.key_owner.as_deref(), entry.key_group.as_deref()).ok();
+            if let Err(e) = set_owner(&p, entry.key_owner.as_deref(), entry.key_group.as_deref()) {
+                tracing::warn!(path = %p.display(), error = %e, "Failed to apply key ownership");
+            }
         }
         Some(p)
     } else {
@@ -237,7 +246,9 @@ pub fn install_to_archive(
             let p = archive.join(format!("privkey-{}.pem", sfx));
             write_file(&p, &key_bytes, entry.key_mode.unwrap_or(0o640))?;
             if entry.key_owner.is_some() || entry.key_group.is_some() {
-                set_owner(&p, entry.key_owner.as_deref(), entry.key_group.as_deref()).ok();
+                if let Err(e) = set_owner(&p, entry.key_owner.as_deref(), entry.key_group.as_deref()) {
+                    tracing::warn!(path = %p.display(), error = %e, "Failed to apply key ownership");
+                }
             }
             let _ = fs::remove_file(&pending); // key is now safely in archive
             Some(p)
@@ -257,12 +268,13 @@ pub fn install_to_archive(
         // Key permissions
         set_permissions(&entry.key_path, entry.key_mode.unwrap_or(0o640))?;
         if entry.key_owner.is_some() || entry.key_group.is_some() {
-            set_owner(
+            if let Err(e) = set_owner(
                 &entry.key_path,
                 entry.key_owner.as_deref(),
                 entry.key_group.as_deref(),
-            )
-            .ok();
+            ) {
+                tracing::warn!(path = %entry.key_path.display(), error = %e, "Failed to apply key ownership");
+            }
         }
     }
 

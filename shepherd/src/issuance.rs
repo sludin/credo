@@ -169,7 +169,20 @@ async fn run_issuance(
                 continue;
             }
             AuthorizationStatus::Invalid => {
-                anyhow::bail!("ACME authorization is invalid for domain '{domain}'");
+                let errors: Vec<String> = authz
+                    .challenges
+                    .iter()
+                    .filter_map(|c| c.error.as_ref())
+                    .map(fmt_problem)
+                    .collect();
+                if errors.is_empty() {
+                    anyhow::bail!("ACME authorization is invalid for domain '{domain}'");
+                } else {
+                    anyhow::bail!(
+                        "ACME authorization is invalid for domain '{domain}': {}",
+                        errors.join("; ")
+                    );
+                }
             }
             _ => {}
         }
@@ -302,7 +315,13 @@ async fn run_issuance(
     // Poll order status until Ready (all authorizations valid)
     let order_state = wait_for_order_ready(cert_name, ca_name, &mut order).await?;
     if order_state == OrderStatus::Invalid {
-        anyhow::bail!("ACME order became invalid for '{cert_name}'");
+        let detail = order
+            .state()
+            .error
+            .as_ref()
+            .map(fmt_problem)
+            .unwrap_or_else(|| "(no detail)".to_string());
+        anyhow::bail!("ACME order became invalid for '{cert_name}': {detail}");
     }
 
     // Only finalize when the order is Ready. Valid means the CA has already
@@ -360,7 +379,13 @@ async fn wait_for_certificate(cert_name: &str, ca_name: &str, order: &mut Order)
             return Ok(cert);
         }
         if order.state().status == OrderStatus::Invalid {
-            anyhow::bail!("ACME order invalid while waiting for cert");
+            let detail = order
+                .state()
+                .error
+                .as_ref()
+                .map(fmt_problem)
+                .unwrap_or_else(|| "(no detail)".to_string());
+            anyhow::bail!("ACME order invalid while waiting for cert: {detail}");
         }
         tracing::debug!(cert = %cert_name, ca = %ca_name, attempt = %attempt, "Waiting for certificate");
         sleep(Duration::from_secs(5)).await;
@@ -640,6 +665,15 @@ fn find_challenge<'a>(
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
+
+fn fmt_problem(p: &instant_acme::Problem) -> String {
+    match (&p.r#type, &p.detail) {
+        (Some(t), Some(d)) => format!("{t}: {d}"),
+        (Some(t), None) => t.clone(),
+        (None, Some(d)) => d.clone(),
+        (None, None) => "(unknown ACME error)".to_string(),
+    }
+}
 
 fn pem_to_csr_der(pem: &str) -> Option<Vec<u8>> {
     use rustls_pemfile::Item;

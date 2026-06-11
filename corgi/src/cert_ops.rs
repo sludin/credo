@@ -521,11 +521,24 @@ pub fn check_cert_matches_key(cert_path: &Path, key_path: &Path) -> bool {
 }
 
 fn get_cert_spki_bytes(cert_path: &Path) -> Option<Vec<u8>> {
-    use x509_parser::prelude::*;
     let pem_str = std::fs::read_to_string(cert_path).ok()?;
-    let der = pem_cert_to_der(&pem_str).ok()?;
-    let (_, cert) = X509Certificate::from_der(&der).ok()?;
+    get_cert_spki_bytes_from_pem(&pem_str)
+}
+
+fn get_cert_spki_bytes_from_pem(cert_pem: &str) -> Option<Vec<u8>> {
+    let der = pem_cert_to_der(cert_pem).ok()?;
+    let (_, cert) = x509_parser::parse_x509_certificate(&der).ok()?;
     Some(cert.public_key().raw.to_vec())
+}
+
+/// Returns true if `cert_pem` was signed for the public key corresponding to
+/// the private key stored at `key_path`.  Used to guard against installing a
+/// cert whose key doesn't match a pending key that is waiting to be archived.
+pub fn cert_pem_matches_key_file(cert_pem: &str, key_path: &Path) -> bool {
+    match (get_cert_spki_bytes_from_pem(cert_pem), get_key_public_point(key_path)) {
+        (Some(c), Some(k)) => c == k,
+        _ => false,
+    }
 }
 
 fn get_key_public_point(key_path: &Path) -> Option<Vec<u8>> {

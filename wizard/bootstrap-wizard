@@ -31,6 +31,7 @@ CORGI_NAME=""
 CORGI_HOSTNAME=""
 CORGI_PORT=""
 CORGI_BOOTSTRAP_PORT=""
+CORGI_HTTP_CHALLENGE_PORT=""
 CORGI_DIR=""
 CORGI_IDENTITY_URI=""
 
@@ -98,6 +99,7 @@ save_defaults() {
     --arg  corgiHostname       "$CORGI_HOSTNAME" \
     --argjson corgiPort        "${CORGI_PORT:-0}" \
     --argjson corgiBootstrapPort "${CORGI_BOOTSTRAP_PORT:-0}" \
+    --argjson corgiHttpChallengePort "${CORGI_HTTP_CHALLENGE_PORT:-0}" \
     --arg  corgiDir            "$CORGI_DIR" \
     --arg  corgiIdentityUri    "$CORGI_IDENTITY_URI" \
     --arg  adminIdentityUri    "$ADMIN_IDENTITY_URI" \
@@ -124,12 +126,13 @@ save_defaults() {
         identityUri:   $shepherdIdentityUri
       },
       corgi: {
-        name:          $corgiName,
-        hostname:      $corgiHostname,
-        port:          $corgiPort,
-        bootstrapPort: $corgiBootstrapPort,
-        dir:           $corgiDir,
-        identityUri:   $corgiIdentityUri
+        name:               $corgiName,
+        hostname:           $corgiHostname,
+        port:               $corgiPort,
+        bootstrapPort:      $corgiBootstrapPort,
+        httpChallengePort:  $corgiHttpChallengePort,
+        dir:                $corgiDir,
+        identityUri:        $corgiIdentityUri
       },
       admin: {
         identityUri: $adminIdentityUri,
@@ -230,6 +233,7 @@ collect_answers() {
     CORGI_HOSTNAME=$(_require_df 'corgi.hostname' '.corgi.hostname' "${CORGI_NAME}.$DOMAIN")
     CORGI_PORT=$(_require_df 'corgi.port' '.corgi.port' '7001')
     CORGI_BOOTSTRAP_PORT=$(_require_df 'corgi.bootstrapPort' '.corgi.bootstrapPort' "$(( CORGI_PORT + 1 ))")
+    CORGI_HTTP_CHALLENGE_PORT=$(_require_df 'corgi.httpChallengePort' '.corgi.httpChallengePort' '7080')
     CORGI_DIR=$(_require_df 'corgi.dir' '.corgi.dir' "$CREDO_ROOT/corgi")
     CORGI_IDENTITY_URI=$(_require_df 'corgi.identityUri' '.corgi.identityUri' "vigil://credo/node/$CORGI_NAME")
   else
@@ -241,6 +245,8 @@ collect_answers() {
     CORGI_PORT="$REPLY_VAL"
     ask_int 'Corgi bootstrap port' "$(_df '.corgi.bootstrapPort' "$(( CORGI_PORT + 1 ))")"
     CORGI_BOOTSTRAP_PORT="$REPLY_VAL"
+    ask_int 'Corgi HTTP challenge port' "$(_df '.corgi.httpChallengePort' '7080')"
+    CORGI_HTTP_CHALLENGE_PORT="$REPLY_VAL"
     ask_required 'Corgi install directory' "$(_df '.corgi.dir' "$CREDO_ROOT/corgi")"
     CORGI_DIR="$REPLY_VAL"
     ask_required 'Corgi identity URI' "$(_df '.corgi.identityUri' "vigil://credo/node/$CORGI_NAME")"
@@ -457,9 +463,9 @@ main() {
   tail_log_stop "$_ct"
   printf '%s\n' '---'
 
-  # Kill bootstrap vigil and shepherd; restart in production server mode
-  # using the freshly-issued TLS certs.
-  printf '\nRestarting vigil and shepherd in server mode...\n'
+  # Kill bootstrap vigil and shepherd; start briefly in production server mode
+  # to verify the freshly-issued TLS certs load correctly, then stop everything.
+  printf '\nStarting vigil and shepherd in server mode (smoke-check)...\n'
   kill "$_vpid" 2>/dev/null || true
   kill "$_spid" 2>/dev/null || true
   sleep 0.3
@@ -467,19 +473,16 @@ main() {
   VIGIL_CONFIG_PATH="$VIGIL_DIR/vigil.config.json" \
     "$VIGIL_EXEC" server start >> "$VIGIL_LOG" 2>&1 &
   local _vpid_prod=$!
-  printf '  vigil    running (pid %d) → %s\n' "$_vpid_prod" "$VIGIL_LOG"
+  track_pid "$_vpid_prod"
+  printf '  vigil    started (pid %d) → %s\n' "$_vpid_prod" "$VIGIL_LOG"
 
   SHEPHERD_CONFIG_PATH="$SHEPHERD_DIR/shepherd.config.json" \
     "$SHEPHERD_EXEC" server start >> "$SHEPHERD_LOG" 2>&1 &
   local _spid_prod=$!
-  printf '  shepherd running (pid %d) → %s\n' "$_spid_prod" "$SHEPHERD_LOG"
+  track_pid "$_spid_prod"
+  printf '  shepherd started (pid %d) → %s\n' "$_spid_prod" "$SHEPHERD_LOG"
 
   printf '  corgi    running (pid %d) → %s\n' "$_cpid2" "$CORGI_LOG"
-
-  # Write the production pids for future cleanup runs, then clear the
-  # tracking array so the exit trap does not stop the running services.
-  printf '[%d,%d,%d]\n' "$_vpid_prod" "$_spid_prod" "$_cpid2" > "$PIDS_FILE"
-  TRACKED_PIDS=()
 
   printf '\n%s\n' "========================================"
   printf 'Bootstrap complete!\n\n'
@@ -491,9 +494,8 @@ main() {
   printf 'Admin cert: %s\n' "$ADMIN_OUT_CERT"
   printf 'Admin key:  %s\n' "$ADMIN_OUT_KEY"
   printf '\n'
-  printf 'All three services are now running in production mode.\n'
-  printf 'Hand them off to your process manager (systemd, launchd, etc.) to\n'
-  printf 'keep them running across reboots.\n'
+  printf 'All services will now be stopped.\n'
+  printf 'Start them via your process manager (systemd, launchd, etc.).\n'
   printf 'Add service restart hooks to corgi.config.json → serviceHooks once\n'
   printf 'your process manager is configured.\n'
   exit 0

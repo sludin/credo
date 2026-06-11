@@ -48,7 +48,7 @@ impl AcmeAccountCache {
             }
         }
 
-        let creds_path = credentials_path(&config.account_key_path);
+        let creds_path = credentials_path(&config.account_key_path, ca_name);
 
         let identity_override = self
             .identity
@@ -120,15 +120,17 @@ impl AcmeAccountCache {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Credentials are stored alongside the configured key path with an .acme.json suffix.
-fn credentials_path(account_key_path: &std::path::Path) -> std::path::PathBuf {
+/// Credentials are stored alongside the configured key path, namespaced by CA
+/// name, so that two CAs sharing the same accountKeyPath (e.g. letsencrypt and
+/// letsencrypt-staging) don't overwrite each other's registration.
+fn credentials_path(account_key_path: &std::path::Path, ca_name: &str) -> std::path::PathBuf {
     let mut p = account_key_path.to_path_buf();
     let name = p
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("account")
         .to_string();
-    p.set_file_name(format!("{name}.acme.json"));
+    p.set_file_name(format!("{name}.{ca_name}.acme.json"));
     p
 }
 

@@ -183,7 +183,7 @@ pub async fn sync_assignments(
     role: Option<Extension<Role>>,
 ) -> Result<Json<Value>, AppError> {
     check_min_role(role.as_ref().map(|e| &e.0), &Role::Admin)?;
-    reconcile_once(&state).await.map_err(anyhow::Error::from)?;
+    reconcile_once(&state).await?;
     Ok(Json(
         json!({ "refreshed": true, "source": "shepherd-command" }),
     ))

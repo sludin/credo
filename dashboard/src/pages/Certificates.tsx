@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { usePoller } from '../hooks/usePoller';
-import { fetchFlock, fetchCerts, fetchCertDetails, fetchLastJob, fetchActiveJob, fetchAssignments } from '../api';
+import { fetchFlock, fetchCerts, fetchCertDetails, fetchLastJob, fetchActiveJob, fetchAssignments, renewCert } from '../api';
 import { StatusBadge, certTone } from '../components/StatusBadge';
 import { Topbar } from '../components/Shell';
 import { usePermission } from '../hooks/usePermission';
@@ -270,6 +270,7 @@ export default function Certificates(): React.ReactElement {
   const activeJobRef = useRef<LastRenewalJob | null>(null);
   const activeJobTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [toast, setToast] = useState<{ msg: string; error?: boolean } | null>(null);
+  const [renewing, setRenewing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sort, setSort] = useState<{ key: CertSortKey; dir: SortDir }>({ key: 'daysLeft', dir: 'asc' });
 
@@ -424,6 +425,21 @@ export default function Certificates(): React.ReactElement {
     }
   }
 
+  async function handleRenew(): Promise<void> {
+    if (!selected?.corgi) return;
+    setRenewing(true);
+    setToast(null);
+    try {
+      await renewCert(selected.certName, selected.corgi);
+      setToast({ msg: `Renewal triggered for ${selected.certName}` });
+      refresh();
+    } catch (err) {
+      setToast({ msg: err instanceof Error ? err.message : 'Failed to trigger renewal', error: true });
+    } finally {
+      setRenewing(false);
+    }
+  }
+
   function handleDownloadPem(): void {
     if (!certDetails?.pem || !selected) return;
     const blob = new Blob([certDetails.pem], { type: 'application/x-pem-file' });
@@ -521,9 +537,19 @@ export default function Certificates(): React.ReactElement {
             <div className="card" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               <div className="card-header">
                 <span className="card-title" style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{selected.domain}</span>
+                {canRenew && selected.corgi && (
+                  <button
+                    className="btn btn-sm"
+                    style={{ marginLeft: 'auto', marginRight: 6 }}
+                    onClick={() => { void handleRenew(); }}
+                    disabled={renewing}
+                  >
+                    {renewing ? 'Renewing…' : 'Renew'}
+                  </button>
+                )}
                 <button
                   className="btn btn-ghost btn-sm"
-                  style={{ marginLeft: 'auto' }}
+                  style={canRenew && selected.corgi ? undefined : { marginLeft: 'auto' }}
                   onClick={() => setSelected(null)}
                 >
                   ✕

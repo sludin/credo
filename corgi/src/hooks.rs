@@ -238,11 +238,12 @@ async fn spawn_no_shell(argv: &[String]) -> Result<(String, String)> {
 
 /// Validate hook definitions at startup (warn on issues, don't panic).
 pub fn validate_hooks(config: &CorgiConfig) {
+    let placeholder_re = Regex::new(r"\{([^}]+)\}").unwrap();
     for (hook_name, hook_def) in &config.service_hooks {
         if let ServiceHookDef::Parameterized { exec, args } = hook_def {
             let mut placeholders = HashSet::new();
             for token in exec {
-                for cap in Regex::new(r"\{([^}]+)\}").unwrap().captures_iter(token) {
+                for cap in placeholder_re.captures_iter(token.as_str()) {
                     placeholders.insert(cap[1].to_string());
                 }
             }

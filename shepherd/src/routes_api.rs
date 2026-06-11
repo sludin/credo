@@ -811,7 +811,10 @@ pub async fn create_assignment(
         ));
     }
     let mut assignments = state.assignments.write().await;
-    if assignments.iter().any(|a| a.cert_name == assignment.cert_name) {
+    if assignments
+        .iter()
+        .any(|a| a.cert_name == assignment.cert_name)
+    {
         return Err(AppError::BadRequest(format!(
             "Assignment '{}' already exists",
             assignment.cert_name
@@ -941,28 +944,30 @@ fn verify_pop_cert(chain_pem: &str, ca_path: &std::path::Path) -> anyhow::Result
         .with_context(|| format!("Reading client CA: {}", ca_path.display()))?;
 
     // Collect all DERs from the CA bundle as the initial trusted set.
-    let mut trusted: Vec<Vec<u8>> = rustls_pemfile::certs(
-        &mut std::io::BufReader::new(ca_pem.as_bytes()),
-    )
-    .flatten()
-    .map(|d| d.to_vec())
-    .collect();
+    let mut trusted: Vec<Vec<u8>> =
+        rustls_pemfile::certs(&mut std::io::BufReader::new(ca_pem.as_bytes()))
+            .flatten()
+            .map(|d| d.to_vec())
+            .collect();
 
     // Collect all certs from the submitted chain (leaf first, then intermediates).
-    let chain_ders: Vec<Vec<u8>> = rustls_pemfile::certs(
-        &mut std::io::BufReader::new(chain_pem.as_bytes()),
-    )
-    .flatten()
-    .map(|d| d.to_vec())
-    .collect();
+    let chain_ders: Vec<Vec<u8>> =
+        rustls_pemfile::certs(&mut std::io::BufReader::new(chain_pem.as_bytes()))
+            .flatten()
+            .map(|d| d.to_vec())
+            .collect();
 
     if chain_ders.is_empty() {
         anyhow::bail!("pop.cert contains no parseable certificates");
     }
 
     let is_signed_by = |cert_der: &[u8], issuer_der: &[u8]| -> bool {
-        let Ok((_, cert)) = X509Certificate::from_der(cert_der) else { return false };
-        let Ok((_, issuer)) = X509Certificate::from_der(issuer_der) else { return false };
+        let Ok((_, cert)) = X509Certificate::from_der(cert_der) else {
+            return false;
+        };
+        let Ok((_, issuer)) = X509Certificate::from_der(issuer_der) else {
+            return false;
+        };
         cert.verify_signature(Some(issuer.public_key())).is_ok()
     };
 
@@ -972,9 +977,7 @@ fn verify_pop_cert(chain_pem: &str, ca_path: &std::path::Path) -> anyhow::Result
     while changed {
         changed = false;
         for candidate in &chain_ders[1..] {
-            if !trusted.contains(candidate)
-                && trusted.iter().any(|t| is_signed_by(candidate, t))
-            {
+            if !trusted.contains(candidate) && trusted.iter().any(|t| is_signed_by(candidate, t)) {
                 trusted.push(candidate.clone());
                 changed = true;
             }
@@ -1060,8 +1063,8 @@ pub async fn enroll_corgi_admin(
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Admin)?;
     let vc = state.vigil_client.read().await.clone();
-    let vigil_client = vc
-        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("Vigil client not available")))?;
+    let vigil_client =
+        vc.ok_or_else(|| AppError::Internal(anyhow::anyhow!("Vigil client not available")))?;
     let config = state.config.load_full();
     let vigil_url = config
         .vigil_url

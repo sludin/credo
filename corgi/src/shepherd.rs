@@ -34,7 +34,7 @@ pub fn build_shepherd_client(config: &CorgiConfig) -> Result<Client> {
     let identity = reqwest::Identity::from_pem(&combined).context("Building mTLS identity")?;
     builder = builder.identity(identity);
 
-    Ok(builder.build().context("Building reqwest client")?)
+    builder.build().context("Building reqwest client")
 }
 
 pub struct ShepherdClient {

@@ -100,6 +100,12 @@ impl RefreshTokenStore {
         let Some(ref path) = self.store_path else {
             return Ok(());
         };
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("Creating token store directory: {}", parent.display()))?;
+            }
+        }
         let tokens = self.tokens.read().await;
         let file = TokenFile {
             tokens: tokens.clone(),

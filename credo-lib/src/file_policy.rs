@@ -40,7 +40,22 @@ pub fn apply_file_policy(
                 .map(|g| g.gid)
         });
 
-        nix::unistd::chown(path, uid, gid).with_context(|| {
+        // Passing any non-(-1) uid to chown(2) requires CAP_CHOWN even when the
+        // uid would not change. Skip the uid arg when the file already has the
+        // right owner so unprivileged processes can still chgrp their own files.
+        let effective_uid = if let Some(target_uid) = uid {
+            use std::os::unix::fs::MetadataExt;
+            let current_uid = std::fs::metadata(path).map(|m| m.uid()).unwrap_or(u32::MAX);
+            if current_uid == target_uid.as_raw() {
+                None
+            } else {
+                Some(target_uid)
+            }
+        } else {
+            None
+        };
+
+        nix::unistd::chown(path, effective_uid, gid).with_context(|| {
             format!(
                 "chown {}:{} {}",
                 owner.unwrap_or("-"),

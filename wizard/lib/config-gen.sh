@@ -34,13 +34,14 @@ _gen_vars_json() {
 
 _gen_vigil_config() {
   jq -n \
-    --arg  credoRoot          "$CREDO_ROOT" \
-    --argjson port            "$VIGIL_PORT" \
-    --arg  hostname           "$VIGIL_HOSTNAME" \
-    --arg  intCaKeyPath       "$VIGIL_INT_CA_KEY_PATH" \
-    --arg  intCaCertPath      "$VIGIL_INT_CA_CERT_PATH" \
-    --arg  shepherdIdentityUri "$SHEPHERD_IDENTITY_URI" \
-    --arg  domain             "$DOMAIN" \
+    --arg  credoRoot             "$CREDO_ROOT" \
+    --argjson port               "$VIGIL_PORT" \
+    --arg  hostname              "$VIGIL_HOSTNAME" \
+    --arg  intCaKeyPath          "$VIGIL_INT_CA_KEY_PATH" \
+    --arg  intCaCertPath         "$VIGIL_INT_CA_CERT_PATH" \
+    --arg  shepherdIdentityUri   "$SHEPHERD_IDENTITY_URI" \
+    --arg  domain                "$DOMAIN" \
+    --argjson httpChallengePort  "$CORGI_HTTP_CHALLENGE_PORT" \
     '{
       includes: [($credoRoot + "/vars.json")],
       port:       $port,
@@ -69,6 +70,7 @@ _gen_vigil_config() {
         allowedIdentityUriPrefixes: ["vigil://credo/"],
         allowIpSans:                false
       },
+      allowedHttpChallengePorts: ([80, $httpChallengePort] | unique),
       dataDir:     "${vigilRoot}/data",
       usersDbPath: "${vigilRoot}/data/users.json",
       certDbPath:  "${vigilRoot}/data/certificates.json",
@@ -149,13 +151,14 @@ _gen_shepherd_ca_json() {
 
 _gen_shepherd_corgis_json() {
   jq -n \
-    --arg  shepherdHostname "$SHEPHERD_HOSTNAME" \
-    --arg  corgiDir         "$CORGI_DIR" \
-    --arg  caTrustPath      "$CA_TRUST_PATH" \
-    --arg  corgiName        "$CORGI_NAME" \
-    --arg  corgiHostname    "$CORGI_HOSTNAME" \
-    --argjson corgiPort     "$CORGI_PORT" \
-    --arg  corgiIdentityUri "$CORGI_IDENTITY_URI" \
+    --arg  shepherdHostname      "$SHEPHERD_HOSTNAME" \
+    --arg  corgiDir              "$CORGI_DIR" \
+    --arg  caTrustPath           "$CA_TRUST_PATH" \
+    --arg  corgiName             "$CORGI_NAME" \
+    --arg  corgiHostname         "$CORGI_HOSTNAME" \
+    --argjson corgiPort          "$CORGI_PORT" \
+    --argjson httpChallengePort  "$CORGI_HTTP_CHALLENGE_PORT" \
+    --arg  corgiIdentityUri      "$CORGI_IDENTITY_URI" \
     '{
       defaults: {
         mtls: {
@@ -166,9 +169,10 @@ _gen_shepherd_corgis_json() {
       },
       corgis: [
         {
-          name:        $corgiName,
-          url:         ("https://" + $corgiHostname + ":" + ($corgiPort | tostring)),
-          identityUri: $corgiIdentityUri
+          name:               $corgiName,
+          url:                ("https://" + $corgiHostname + ":" + ($corgiPort | tostring)),
+          identityUri:        $corgiIdentityUri,
+          httpChallengePort:  $httpChallengePort
         }
       ]
     }'
@@ -192,7 +196,7 @@ _gen_shepherd_assignments_json() {
           domain:      $vigilHostname,
           sans:        [$vigilHostname],
           identityUri: $vigilIdentityUri,
-          validation:  {type: "none-01"},
+          validation:  {type: "http-01"},
           hooks:       [],
           endpoints:   []
         },
@@ -203,7 +207,7 @@ _gen_shepherd_assignments_json() {
           domain:      $shepherdHostname,
           sans:        [$shepherdHostname],
           identityUri: $shepherdIdentity,
-          validation:  {type: "none-01"},
+          validation:  {type: "http-01"},
           hooks:       [],
           endpoints:   []
         },
@@ -214,7 +218,7 @@ _gen_shepherd_assignments_json() {
           domain:      $corgiHostname,
           sans:        [$corgiHostname],
           identityUri: $corgiIdentityUri,
-          validation:  {type: "none-01"},
+          validation:  {type: "http-01"},
           hooks:       [],
           endpoints:   []
         }
@@ -224,16 +228,17 @@ _gen_shepherd_assignments_json() {
 
 _gen_corgi_config() {
   jq -n \
-    --arg  credoRoot        "$CREDO_ROOT" \
-    --arg  corgiName        "$CORGI_NAME" \
-    --arg  corgiHostname    "$CORGI_HOSTNAME" \
-    --arg  corgiIdentityUri "$CORGI_IDENTITY_URI" \
-    --arg  shepherdHostname "$SHEPHERD_HOSTNAME" \
-    --argjson shepherdPort  "$SHEPHERD_AGENT_PORT" \
-    --argjson corgiPort     "$CORGI_PORT" \
-    --argjson bootstrapPort "$CORGI_BOOTSTRAP_PORT" \
-    --arg  shepherdIdentity "$SHEPHERD_IDENTITY_URI" \
-    --argjson dnsOverride   "${DNS_OVERRIDE_JSON:-null}" \
+    --arg  credoRoot             "$CREDO_ROOT" \
+    --arg  corgiName             "$CORGI_NAME" \
+    --arg  corgiHostname         "$CORGI_HOSTNAME" \
+    --arg  corgiIdentityUri      "$CORGI_IDENTITY_URI" \
+    --arg  shepherdHostname      "$SHEPHERD_HOSTNAME" \
+    --argjson shepherdPort       "$SHEPHERD_AGENT_PORT" \
+    --argjson corgiPort          "$CORGI_PORT" \
+    --argjson bootstrapPort      "$CORGI_BOOTSTRAP_PORT" \
+    --argjson httpChallengePort  "$CORGI_HTTP_CHALLENGE_PORT" \
+    --arg  shepherdIdentity      "$SHEPHERD_IDENTITY_URI" \
+    --argjson dnsOverride        "${DNS_OVERRIDE_JSON:-null}" \
     '{
       includes:    [($credoRoot + "/vars.json")],
       nodeId:      $corgiName,
@@ -252,8 +257,8 @@ _gen_corgi_config() {
       },
       flock: [],
       httpChallenge: {
-        enabled: false,
-        port:    8080,
+        enabled: true,
+        port:    $httpChallengePort,
         bind:    "0.0.0.0"
       },
       mtlsPort:      $corgiPort,

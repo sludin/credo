@@ -291,7 +291,7 @@ pub async fn renew_cert(
             }
             Err(e) => {
                 fail_job(&state2.renewal_jobs, job_id, e.to_string()).await;
-                tracing::warn!(corgi = %corgi_id, cert = %cert_name2, error = %e, "Renewal failed");
+                tracing::warn!(corgi = %corgi_id, cert = %cert_name2, error = %format!("{e:#}"), "Renewal failed");
             }
         }
     });

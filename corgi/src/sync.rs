@@ -3,7 +3,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::archive::pending_key_path;
 use crate::assignments::{load_assignments_cache, merge_assignments, save_assignments_cache};
 use crate::cert_ops::{
-    cert_days_remaining, generate_key_and_csr, install_certificate, read_cert_fingerprint,
+    cert_days_remaining, cert_pem_matches_key_file, generate_key_and_csr, install_certificate,
+    read_cert_fingerprint,
 };
 use crate::hooks::run_hooks;
 use crate::shepherd::ShepherdClient;
@@ -171,6 +172,27 @@ pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
                 }
             }
             continue;
+        }
+
+        // If a pending key is waiting to be archived and Shepherd didn't supply
+        // the private key, verify the cert matches the pending key before
+        // installing.  A mismatch means the new cert isn't ready yet — Shepherd
+        // is still serving the old one.  Skip this cycle; install_to_archive
+        // would otherwise link the pending (new) key to the old cert.
+        if pending.exists() && cert_response.key_pem.is_none() {
+            let cert_pem = cert_response
+                .cert_pem
+                .as_deref()
+                .or(cert_response.fullchain_pem.as_deref());
+            if let Some(pem) = cert_pem {
+                if !cert_pem_matches_key_file(pem, &pending) {
+                    tracing::warn!(
+                        cert_name = %assignment.cert_name,
+                        "Received cert does not match pending key; deferring install until new cert is issued"
+                    );
+                    continue;
+                }
+            }
         }
 
         // Install

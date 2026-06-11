@@ -202,6 +202,12 @@ async function runJobDnsQueries(
 // Per-request Bearer token storage — avoids shared-header race conditions.
 const shepherdTokenStorage = new AsyncLocalStorage<string>();
 
+// Deduplicates concurrent token refresh attempts for the same user. Without
+// this, multiple simultaneous API calls that all see an expired JWT will each
+// try to POST /auth/refresh with the same token. Shepherd revokes-on-use, so
+// the second caller gets a 401 even though the first succeeded.
+const ongoingRefreshes = new Map<string, Promise<string | null>>();
+
 async function getValidShepherdToken(
   userId: string,
   shepherdApi: ReturnType<typeof createShepherdClients>['api'],
@@ -225,41 +231,52 @@ async function getValidShepherdToken(
     // Fall through to refresh
   }
 
-  // Access token expired or unparseable — try refresh.
-  try {
-    const resp = await shepherdApi.post<{
-      accessToken: string;
-      refreshToken: string;
-      expiresAt: string;
-    }>('/auth/refresh', { refreshToken: user.shepherdRefreshToken });
+  // Deduplicate: if another request is already refreshing this user's token,
+  // wait for that result rather than racing to revoke+reissue simultaneously.
+  const existing = ongoingRefreshes.get(userId);
+  if (existing !== undefined) {
+    return existing;
+  }
 
-    const { users: freshUsers } = loadUsers();
-    const idx = freshUsers.findIndex((u) => u.id === userId);
-    if (idx !== -1) {
-      freshUsers[idx] = {
-        ...freshUsers[idx],
-        shepherdAccessToken: resp.data.accessToken,
-        shepherdRefreshToken: resp.data.refreshToken,
-        shepherdTokenExpiresAt: resp.data.expiresAt,
-      };
-      saveUsers({ users: freshUsers });
-    }
-    return resp.data.accessToken;
-  } catch (err) {
-    // If Shepherd rejected the refresh token (e.g. after a restart), clear the
-    // stale tokens so subsequent requests don't keep hammering /auth/refresh.
-    const status = (err as { response?: { status?: number } }).response?.status;
-    if (status === 401) {
+  const refreshPromise = (async (): Promise<string | null> => {
+    // Re-read the refresh token inside the deduplication window; the prior
+    // concurrent refresh may have already updated it.
+    const { users: currentUsers } = loadUsers();
+    const currentUser = findUserById(currentUsers, userId);
+    if (!currentUser?.shepherdRefreshToken) return null;
+
+    try {
+      const resp = await shepherdApi.post<{
+        accessToken: string;
+        refreshToken: string;
+        expiresAt: string;
+      }>('/auth/refresh', { refreshToken: currentUser.shepherdRefreshToken });
+
       const { users: freshUsers } = loadUsers();
       const idx = freshUsers.findIndex((u) => u.id === userId);
       if (idx !== -1) {
-        const { shepherdAccessToken: _a, shepherdRefreshToken: _r, shepherdTokenExpiresAt: _e, ...rest } = freshUsers[idx];
-        freshUsers[idx] = rest as typeof freshUsers[number];
+        freshUsers[idx] = {
+          ...freshUsers[idx],
+          shepherdAccessToken: resp.data.accessToken,
+          shepherdRefreshToken: resp.data.refreshToken,
+          shepherdTokenExpiresAt: resp.data.expiresAt,
+        };
         saveUsers({ users: freshUsers });
       }
+      return resp.data.accessToken;
+    } catch {
+      // Refresh failed (e.g. Shepherd restarted and lost in-memory tokens before
+      // disk persistence was configured). Return null so this API call fails
+      // gracefully — do NOT delete the stored tokens, as that would prevent the
+      // user from logging in again via their passkey.
+      return null;
     }
-    return null;
-  }
+  })().finally(() => {
+    ongoingRefreshes.delete(userId);
+  });
+
+  ongoingRefreshes.set(userId, refreshPromise);
+  return refreshPromise;
 }
 
 async function main(): Promise<void> {
