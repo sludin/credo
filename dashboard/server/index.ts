@@ -502,6 +502,11 @@ async function main(): Promise<void> {
     res.json({ job });
   }));
 
+  app.get('/api/renewal-jobs/active', asyncHandler(async (_req: Request, res: Response) => {
+    const response = await clients.api.get('/admin/renewal-jobs?active=true');
+    res.json(response.data);
+  }));
+
   app.get('/api/certs/:certName/details', asyncHandler(async (req: Request, res: Response) => {
     const pemResponse = await clients.api.get(
       `/admin/certstore/${encodeURIComponent(req.params.certName)}/pem`,

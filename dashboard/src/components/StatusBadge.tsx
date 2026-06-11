@@ -6,6 +6,7 @@ type Tone = 'green' | 'yellow' | 'red' | 'blue' | 'muted';
 type Props = {
   label: string;
   tone: Tone;
+  spinning?: boolean;
 };
 
 const toneStyles: Record<Tone, React.CSSProperties> = {
@@ -29,16 +30,26 @@ export function serviceTone(status: string): Tone {
   return 'muted';
 }
 
-export function StatusBadge({ label, tone }: Props): React.ReactElement {
+export function StatusBadge({ label, tone, spinning }: Props): React.ReactElement {
   const style: React.CSSProperties = {
     display: 'inline-flex', alignItems: 'center', gap: 4,
     padding: '2px 8px', borderRadius: 99,
     fontSize: 11, fontWeight: 500,
     ...toneStyles[tone],
   };
-  const dotStyle: React.CSSProperties = {
-    width: 6, height: 6, borderRadius: '50%', background: 'currentColor', flexShrink: 0,
-  };
+  const dotStyle: React.CSSProperties = spinning
+    ? {
+        display: 'inline-block',
+        width: 8, height: 8,
+        border: '1.5px solid currentColor',
+        borderTopColor: 'transparent',
+        borderRadius: '50%',
+        animation: 'spin 0.7s linear infinite',
+        flexShrink: 0,
+      }
+    : {
+        width: 6, height: 6, borderRadius: '50%', background: 'currentColor', flexShrink: 0,
+      };
   return (
     <span style={style}>
       <span style={dotStyle} />

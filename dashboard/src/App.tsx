@@ -7,7 +7,6 @@ import { ProtectedRoute } from './components/ProtectedRoute';
 const Overview     = lazy(() => import('./pages/Overview'));
 const Corgis       = lazy(() => import('./pages/Corgis'));
 const Certificates = lazy(() => import('./pages/Certificates'));
-const Assignments  = lazy(() => import('./pages/Assignments'));
 const VigilCA      = lazy(() => import('./pages/VigilCA'));
 const ShepherdCAs  = lazy(() => import('./pages/ShepherdCAs'));
 const Tools        = lazy(() => import('./pages/Tools'));
@@ -37,7 +36,7 @@ export default function App(): React.ReactElement {
                       <Route path="/"             element={<Overview />} />
                       <Route path="/corgis"       element={<Corgis />} />
                       <Route path="/certificates" element={<Certificates />} />
-                      <Route path="/assignments"  element={<Assignments />} />
+                      <Route path="/assignments"  element={<Navigate to="/certificates" replace />} />
                       <Route path="/shepherd-cas" element={<ShepherdCAs />} />
                       <Route path="/vigil-ca"     element={<VigilCA />} />
                       <Route path="/tools/*"      element={<Tools />} />
