@@ -347,10 +347,21 @@ export function createAuthRouter(
         };
         saveUsers({ users: tokenUsers });
       } catch {
-        // Refresh token invalid — user can still log in, but admin writes will fail
-        // until they re-enroll. This happens if the token store was lost (e.g. Shepherd
-        // was misconfigured with no persistent refresh token path and was restarted).
+        // Refresh failed — fall through to the credential check below.
       }
+    }
+
+    // After the refresh attempt, verify credentials exist. If not, the user's
+    // Shepherd tokens were never obtained or were lost (e.g. old Shepherd restart
+    // with in-memory token store). Block login with a clear message rather than
+    // creating a session that immediately fails all API calls.
+    const { users: credCheck } = loadUsers();
+    const credUser = credCheck.find((u) => u.id === user.id);
+    if (!credUser?.shepherdAccessToken) {
+      res.status(403).json({
+        error: 'Your Shepherd credentials are missing or have expired. Contact your administrator for a re-enrollment link.',
+      });
+      return;
     }
 
     const roleResult = await fetchShepherdRole(user.shepherdAccount, shepherdApi, serviceCert);
