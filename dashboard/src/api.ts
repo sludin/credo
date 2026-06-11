@@ -22,6 +22,10 @@ async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     },
   });
   const payload = await response.json();
+  if (response.status === 401) {
+    window.location.assign('/login');
+    throw new Error('Session expired');
+  }
   if (!response.ok) {
     throw new Error((payload as { error?: string }).error ?? `Request failed: ${response.status}`);
   }

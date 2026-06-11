@@ -245,7 +245,19 @@ async function getValidShepherdToken(
       saveUsers({ users: freshUsers });
     }
     return resp.data.accessToken;
-  } catch {
+  } catch (err) {
+    // If Shepherd rejected the refresh token (e.g. after a restart), clear the
+    // stale tokens so subsequent requests don't keep hammering /auth/refresh.
+    const status = (err as { response?: { status?: number } }).response?.status;
+    if (status === 401) {
+      const { users: freshUsers } = loadUsers();
+      const idx = freshUsers.findIndex((u) => u.id === userId);
+      if (idx !== -1) {
+        const { shepherdAccessToken: _a, shepherdRefreshToken: _r, shepherdTokenExpiresAt: _e, ...rest } = freshUsers[idx];
+        freshUsers[idx] = rest as typeof freshUsers[number];
+        saveUsers({ users: freshUsers });
+      }
+    }
     return null;
   }
 }
@@ -283,14 +295,14 @@ async function main(): Promise<void> {
   // Resolve and attach the Bearer JWT for all Shepherd API calls.
   // Uses AsyncLocalStorage so each request has its own token context —
   // no shared-state race condition between concurrent users.
-  app.use('/api', asyncHandler(async (req: Request, _res: Response, next: NextFunction) => {
+  app.use('/api', asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
     const user = req.session.user;
     if (!user) { next(); return; }
     const token = await getValidShepherdToken(user.userId, clients.api);
     if (token) {
       shepherdTokenStorage.run(token, next);
     } else {
-      next();
+      res.status(401).json({ error: 'Session credentials have expired. Please sign in again.' });
     }
   }));
 
