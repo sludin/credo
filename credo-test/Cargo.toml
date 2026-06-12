@@ -1,6 +1,6 @@
 [package]
 name = "credo-test"
-version = "0.1.0"
+version = "0.9.0"
 edition = "2021"
 description = "Integration test harness for the credo system (vigil, shepherd, corgi)"
 
