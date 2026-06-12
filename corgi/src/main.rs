@@ -41,6 +41,8 @@ enum Commands {
 enum ServerCommands {
     /// Start the Corgi agent
     Start,
+    /// Stop a running Corgi agent
+    Stop,
     /// Validate config and connectivity
     CheckConfig,
 }
@@ -58,6 +60,7 @@ async fn main() -> Result<()> {
         Commands::Bootstrap { out, dry_run } => cmd_bootstrap(out, dry_run).await,
         Commands::Server { server_cmd } => match server_cmd {
             ServerCommands::Start => cmd_server_start().await,
+            ServerCommands::Stop => cmd_server_stop(),
             ServerCommands::CheckConfig => cmd_check_config().await,
         },
     }
@@ -92,7 +95,19 @@ async fn cmd_bootstrap(_out: Option<String>, dry_run: bool) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 async fn cmd_server_start() -> Result<()> {
+    use std::path::PathBuf;
     use tokio::signal::unix::{signal, SignalKind};
+
+    let pid_path = PathBuf::from("corgi.pid");
+    if pid_path.exists() {
+        if let Ok(existing) = credo_lib::pid::read_pid(&pid_path) {
+            if credo_lib::pid::is_running(existing) {
+                anyhow::bail!("corgi is already running (PID {})", existing);
+            }
+        }
+        credo_lib::pid::remove_pid(&pid_path);
+    }
+    let _pid_guard = credo_lib::pid::PidGuard::new(pid_path)?;
 
     let config = load_config().context("Loading config")?;
     init_logging(config.log_level);
@@ -192,6 +207,17 @@ async fn cmd_server_start() -> Result<()> {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// server stop command
+// ---------------------------------------------------------------------------
+
+fn cmd_server_stop() -> Result<()> {
+    let pid_path = std::path::PathBuf::from("corgi.pid");
+    credo_lib::pid::stop_service(&pid_path, 15)?;
+    println!("corgi stopped");
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

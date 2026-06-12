@@ -1,0 +1,28 @@
+[Unit]
+Description=Credo Dashboard - Web UI and BFF for Shepherd
+After=network-online.target credo-shepherd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dashboard
+Group=credo
+WorkingDirectory=/var/apps/credo/dashboard
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node dist/server/index.js
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=10s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dashboard
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/apps/credo/dashboard
+PrivateTmp=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
+Alias=dashboard.service
+

@@ -1,0 +1,28 @@
+[Unit]
+Description=Credo Vigil - Private Certificate Authority
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vigil
+Group=credo
+WorkingDirectory=/var/apps/credo/vigil
+ExecStart=/var/apps/credo/vigil/vigil server start
+ExecStop=/var/apps/credo/vigil/vigil server stop
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=10s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vigil
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/apps/credo/vigil
+PrivateTmp=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
+Alias=vigil.service

@@ -50,6 +50,8 @@ enum Commands {
 enum ServerCommands {
     /// Start the Shepherd server
     Start,
+    /// Stop a running Shepherd server
+    Stop,
     /// Validate config and exit
     CheckConfig,
 }
@@ -161,6 +163,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Server { cmd } => match cmd {
             ServerCommands::Start => cmd_server_start().await,
+            ServerCommands::Stop => cmd_server_stop(),
             ServerCommands::CheckConfig => cmd_check_config().await,
         },
         Commands::Bootstrap { cmd } => match cmd {
@@ -227,8 +230,26 @@ async fn main() -> Result<()> {
 // ---------------------------------------------------------------------------
 
 async fn cmd_server_start() -> Result<()> {
+    let pid_path = std::path::PathBuf::from("shepherd.pid");
+    if pid_path.exists() {
+        if let Ok(existing) = credo_lib::pid::read_pid(&pid_path) {
+            if credo_lib::pid::is_running(existing) {
+                anyhow::bail!("shepherd is already running (PID {})", existing);
+            }
+        }
+        credo_lib::pid::remove_pid(&pid_path);
+    }
+    let _pid_guard = credo_lib::pid::PidGuard::new(pid_path)?;
+
     let config = load_config().context("Loading config")?;
     run_server(config).await
+}
+
+fn cmd_server_stop() -> Result<()> {
+    let pid_path = std::path::PathBuf::from("shepherd.pid");
+    credo_lib::pid::stop_service(&pid_path, 15)?;
+    println!("shepherd stopped");
+    Ok(())
 }
 
 async fn run_server(config: shepherd::config::ShepherdConfig) -> Result<()> {

@@ -41,6 +41,8 @@ pub enum ServerCommands {
         #[arg(long)]
         bootstrap: bool,
     },
+    /// Stop a running Vigil server
+    Stop,
     /// Validate config and CA material
     CheckConfig,
     /// Print CA status summary
@@ -97,7 +99,19 @@ pub enum AcmeCommands {
 // ---------------------------------------------------------------------------
 
 pub async fn run_server_start(bootstrap: bool) -> Result<()> {
+    use std::path::PathBuf;
     use tokio::signal::unix::{signal, SignalKind};
+
+    let pid_path = PathBuf::from("vigil.pid");
+    if pid_path.exists() {
+        if let Ok(existing) = credo_lib::pid::read_pid(&pid_path) {
+            if credo_lib::pid::is_running(existing) {
+                anyhow::bail!("vigil is already running (PID {})", existing);
+            }
+        }
+        credo_lib::pid::remove_pid(&pid_path);
+    }
+    let _pid_guard = credo_lib::pid::PidGuard::new(pid_path)?;
 
     let config = crate::config::load_config().context("Loading config")?;
     init_logging(config.log_level);
@@ -212,6 +226,13 @@ fn build_bootstrap_tls(
 ) -> Result<std::sync::Arc<rustls::ServerConfig>> {
     credo_lib::tls::build_server_tls_from_pem(cert_pem, key_pem, Some(&config.tls.client_ca_path))
         .context("Building bootstrap TLS config from in-memory PEM")
+}
+
+pub fn run_server_stop() -> Result<()> {
+    let pid_path = std::path::PathBuf::from("vigil.pid");
+    credo_lib::pid::stop_service(&pid_path, 15)?;
+    println!("vigil stopped");
+    Ok(())
 }
 
 pub fn run_check_config() -> Result<()> {

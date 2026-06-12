@@ -64,6 +64,7 @@ Shepherd reads several companion JSON files. Each has a default path relative to
 |-------|------|---------|-------------|
 | `certStoreDir` | string | `"store"` | Root directory for issued certificate material (`archive/` + `live/` layout) |
 | `renewalJobsDir` | string | — | Directory for persisting in-progress renewal job state. If unset, renewal jobs are in-memory only |
+| `issuanceLedgerPath` | string | `"shepherd.issuance-log.json"` | Append-only log of certificate issuance events used to enforce per-domain (50/7 days) and per-identifier-set (5/7 days) rate limits. Missing or corrupt file starts fresh with a warning |
 
 ## Timers
 

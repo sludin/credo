@@ -11,6 +11,7 @@ async fn main() -> Result<()> {
         Commands::Bootstrap => vigil::cli::run_server_start(true).await,
         Commands::Server { cmd } => match cmd {
             ServerCommands::Start { bootstrap } => vigil::cli::run_server_start(bootstrap).await,
+            ServerCommands::Stop => vigil::cli::run_server_stop(),
             ServerCommands::CheckConfig => vigil::cli::run_check_config(),
             ServerCommands::Status => {
                 let config = vigil::config::load_config()?;

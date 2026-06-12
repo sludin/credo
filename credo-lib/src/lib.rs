@@ -1,4 +1,5 @@
 pub mod archive;
+pub mod pid;
 pub mod auth;
 pub mod config;
 pub mod error;

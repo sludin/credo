@@ -1,0 +1,29 @@
+[Unit]
+Description=Credo Corgi - Distributed TLS Certificate Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=corgi
+Group=credo
+SupplementaryGroups=ssl-cert
+WorkingDirectory=/var/apps/credo/corgi
+ExecStart=/var/apps/credo/corgi/corgi server start
+ExecStop=/var/apps/credo/corgi/corgi server stop
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=10s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=corgi
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/apps/credo/corgi
+PrivateTmp=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
+Alias=corgi.service
