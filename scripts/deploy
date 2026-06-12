@@ -85,13 +85,17 @@ ensure_dir() {
 }
 
 npm_install_remote() {
-  local host="$1" port="$2" ssh_opts="$3" dir="$4"
+  local host="$1" port="$2" ssh_opts="$3" dir="$4" remote_user="${5:-}"
   if is_local "$host"; then
     echo "[deploy] npm install --omit=dev (local)..."
   else
     echo "[deploy] npm install --omit=dev on $host..."
   fi
-  run_cmd "$host" "$port" "$ssh_opts" "cd '$dir' && npm install --omit=dev"
+  if [[ -n "$remote_user" ]]; then
+    run_cmd "$host" "$port" "$ssh_opts" "sudo -u '$remote_user' sh -c \"cd '$dir' && npm install --omit=dev\""
+  else
+    run_cmd "$host" "$port" "$ssh_opts" "cd '$dir' && npm install --omit=dev"
+  fi
 }
 
 chown_dir() {
@@ -309,7 +313,7 @@ _deploy_ts() {
   rsync_deploy "$staging_dir" "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts" "$sudo_rsync" "$remote_user"
 
   if ! $DRY_RUN; then
-    npm_install_remote "$host" "$port" "$ssh_opts" "$remote_dir"
+    npm_install_remote "$host" "$port" "$ssh_opts" "$remote_dir" "$remote_user"
     if [[ -n "$owner" ]]; then chown_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$owner"; fi
     if [[ -n "$dir_mode" ]]; then chmod_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$dir_mode"; fi
     if [[ -n "$post_deploy" ]]; then run_post_deploy "$host" "$port" "$ssh_opts" "$remote_dir" "$post_deploy"; fi
