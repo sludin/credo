@@ -368,8 +368,7 @@ On each corgi's machine, write `corgi.config.json`:
     "caPath":   "${ca}"
   },
 
-  "bootstrapPort": 7001,
-  "mtlsPort":      7001,
+  "mtlsPort": 7001,
 
   "auth": {
     "mode": "mtls"
@@ -575,7 +574,6 @@ All services still need to be running for rotation to complete. Restart any serv
 | `mtls.keyPath`   | Client key for outbound mTLS                                                                    |
 | `mtls.caPath`    | CA bundle path; shepherd pushes `credo-catrust.pem` here during enrollment                     |
 | `certStoreDir`   | Root directory for all cert material managed by corgi                                           |
-| `bootstrapPort`  | Port for the temporary bootstrap HTTPS server                                                   |
 | `shepherdUrl`    | Shepherd's agent port URL; used to pull assignments in normal mode                              |
 
 ---

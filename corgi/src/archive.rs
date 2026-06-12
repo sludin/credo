@@ -120,8 +120,14 @@ pub fn set_owner(path: &Path, owner: Option<&str>, group: Option<&str>) -> Resul
     };
 
     if uid.is_some() || gid.is_some() {
-        chown(path, uid, gid)
-            .with_context(|| format!("chown {}:{} {}", owner.unwrap_or("-"), group.unwrap_or("-"), path.display()))?;
+        chown(path, uid, gid).with_context(|| {
+            format!(
+                "chown {}:{} {}",
+                owner.unwrap_or("-"),
+                group.unwrap_or("-"),
+                path.display()
+            )
+        })?;
     }
 
     Ok(())
@@ -246,7 +252,9 @@ pub fn install_to_archive(
             let p = archive.join(format!("privkey-{}.pem", sfx));
             write_file(&p, &key_bytes, entry.key_mode.unwrap_or(0o640))?;
             if entry.key_owner.is_some() || entry.key_group.is_some() {
-                if let Err(e) = set_owner(&p, entry.key_owner.as_deref(), entry.key_group.as_deref()) {
+                if let Err(e) =
+                    set_owner(&p, entry.key_owner.as_deref(), entry.key_group.as_deref())
+                {
                     tracing::warn!(path = %p.display(), error = %e, "Failed to apply key ownership");
                 }
             }

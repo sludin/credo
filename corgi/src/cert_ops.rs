@@ -535,7 +535,10 @@ fn get_cert_spki_bytes_from_pem(cert_pem: &str) -> Option<Vec<u8>> {
 /// the private key stored at `key_path`.  Used to guard against installing a
 /// cert whose key doesn't match a pending key that is waiting to be archived.
 pub fn cert_pem_matches_key_file(cert_pem: &str, key_path: &Path) -> bool {
-    match (get_cert_spki_bytes_from_pem(cert_pem), get_key_public_point(key_path)) {
+    match (
+        get_cert_spki_bytes_from_pem(cert_pem),
+        get_key_public_point(key_path),
+    ) {
         (Some(c), Some(k)) => c == k,
         _ => false,
     }

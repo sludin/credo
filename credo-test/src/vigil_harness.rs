@@ -4,7 +4,7 @@
 /// directory for all state.  No TLS is used in tests — tests exercise the
 /// application logic, not the TLS layer.
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::path::Path;
 use tokio::sync::oneshot;
 use vigil::config::{CaConfig, IssuancePolicyConfig, TlsConfig, VigilConfig};
 
@@ -134,7 +134,7 @@ impl TestVigil {
     }
 }
 
-pub fn build_vigil_config(tmp: &PathBuf) -> VigilConfig {
+pub fn build_vigil_config(tmp: &Path) -> VigilConfig {
     use vigil::config::LogLevel;
     VigilConfig {
         port: 0,
@@ -170,7 +170,7 @@ pub fn build_vigil_config(tmp: &PathBuf) -> VigilConfig {
             allowed_identity_uri_prefixes: vec!["vigil://credo/".to_string()],
             allow_ip_sans: false,
         },
-        config_dir: tmp.clone(),
+        config_dir: tmp.to_path_buf(),
         allow_none_validation: true,
         allowed_http_challenge_ports: vec![80],
         challenge_check_count: 3,

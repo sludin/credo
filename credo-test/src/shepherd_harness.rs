@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use shepherd::config::{LogLevel, ShepherdConfig, TlsConfig};
 use shepherd::state::AppState;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 use tokio::sync::oneshot;
 
 use crate::test_dir::{make_test_dir, TestDir};
@@ -146,10 +146,10 @@ impl TestShepherd {
     }
 }
 
-fn build_shepherd_config(tmp: &PathBuf) -> ShepherdConfig {
+fn build_shepherd_config(tmp: &Path) -> ShepherdConfig {
     ShepherdConfig {
         config_path: tmp.join("shepherd.config.json"),
-        base_dir: tmp.clone(),
+        base_dir: tmp.to_path_buf(),
         agent_port: 0,
         dashboard_port: 0,
         bind: "127.0.0.1".to_string(),

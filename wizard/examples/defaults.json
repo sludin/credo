@@ -21,7 +21,6 @@
     "name": "corgi-A",
     "hostname": "corgi.example.com",
     "port": 7001,
-    "bootstrapPort": 7002,
     "dir": "/var/apps/credo/corgi",
     "identityUri": "vigil://credo/node/corgi-A"
   },

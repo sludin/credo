@@ -162,7 +162,6 @@ pub struct CorgiConfig {
     pub shepherd_sync: ShepherdSyncConfig,
     pub config_path: PathBuf,
     pub accounts_path: PathBuf,
-    pub bootstrap_port: u16,
     pub chain_path: Option<PathBuf>,
     pub fullchain_path: Option<PathBuf>,
     pub csr_path: Option<PathBuf>,
@@ -293,9 +292,6 @@ struct RawConfig {
 
     #[serde(rename = "accountsPath")]
     accounts_path: Option<String>,
-    #[serde(rename = "bootstrapPort")]
-    bootstrap_port: Option<u16>,
-
     #[serde(rename = "certStoreDir")]
     cert_store_dir: Option<String>,
     #[serde(rename = "certDir")]
@@ -906,12 +902,6 @@ pub fn load_config() -> Result<CorgiConfig> {
         .map(|p| resolve_path(&base_dir, &p))
         .unwrap_or_else(|| base_dir.join("corgi.fleet-accounts.json"));
 
-    let bootstrap_port = env::var("CORGI_BOOTSTRAP_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .or(raw.bootstrap_port)
-        .unwrap_or(7002);
-
     Ok(CorgiConfig {
         node_id,
         common_name,
@@ -941,7 +931,6 @@ pub fn load_config() -> Result<CorgiConfig> {
         shepherd_sync,
         config_path,
         accounts_path,
-        bootstrap_port,
         chain_path,
         fullchain_path,
         csr_path,

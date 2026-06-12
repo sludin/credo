@@ -38,7 +38,7 @@ impl TestCorgiBootstrap {
 
     async fn start_inner(
         dir: TestDir,
-        tmp: &std::path::PathBuf,
+        tmp: &std::path::Path,
         cert_store_dir: std::path::PathBuf,
     ) -> Result<Self> {
         let config = std::sync::Arc::new(build_corgi_config(tmp, &cert_store_dir));
@@ -130,7 +130,7 @@ use corgi::config::{
 };
 use corgi::state::AppState;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 use tokio::sync::oneshot;
 
 pub struct TestCorgi {
@@ -232,7 +232,7 @@ impl TestCorgi {
 ///                   May be shared across services in the full-stack bootstrap test.
 pub const CORGI_COMMON_NAME: &str = "corgi-01.credo.test";
 
-fn build_corgi_config(tmp: &PathBuf, cert_store_dir: &PathBuf) -> CorgiConfig {
+fn build_corgi_config(tmp: &Path, cert_store_dir: &Path) -> CorgiConfig {
     // Mirror the production layout: tls paths live inside certstore/live/<common_name>/
     // so install_to_archive creates all live/ symlinks in the correct directory.
     let live = cert_store_dir.join("live").join(CORGI_COMMON_NAME);
@@ -252,7 +252,7 @@ fn build_corgi_config(tmp: &PathBuf, cert_store_dir: &PathBuf) -> CorgiConfig {
             // bootstrap/ca writes the trust bundle here; must be inside the harness tempdir
             ca_path: Some(tmp.join("mtls-ca.pem")),
         },
-        cert_store_dir: cert_store_dir.clone(),
+        cert_store_dir: cert_store_dir.to_path_buf(),
         flock: vec![],
         http_challenge: HttpChallengeConfig {
             enabled: false,
@@ -282,7 +282,6 @@ fn build_corgi_config(tmp: &PathBuf, cert_store_dir: &PathBuf) -> CorgiConfig {
         },
         config_path: tmp.join("corgi.config.json"),
         accounts_path: tmp.join("corgi.accounts.json"),
-        bootstrap_port: 0,
         chain_path: Some(live.join("chain.pem")),
         fullchain_path: Some(live.join("fullchain.pem")),
         csr_path: None,

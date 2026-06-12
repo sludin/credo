@@ -345,7 +345,7 @@ pub async fn run_bootstrap(config: Arc<CorgiConfig>) -> Result<()> {
     println!();
     println!("  Node ID:               {}", config.node_id);
     println!("  Common name:           {}", config.common_name);
-    println!("  Bootstrap port:        {}", config.bootstrap_port);
+    println!("  Port:                  {}", config.mtls_port);
     println!();
     println!("  Corgi bootstrap fingerprint: {}", fingerprint);
     println!("  Corgi bootstrap token:       {}", token);
@@ -354,14 +354,11 @@ pub async fn run_bootstrap(config: Arc<CorgiConfig>) -> Result<()> {
     let tls_config = build_ephemeral_tls(&bs_cert_pem, &bs_key_pem)?;
     let acceptor = tokio_rustls::TlsAcceptor::from(tls_config);
 
-    let listener = bind_tcp(&config.bind, config.bootstrap_port)
+    let listener = bind_tcp(&config.bind, config.mtls_port)
         .await
         .context("Binding bootstrap port")?;
 
-    tracing::info!(
-        port = config.bootstrap_port,
-        "Bootstrap HTTPS server listening"
-    );
+    tracing::info!(port = config.mtls_port, "Bootstrap HTTPS server listening");
 
     let (done_tx, done_rx) = oneshot::channel::<()>();
 

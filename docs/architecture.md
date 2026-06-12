@@ -114,7 +114,7 @@ An admin generates a personal ECDSA key and certificate (signed by Vigil), then 
 Corgi starts in bootstrap mode when it has no valid TLS certificate:
 
 1. Generates an ephemeral self-signed cert and a 48-character random token.
-2. Starts a bootstrap HTTPS server on its bootstrap port (default 7002) and prints the server fingerprint and token to stdout.
+2. Starts a bootstrap HTTPS server on the same port as normal operations (`mtlsPort`, default 7001) and prints the server fingerprint and token to stdout.
 3. An operator (or Shepherd's `bootstrap corgi` CLI command) verifies the fingerprint out-of-band, then POSTs a request with the token to:
    - `GET /bootstrap/csr` — Corgi generates an ECDSA key + CSR and returns the CSR PEM.
    - `POST /bootstrap/ca` — installs the CA trust bundle.

@@ -26,7 +26,6 @@ Config files support variable interpolation (`${VAR}`) from the `vars` block and
 | Field | Type | Default | Env override | Description |
 |-------|------|---------|--------------|-------------|
 | `mtlsPort` | number | `7001` | `CORGI_MTLS_PORT`, `PORT` | Port for the mTLS control API |
-| `bootstrapPort` | number | `7002` | `CORGI_BOOTSTRAP_PORT` | Port for the bootstrap endpoint |
 | `bind` | string | `"127.0.0.1"` | `CORGI_BIND`, `BIND` | Interface to bind the mTLS API server |
 
 ## TLS (server cert — inbound connections)

@@ -74,7 +74,7 @@ async fn cmd_bootstrap(_out: Option<String>, dry_run: bool) -> Result<()> {
     if dry_run {
         println!(
             "Dry run: would start bootstrap server on {}:{}",
-            config.bind, config.bootstrap_port
+            config.bind, config.mtls_port
         );
         println!("  Node ID:     {}", config.node_id);
         println!("  Common name: {}", config.common_name);

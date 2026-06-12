@@ -112,7 +112,7 @@ pub fn generate_signed_cert(
 
     let config = signing_config(tmp_dir);
     std::fs::create_dir_all(&config.certs_dir).ok();
-    std::fs::create_dir_all(&tmp_dir).ok();
+    std::fs::create_dir_all(tmp_dir).ok();
 
     let signed =
         vigil::ca::sign_csr(&csr_pem, days, None, &config).context("signing CSR with test CA")?;

@@ -59,7 +59,6 @@ fn make_config(dir: &TempDir) -> corgi::config::CorgiConfig {
         },
         config_path: dir.path().join("corgi.config.json"),
         accounts_path: dir.path().join("corgi.accounts.json"),
-        bootstrap_port: 0,
         chain_path: None,
         fullchain_path: None,
         csr_path: None,
