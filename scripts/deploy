@@ -74,7 +74,14 @@ run_cmd() {
 }
 
 ensure_dir() {
-  run_cmd "$1" "$2" "$3" "mkdir -p '$4' && chmod 755 '$4'"
+  local host="$1" port="$2" ssh_opts="$3" dir="$4" sudo_rsync="${5:-false}" remote_user="${6:-}"
+  if [[ "$sudo_rsync" == "true" && -n "$remote_user" ]]; then
+    run_cmd "$host" "$port" "$ssh_opts" "sudo -u '$remote_user' mkdir -p '$dir' && sudo -u '$remote_user' chmod 755 '$dir'"
+  elif [[ "$sudo_rsync" == "true" ]]; then
+    run_cmd "$host" "$port" "$ssh_opts" "sudo mkdir -p '$dir' && sudo chmod 755 '$dir'"
+  else
+    run_cmd "$host" "$port" "$ssh_opts" "mkdir -p '$dir' && chmod 755 '$dir'"
+  fi
 }
 
 npm_install_remote() {
@@ -111,11 +118,19 @@ run_post_deploy() {
 
 rsync_deploy() {
   local staging_dir="$1" host="$2" remote_dir="$3" port="$4" ssh_opts="$5" rsync_opts="$6"
+  local sudo_rsync="${7:-false}" remote_user="${8:-}"
   local args=(-avz --itemize-changes
     '--exclude=node_modules/'
     '--exclude=.env'
     '--exclude=.env.*'
   )
+  if [[ "$sudo_rsync" == "true" ]]; then
+    if [[ -n "$remote_user" ]]; then
+      args+=(--rsync-path="sudo -u '$remote_user' rsync")
+    else
+      args+=(--rsync-path="sudo rsync")
+    fi
+  fi
   # shellcheck disable=SC2206
   if [[ -n "$rsync_opts" ]]; then args+=($rsync_opts); fi
   if $DRY_RUN; then args+=(--dry-run); fi
@@ -255,12 +270,13 @@ _deploy_rust() {
   local label="$1" crate_dir="$2" binary="$3" arch="$4" profile="$5"
   local host="$6" remote_dir="$7" port="$8" ssh_opts="$9" rsync_opts="${10}"
   local owner="${11}" post_deploy="${12}" files_str="${13:-}" dir_mode="${14:-}"
+  local sudo_rsync="${15:-false}" remote_user="${16:-}"
 
   build_rust_binary_staging "$crate_dir" "$binary" "$arch" "$profile" "$files_str"
   local staging_dir="$STAGING_DIR"
 
-  if ! $DRY_RUN; then ensure_dir "$host" "$port" "$ssh_opts" "$remote_dir"; fi
-  rsync_deploy "$staging_dir" "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts"
+  if ! $DRY_RUN; then ensure_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$sudo_rsync" "$remote_user"; fi
+  rsync_deploy "$staging_dir" "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts" "$sudo_rsync" "$remote_user"
 
   if ! $DRY_RUN; then
     if [[ -n "$owner" ]]; then chown_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$owner"; fi
@@ -283,13 +299,14 @@ _deploy_ts() {
   local label="$1" service_key="$2" files_str="$3"
   local host="$4" remote_dir="$5" port="$6" ssh_opts="$7" rsync_opts="$8"
   local owner="$9" post_deploy="${10}" dir_mode="${11:-}"
+  local sudo_rsync="${12:-false}" remote_user="${13:-}"
 
   local service_dir="$REPO_DIR/$service_key"
   build_ts_staging "$service_dir" "$service_key" "$files_str"
   local staging_dir="$STAGING_DIR"
 
-  if ! $DRY_RUN; then ensure_dir "$host" "$port" "$ssh_opts" "$remote_dir"; fi
-  rsync_deploy "$staging_dir" "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts"
+  if ! $DRY_RUN; then ensure_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$sudo_rsync" "$remote_user"; fi
+  rsync_deploy "$staging_dir" "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts" "$sudo_rsync" "$remote_user"
 
   if ! $DRY_RUN; then
     npm_install_remote "$host" "$port" "$ssh_opts" "$remote_dir"
@@ -313,13 +330,14 @@ _deploy_shell() {
   local label="$1" service_key="$2" files_str="$3"
   local host="$4" remote_dir="$5" port="$6" ssh_opts="$7" rsync_opts="$8"
   local owner="$9" post_deploy="${10}" dir_mode="${11:-}"
+  local sudo_rsync="${12:-false}" remote_user="${13:-}"
 
   local service_dir="$REPO_DIR/$service_key"
   build_shell_staging "$service_dir" "$service_key" "$files_str"
   local staging_dir="$STAGING_DIR"
 
-  if ! $DRY_RUN; then ensure_dir "$host" "$port" "$ssh_opts" "$remote_dir"; fi
-  rsync_deploy "$staging_dir" "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts"
+  if ! $DRY_RUN; then ensure_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$sudo_rsync" "$remote_user"; fi
+  rsync_deploy "$staging_dir" "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts" "$sudo_rsync" "$remote_user"
 
   if ! $DRY_RUN; then
     if [[ -n "$owner" ]]; then chown_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$owner"; fi
@@ -346,7 +364,7 @@ deploy_service() {
   local svc_json
   svc_json=$(jq -c --arg k "$service_key" '.[$k]' "$CONFIG_PATH")
 
-  local host remote_dir port ssh_opts rsync_opts owner post_deploy rust_target rust_profile files_str dir_mode
+  local host remote_dir port ssh_opts rsync_opts owner post_deploy rust_target rust_profile files_str dir_mode sudo_rsync remote_user remote_group service_name restart_mode
   host=$(jq -r '.host // empty' <<< "$svc_json")
   remote_dir=$(jq -r '.remoteDir // empty' <<< "$svc_json")
   port=$(jq -r '.sshPort // 22' <<< "$svc_json")
@@ -358,6 +376,17 @@ deploy_service() {
   rust_profile=$(jq -r '.rustProfile // "release"' <<< "$svc_json")
   files_str=$(jq -r '.files[]? // empty' <<< "$svc_json" | tr '\n' ' ')
   dir_mode=$(jq -r '.dirMode // empty' <<< "$svc_json")
+  sudo_rsync=$(jq -r '.sudoRsync // false' <<< "$svc_json")
+  remote_user=$(jq -r '.remoteUser // empty' <<< "$svc_json")
+  remote_group=$(jq -r '.remoteGroup // empty' <<< "$svc_json")
+  service_name=$(jq -r '.serviceName // empty' <<< "$svc_json")
+  restart_mode=$(jq -r '.restartMode // "restart"' <<< "$svc_json")
+  if [[ -z "$owner" && -n "$remote_user" && -n "$remote_group" ]]; then
+    owner="${remote_user}:${remote_group}"
+  fi
+  if [[ -z "$post_deploy" && -n "$service_name" && "$restart_mode" != "none" ]]; then
+    post_deploy="sudo systemctl $restart_mode '$service_name'"
+  fi
 
   if [[ -n "$rust_target" ]]; then
     local crate_dir binary
@@ -374,7 +403,7 @@ deploy_service() {
     fi
     _deploy_rust "$label" "$crate_dir" "$binary" "$rust_target" "$rust_profile" \
       "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts" \
-      "$owner" "$post_deploy" "$files_str" "$dir_mode"
+      "$owner" "$post_deploy" "$files_str" "$dir_mode" "$sudo_rsync" "$remote_user"
   elif [[ -f "$REPO_DIR/$service_key/package.json" ]]; then
     if [[ -z "${files_str// /}" ]]; then
       local default_var="DEFAULT_FILES_${service_key}"
@@ -382,7 +411,7 @@ deploy_service() {
     fi
     _deploy_ts "$label" "$service_key" "$files_str" \
       "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts" \
-      "$owner" "$post_deploy" "$dir_mode"
+      "$owner" "$post_deploy" "$dir_mode" "$sudo_rsync" "$remote_user"
   else
     if [[ -z "${files_str// /}" ]]; then
       local default_var="DEFAULT_FILES_${service_key}"
@@ -390,7 +419,7 @@ deploy_service() {
     fi
     _deploy_shell "$label" "$service_key" "$files_str" \
       "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts" \
-      "$owner" "$post_deploy" "$dir_mode"
+      "$owner" "$post_deploy" "$dir_mode" "$sudo_rsync" "$remote_user"
   fi
 }
 
@@ -414,7 +443,7 @@ deploy_corgi_by_name() {
   local corgi_json
   corgi_json=$(jq -c --arg n "$name" '.corgis[] | select(.name == $n)' "$CONFIG_PATH")
 
-  local host remote_dir port ssh_opts rsync_opts owner post_deploy rust_target rust_profile files_str dir_mode
+  local host remote_dir port ssh_opts rsync_opts owner post_deploy rust_target rust_profile files_str dir_mode sudo_rsync remote_user remote_group service_name restart_mode
   host=$(jq -r '.host // empty' <<< "$corgi_json")
   remote_dir=$(jq -r '.remoteDir // empty' <<< "$corgi_json")
   port=$(jq -r '.sshPort // 22' <<< "$corgi_json")
@@ -426,17 +455,28 @@ deploy_corgi_by_name() {
   rust_profile=$(jq -r '.rustProfile // "release"' <<< "$corgi_json")
   files_str=$(jq -r '.files[]?' <<< "$corgi_json" | tr '\n' ' ')
   dir_mode=$(jq -r '.dirMode // empty' <<< "$corgi_json")
+  sudo_rsync=$(jq -r '.sudoRsync // false' <<< "$corgi_json")
+  remote_user=$(jq -r '.remoteUser // empty' <<< "$corgi_json")
+  remote_group=$(jq -r '.remoteGroup // empty' <<< "$corgi_json")
+  service_name=$(jq -r '.serviceName // empty' <<< "$corgi_json")
+  restart_mode=$(jq -r '.restartMode // "restart"' <<< "$corgi_json")
+  if [[ -z "$owner" && -n "$remote_user" && -n "$remote_group" ]]; then
+    owner="${remote_user}:${remote_group}"
+  fi
+  if [[ -z "$post_deploy" && -n "$service_name" && "$restart_mode" != "none" ]]; then
+    post_deploy="sudo systemctl $restart_mode '$service_name'"
+  fi
 
   if [[ -n "$rust_target" ]]; then
     if [[ -z "${files_str// /}" ]]; then files_str="$DEFAULT_FILES_corgi"; fi
     _deploy_rust "$label" "$CORGI_DIR" "corgi" "$rust_target" "$rust_profile" \
       "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts" \
-      "$owner" "$post_deploy" "$files_str" "$dir_mode"
+      "$owner" "$post_deploy" "$files_str" "$dir_mode" "$sudo_rsync" "$remote_user"
   else
     if [[ -z "${files_str// /}" ]]; then files_str="$DEFAULT_FILES_corgi"; fi
     _deploy_ts "$label" "corgi" "$files_str" \
       "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts" \
-      "$owner" "$post_deploy" "$dir_mode"
+      "$owner" "$post_deploy" "$dir_mode" "$sudo_rsync" "$remote_user"
   fi
 }
 
@@ -572,12 +612,17 @@ Config:
     files          list of paths to deploy, relative to service root
     sshPort        SSH port, default 22
     sshOpts        extra SSH flags string, e.g. "-o StrictHostKeyChecking=no"
-    owner          "user:group" — sudo chown -R after sync
+    owner          "user:group" — sudo chown -R after sync (auto-set from remoteUser:remoteGroup if omitted)
     dirMode        octal mode string — sudo chmod applied to remoteDir after chown, e.g. "750"
     rsyncOpts      extra rsync flags, e.g. "-O" for OpenWRT targets
-    postDeploy     remote shell command after install, e.g. "sudo systemctl restart credo-shepherd"
+    serviceName    systemd unit name, e.g. "credo-shepherd" — auto-runs "sudo systemctl restart <name>" after deploy
+    restartMode    "restart" (default), "reload" (SIGHUP), or "none" — controls the systemctl verb used with serviceName
+    postDeploy     remote shell command after install — overrides serviceName/restartMode when set
     rustTarget     e.g. "aarch64-unknown-linux-musl" — enables Rust binary build
     rustProfile    "debug" or "release" (default: "release")
+    sudoRsync      true — use sudo on the remote for mkdir and rsync (needed when target dir is owned by a different user)
+    remoteUser     service user on remote, e.g. "shepherd" — used with sudoRsync for "sudo -u <user> rsync"
+    remoteGroup    service group on remote, e.g. "shepherd" — combined with remoteUser to auto-set owner
 EOF
 }
 
