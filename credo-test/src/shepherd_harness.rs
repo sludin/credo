@@ -170,6 +170,7 @@ fn build_shepherd_config(tmp: &Path) -> ShepherdConfig {
         poll_interval_seconds: 60,
         corgi_health_check_interval_seconds: 30,
         renewal_jobs_dir: None,
+        issuance_ledger_path: tmp.join("shepherd.issuance-log.json"),
         log_level: LogLevel::Warn,
         dns_override: HashMap::new(),
         common_name: None,

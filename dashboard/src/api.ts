@@ -8,6 +8,7 @@ import type {
   FlockPayload,
   HealthPayload,
   LastRenewalJob,
+  RateLimitsPayload,
   ShepherdConfigSummary,
   VigilCAPayload,
   VigilCertsPayload,
@@ -91,6 +92,10 @@ export function fetchActiveJob(certName: string): Promise<LastRenewalJob | null>
 export function fetchActiveJobs(): Promise<LastRenewalJob[]> {
   return requestJson<{ jobs: LastRenewalJob[] }>('/api/renewal-jobs/active')
     .then(r => r.jobs ?? []);
+}
+
+export function fetchRateLimits(): Promise<RateLimitsPayload> {
+  return requestJson<RateLimitsPayload>('/api/rate-limits');
 }
 
 export function createAssignment(data: Record<string, unknown>): Promise<unknown> {

@@ -76,6 +76,9 @@ time   = { version = "0.3", features = ["std"] }
 # .env file loading
 dotenvy = "0.15"
 
+# Public Suffix List — eTLD+1 extraction for rate-limit domain grouping
+psl = "2"
+
 # Misc
 rand      = "0.8"
 rcgen     = { version = "0.12", features = ["pem"] }

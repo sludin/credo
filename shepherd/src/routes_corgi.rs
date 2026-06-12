@@ -143,6 +143,7 @@ pub async fn provision_cert(
         &state.corgi_client_pool,
         &corgis,
         &state.acme_accounts,
+        &state.issuance_ledger,
     )
     .await
     .map_err(AppError::Internal)?;
@@ -267,6 +268,7 @@ pub async fn renew_cert(
             &state2.corgi_client_pool,
             &corgis,
             &state2.acme_accounts,
+            &state2.issuance_ledger,
         )
         .await
         {

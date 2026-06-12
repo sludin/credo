@@ -10,6 +10,7 @@ import {
   fetchCertDetails,
   fetchLastJob,
   fetchActiveJob,
+  fetchRateLimits,
   fetchShepherdConfigSummary,
   renewCert,
   createAssignment,
@@ -23,8 +24,11 @@ import type {
   Assignment,
   CertStoreEntry,
   CertX509Details,
+  DomainQuotaStatus,
   FlockCert,
+  IdentifierSetQuotaStatus,
   LastRenewalJob,
+  RateLimitsPayload,
   ShepherdConfigSummary,
 } from '../types';
 
@@ -236,6 +240,117 @@ const PHASE_LABELS: Record<string, string> = {
 
 // ── Sub-components ─────────────────────────────────────────────────────────
 
+function RateLimitsSection({ data }: { data: RateLimitsPayload }): React.ReactElement | null {
+  const [open, setOpen] = React.useState(false);
+
+  const atRisk = data.domainQuotas.some(q => q.issued7d / q.limit7d >= 0.8)
+    || data.identifierSetQuotas.some(q => q.issued7d / q.limit7d >= 0.8);
+  const gated = data.domainQuotas.some(q => q.nextSlotAt !== null)
+    || data.identifierSetQuotas.some(q => q.nextSlotAt !== null);
+
+  if (data.domainQuotas.length === 0 && data.identifierSetQuotas.length === 0) return null;
+
+  const headerColor = gated ? 'var(--red)' : atRisk ? 'var(--yellow)' : 'var(--green)';
+  const headerLabel = gated ? '⛔ Rate limited' : atRisk ? '⚠ Approaching limit' : '✓ Within limits';
+
+  function fmtDate(iso: string): string {
+    return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function UsageBar({ issued, limit }: { issued: number; limit: number }): React.ReactElement {
+    const pct = Math.min(issued / limit, 1) * 100;
+    const color = pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--yellow)' : 'var(--green)';
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'var(--border)' }}>
+          <div style={{ width: `${pct}%`, height: '100%', borderRadius: 3, background: color }} />
+        </div>
+        <span style={{ fontSize: 11, color, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+          {issued} / {limit}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card" style={{ marginTop: 10, flexShrink: 0 }}>
+      <div
+        className="card-header"
+        style={{ cursor: 'pointer', userSelect: 'none' }}
+        onClick={() => setOpen(o => !o)}
+      >
+        <span className="card-title">Rate Limits</span>
+        <span style={{ marginLeft: 8, fontSize: 12, color: headerColor }}>{headerLabel}</span>
+        <span style={{ marginLeft: 'auto', color: 'var(--muted)', fontSize: 12 }}>{open ? '▲' : '▼'}</span>
+      </div>
+
+      {open && (
+        <div style={{ padding: '10px 14px' }}>
+          {data.domainQuotas.length > 0 && (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Per Registered Domain (50 / 7 days)
+              </div>
+              <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ color: 'var(--muted)' }}>
+                    <th style={{ textAlign: 'left', padding: '2px 6px 2px 0', fontWeight: 500 }}>Domain</th>
+                    <th style={{ textAlign: 'left', padding: '2px 6px', fontWeight: 500 }}>CA</th>
+                    <th style={{ padding: '2px 0', fontWeight: 500, width: 160 }}>Usage</th>
+                    <th style={{ textAlign: 'right', padding: '2px 0 2px 6px', fontWeight: 500 }}>Next Slot</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.domainQuotas.map((q: DomainQuotaStatus) => (
+                    <tr key={`${q.registeredDomain}:${q.ca}`}>
+                      <td style={{ padding: '3px 6px 3px 0', fontFamily: 'var(--font-mono)', fontSize: 11 }}>{q.registeredDomain}</td>
+                      <td style={{ padding: '3px 6px', color: 'var(--muted)' }}>{q.ca}</td>
+                      <td style={{ padding: '3px 0' }}><UsageBar issued={q.issued7d} limit={q.limit7d} /></td>
+                      <td style={{ textAlign: 'right', padding: '3px 0 3px 6px', color: q.nextSlotAt ? 'var(--red)' : 'var(--muted)', fontSize: 11 }}>
+                        {q.nextSlotAt ? fmtDate(q.nextSlotAt) : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+
+          {data.identifierSetQuotas.length > 0 && (
+            <div style={{ marginTop: data.domainQuotas.length > 0 ? 14 : 0 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Per Cert (5 identical SANs / 7 days)
+              </div>
+              <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ color: 'var(--muted)' }}>
+                    <th style={{ textAlign: 'left', padding: '2px 6px 2px 0', fontWeight: 500 }}>Cert</th>
+                    <th style={{ textAlign: 'left', padding: '2px 6px', fontWeight: 500 }}>CA</th>
+                    <th style={{ padding: '2px 0', fontWeight: 500, width: 120 }}>Usage</th>
+                    <th style={{ textAlign: 'right', padding: '2px 0 2px 6px', fontWeight: 500 }}>Next Slot</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.identifierSetQuotas.map((q: IdentifierSetQuotaStatus) => (
+                    <tr key={q.certName}>
+                      <td style={{ padding: '3px 6px 3px 0', fontFamily: 'var(--font-mono)', fontSize: 11 }}>{q.certName}</td>
+                      <td style={{ padding: '3px 6px', color: 'var(--muted)' }}>{q.ca}</td>
+                      <td style={{ padding: '3px 0' }}><UsageBar issued={q.issued7d} limit={q.limit7d} /></td>
+                      <td style={{ textAlign: 'right', padding: '3px 0 3px 6px', color: q.nextSlotAt ? 'var(--red)' : 'var(--muted)', fontSize: 11 }}>
+                        {q.nextSlotAt ? fmtDate(q.nextSlotAt) : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ActiveJobSection({ job }: { job: LastRenewalJob }): React.ReactElement {
   const phaseLabel = PHASE_LABELS[job.phase] ?? job.phase;
   const domainCount = job.domains?.length ?? 0;
@@ -358,6 +473,9 @@ export default function Certificates(): React.ReactElement {
   const [editTarget, setEditTarget] = useState<{ certName: string; corgi: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Rate limits
+  const [rateLimits, setRateLimits] = useState<RateLimitsPayload | null>(null);
+
   // Toast / error
   const [toast, setToast] = useState<{ msg: string; error?: boolean } | null>(null);
   const [renewing, setRenewing] = useState(false);
@@ -365,12 +483,13 @@ export default function Certificates(): React.ReactElement {
 
   const { secondsAgo, refresh } = usePoller(async () => {
     try {
-      const [a, f, c, jobs, cfg] = await Promise.all([
+      const [a, f, c, jobs, cfg, rl] = await Promise.all([
         fetchAssignments(),
         fetchFlock(),
         fetchCerts(),
         fetchActiveJobs(),
         fetchShepherdConfigSummary(),
+        fetchRateLimits().catch(() => null),
       ]);
       setAssignments(a.assignments);
 
@@ -401,6 +520,7 @@ export default function Certificates(): React.ReactElement {
       setCaMap(cm);
 
       setCorgiNames([...new Set(a.assignments.map(a => a.corgi))]);
+      if (rl) setRateLimits(rl);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load');
@@ -727,6 +847,8 @@ export default function Certificates(): React.ReactElement {
               </table>
             </div>
           </div>
+
+          {rateLimits && <RateLimitsSection data={rateLimits} />}
         </div>
 
         {/* Right: panel */}

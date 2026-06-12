@@ -8,6 +8,7 @@ use uuid::Uuid;
 use crate::acme_client::AcmeAccountCache;
 use crate::config::ShepherdConfig;
 use crate::corgi_client::CorgiClientPool;
+use crate::issuance_ledger::IssuanceLedger;
 use crate::jwt::JwtKeys;
 use crate::refresh_tokens::RefreshTokenStore;
 use crate::types::{
@@ -38,6 +39,8 @@ pub struct AppState {
     pub acme_accounts: AcmeAccountCache,
     /// In-progress issuance deduplication: key = "{ca}:{cert_name}"
     pub in_progress: Arc<Mutex<HashMap<String, Weak<Notify>>>>,
+    /// Persistent issuance ledger for Let's Encrypt rate-limit tracking.
+    pub issuance_ledger: Arc<RwLock<IssuanceLedger>>,
     /// mTLS client for proxying admin requests to Vigil (None if vigilUrl not configured)
     pub vigil_client: Arc<RwLock<Option<reqwest::Client>>>,
     /// One-time admin token for bootstrap API endpoints (None in normal mode)
@@ -82,6 +85,8 @@ impl AppState {
             None
         };
 
+        let issuance_ledger_path = config.issuance_ledger_path.clone();
+
         Self {
             config: Arc::new(ArcSwap::from_pointee(config)),
             jwt_keys: Arc::new(jwt_keys),
@@ -96,6 +101,7 @@ impl AppState {
             assignments_mtime: Arc::new(Mutex::new(None)),
             accounts_mtime: Arc::new(Mutex::new(None)),
             ca_mtime: Arc::new(Mutex::new(None)),
+            issuance_ledger: Arc::new(RwLock::new(IssuanceLedger::load(issuance_ledger_path))),
             corgi_client_pool: Arc::new(RwLock::new(
                 match (cert_pem.as_deref(), key_pem.as_deref()) {
                     (Some(c), Some(k)) => CorgiClientPool::with_bootstrap_identity(c, k),

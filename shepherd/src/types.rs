@@ -161,6 +161,7 @@ pub enum RenewalPhase {
     Completed,
     Failed,
     Cancelled,
+    RateLimited,
 }
 
 impl RenewalPhase {
@@ -186,6 +187,48 @@ pub struct RenewalJob {
     pub fingerprint256: Option<String>,
     #[serde(default)]
     pub trace: Vec<String>,
+    pub rate_limited_until: Option<DateTime<Utc>>,
+}
+
+// ---------------------------------------------------------------------------
+// Issuance ledger types
+// ---------------------------------------------------------------------------
+
+/// One record per successful ACME issuance — persisted in shepherd.issuance-log.json.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssuanceEvent {
+    pub cert_name: String,
+    pub ca: String,
+    /// eTLD+1 extracted from SANs (e.g., "example.com" for "api.example.com").
+    pub registered_domain: String,
+    /// Sorted, deduplicated canonical SAN list; CN is always included.
+    pub sans: Vec<String>,
+    pub issued_at: DateTime<Utc>,
+    pub fingerprint256: String,
+}
+
+/// Per-registered-domain quota status returned by GET /api/rate-limits.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainQuotaStatus {
+    pub registered_domain: String,
+    pub ca: String,
+    pub issued_7d: u32,
+    pub limit_7d: u32,
+    pub next_slot_at: Option<DateTime<Utc>>,
+}
+
+/// Per-cert (exact SAN set) quota status returned by GET /api/rate-limits.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentifierSetQuotaStatus {
+    pub cert_name: String,
+    pub sans: Vec<String>,
+    pub ca: String,
+    pub issued_7d: u32,
+    pub limit_7d: u32,
+    pub next_slot_at: Option<DateTime<Utc>>,
 }
 
 // ---------------------------------------------------------------------------

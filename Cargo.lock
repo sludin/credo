@@ -402,7 +402,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "corgi"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -461,7 +461,7 @@ dependencies = [
 
 [[package]]
 name = "credo-lib"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -489,7 +489,7 @@ dependencies = [
 
 [[package]]
 name = "credo-test"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1876,6 +1876,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "psl"
+version = "2.1.213"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04e78830163eebdf905adb55ba26ba9b3ba554b08bd84c2fbe3b643c8addf22c"
+dependencies = [
+ "psl-types",
+]
+
+[[package]]
+name = "psl-types"
+version = "2.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33cb294fe86a74cbcf50d4445b37da762029549ebeea341421c7c70370f86cac"
+
+[[package]]
 name = "quinn"
 version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2437,7 +2452,7 @@ dependencies = [
 
 [[package]]
 name = "shepherd"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2460,6 +2475,7 @@ dependencies = [
  "p256",
  "pem",
  "pkcs8",
+ "psl",
  "rand 0.8.6",
  "rcgen",
  "reqwest",
@@ -3021,7 +3037,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vigil"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "arc-swap",

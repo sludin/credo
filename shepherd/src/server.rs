@@ -68,6 +68,7 @@ pub fn build_api_router(state: AppState) -> Router {
             "/admin/renewal-jobs/last/:name",
             get(api::get_last_renewal_job),
         )
+        .route("/admin/rate-limits", get(api::get_rate_limits))
         .route("/admin/cas", get(api::get_cas))
         .route("/admin/vigil/ca", get(api::get_vigil_ca))
         .route("/admin/vigil/status", get(api::get_vigil_status))

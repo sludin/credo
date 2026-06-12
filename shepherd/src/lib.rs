@@ -13,6 +13,7 @@ pub mod corgis;
 pub mod dns_providers;
 pub mod error;
 pub mod issuance;
+pub mod issuance_ledger;
 pub mod jwt;
 pub mod log_middleware;
 pub mod poll;

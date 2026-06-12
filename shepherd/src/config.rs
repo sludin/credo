@@ -44,6 +44,9 @@ pub struct ShepherdConfig {
     // Renewal jobs persistence (optional)
     pub renewal_jobs_dir: Option<PathBuf>,
 
+    // Issuance ledger (rate-limit tracking)
+    pub issuance_ledger_path: PathBuf,
+
     // Logging
     pub log_level: LogLevel,
 
@@ -126,6 +129,9 @@ struct RawShepherdConfig {
 
     // Renewal jobs
     renewal_jobs_dir: Option<String>,
+
+    // Issuance ledger
+    issuance_ledger_path: Option<String>,
 
     // Logging
     log_level: Option<String>,
@@ -295,6 +301,11 @@ fn build_config(
         poll_interval_seconds: raw.poll_interval_seconds.unwrap_or(60),
         corgi_health_check_interval_seconds: raw.corgi_health_check_interval_seconds.unwrap_or(300),
         renewal_jobs_dir: resolve_path_opt(b, raw.renewal_jobs_dir.as_deref()),
+        issuance_ledger_path: resolve_path_or(
+            b,
+            raw.issuance_ledger_path.as_deref(),
+            "shepherd.issuance-log.json",
+        ),
         log_level,
         dns_override: raw.dns_override.unwrap_or_default(),
         common_name: raw.common_name,

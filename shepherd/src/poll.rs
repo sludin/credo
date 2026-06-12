@@ -10,7 +10,8 @@ use crate::cert_store::read_cert_store_entry;
 use crate::corgi_client::{corgi_get, corgi_post};
 use crate::corgis::load_corgis;
 use crate::issuance::issue_cert;
-use crate::renewal_jobs::{complete_job, create_job, fail_job, update_phase};
+use crate::issuance::RateLimitedError;
+use crate::renewal_jobs::{complete_job, create_job, fail_job, rate_limit_job, update_phase};
 use crate::state::AppState;
 use crate::types::{
     CorgiFlockEntry, CorgiNodeConfig, CorgiNodeState, CorgiStatus, ManagedAssignment, RenewalPhase,
@@ -286,18 +287,31 @@ async fn cert_maintenance(
         return Ok(());
     }
 
-    // Don't start a second issuance if one is already in flight for this cert.
+    // Don't start a second issuance if one is already in flight or rate-limited.
     {
         let jobs = state.renewal_jobs.read().await;
-        if jobs
+        let active = jobs
             .values()
-            .any(|j| j.cert_name == assignment.cert_name && !j.phase.is_terminal())
-        {
-            tracing::debug!(
-                cert = %assignment.cert_name,
-                "Renewal already in progress; skipping poll-triggered renewal"
-            );
-            return Ok(());
+            .find(|j| j.cert_name == assignment.cert_name && !j.phase.is_terminal());
+        if let Some(job) = active {
+            if job.phase == crate::types::RenewalPhase::RateLimited {
+                if let Some(until) = job.rate_limited_until {
+                    if until > Utc::now() {
+                        tracing::info!(
+                            cert = %assignment.cert_name,
+                            until = %until,
+                            "Cert is rate-limited; skipping until window reopens"
+                        );
+                        return Ok(());
+                    }
+                }
+            } else {
+                tracing::debug!(
+                    cert = %assignment.cert_name,
+                    "Renewal already in progress; skipping poll-triggered renewal"
+                );
+                return Ok(());
+            }
         }
     }
 
@@ -384,11 +398,22 @@ async fn cert_maintenance(
         &state.corgi_client_pool,
         &corgis,
         &state.acme_accounts,
+        &state.issuance_ledger,
     )
     .await;
 
     match result {
         Err(e) => {
+            // Detect rate-limit errors and defer rather than fail.
+            if let Some(rl) = e.downcast_ref::<RateLimitedError>() {
+                tracing::warn!(
+                    cert = %assignment.cert_name,
+                    until = %rl.retry_after,
+                    "Issuance gated by rate limit; deferring"
+                );
+                rate_limit_job(&state.renewal_jobs, job_id, rl.retry_after).await;
+                return Ok(());
+            }
             let msg = format!("{:#}", e);
             fail_job(&state.renewal_jobs, job_id, msg.clone()).await;
             anyhow::bail!("Renewal failed: {msg}");

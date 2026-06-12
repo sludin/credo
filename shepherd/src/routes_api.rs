@@ -404,6 +404,21 @@ pub async fn get_last_renewal_job(
     }
 }
 
+pub async fn get_rate_limits(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+    let ledger = state.issuance_ledger.read().await;
+    let assignments = state.assignments.read().await;
+    let domain_quotas = ledger.domain_quotas();
+    let identifier_set_quotas = ledger.identifier_set_quotas(&assignments);
+    Ok(Json(json!({
+        "domainQuotas": domain_quotas,
+        "identifierSetQuotas": identifier_set_quotas,
+    })))
+}
+
 pub async fn list_accounts(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
@@ -656,6 +671,7 @@ async fn admin_provision_or_renew(
             &state2.corgi_client_pool,
             &corgis,
             &state2.acme_accounts,
+            &state2.issuance_ledger,
         )
         .await
         {

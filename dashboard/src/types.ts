@@ -247,3 +247,27 @@ export type CertChainPayload = {
   chain: CertChainEntry[];
   root: RootEntry;
 };
+
+// ── Rate limits ───────────────────────────────────────────────────────────
+
+export type DomainQuotaStatus = {
+  registeredDomain: string;
+  ca: string;
+  issued7d: number;
+  limit7d: number;
+  nextSlotAt: string | null;
+};
+
+export type IdentifierSetQuotaStatus = {
+  certName: string;
+  sans: string[];
+  ca: string;
+  issued7d: number;
+  limit7d: number;
+  nextSlotAt: string | null;
+};
+
+export type RateLimitsPayload = {
+  domainQuotas: DomainQuotaStatus[];
+  identifierSetQuotas: IdentifierSetQuotaStatus[];
+};

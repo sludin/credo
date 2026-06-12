@@ -8,7 +8,8 @@ use crate::acme_client::AcmeAccountCache;
 use crate::cert_store::persist_issued_material;
 use crate::corgi_client::{corgi_delete, corgi_post, CorgiClientPool};
 use crate::dns_providers::{create_provider, DnsProviderContext};
-use crate::types::{AcmeCaConfig, CorgiNodeConfig, ManagedAssignment};
+use crate::issuance_ledger::{canonical_sans, extract_registered_domain, IssuanceLedger};
+use crate::types::{AcmeCaConfig, CorgiNodeConfig, IssuanceEvent, ManagedAssignment};
 
 // ---------------------------------------------------------------------------
 // Public result type
@@ -27,6 +28,25 @@ pub struct IssuanceResult {
 // Public entry point
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Rate-limit error type
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+pub struct RateLimitedError {
+    pub retry_after: chrono::DateTime<chrono::Utc>,
+}
+
+impl std::fmt::Display for RateLimitedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "rate limited until {}", self.retry_after)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public entry point
+// ---------------------------------------------------------------------------
+
 #[allow(clippy::too_many_arguments)]
 pub async fn issue_cert(
     ca_config: &AcmeCaConfig,
@@ -39,9 +59,19 @@ pub async fn issue_cert(
     pool: &Arc<RwLock<CorgiClientPool>>,
     corgis: &[CorgiNodeConfig],
     account_cache: &AcmeAccountCache,
+    ledger: &Arc<RwLock<IssuanceLedger>>,
 ) -> Result<IssuanceResult> {
     if domains.is_empty() {
         anyhow::bail!("at least one domain is required for ACME issuance of '{cert_name}'");
+    }
+
+    // Check rate limits before making any ACME network call.
+    let sans = canonical_sans(assignment);
+    {
+        let ledger_read = ledger.read().await;
+        if let Some(retry_after) = ledger_read.rate_limit_check(&sans, ca_name) {
+            return Err(anyhow::anyhow!(RateLimitedError { retry_after }));
+        }
     }
 
     let csr_der = pem_to_csr_der(csr_pem)
@@ -101,6 +131,23 @@ pub async fn issue_cert(
     .with_context(|| format!("Persisting cert material for '{cert_name}'"))?;
 
     tracing::info!(cert = %cert_name, ca = %ca_name, changed = %changed, fp = %fingerprint, "Cert issued and stored");
+
+    // Record the issuance in the rate-limit ledger.
+    let registered_domain = sans
+        .iter()
+        .find_map(|s| extract_registered_domain(s))
+        .unwrap_or_else(|| sans.first().cloned().unwrap_or_default());
+    let event = IssuanceEvent {
+        cert_name: cert_name.to_string(),
+        ca: ca_name.to_string(),
+        registered_domain,
+        sans,
+        issued_at: chrono::Utc::now(),
+        fingerprint256: fingerprint.clone(),
+    };
+    if let Err(e) = ledger.write().await.append(event) {
+        tracing::warn!(cert = %cert_name, error = %e, "Failed to append to issuance ledger");
+    }
 
     Ok(IssuanceResult {
         cert_pem,
