@@ -48,6 +48,7 @@ struct RawAcmeConfig {
     ca: Option<String>,
     ca_path: Option<String>,
     insecure_skip_verify: Option<bool>,
+    rate_limits: Option<RawRateLimits>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +74,20 @@ struct RawValidationConfig {
     propagation_delay_seconds: Option<u64>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawRateLimit {
+    count: u32,
+    window_days: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawRateLimits {
+    certificates_per_domain: Option<RawRateLimit>,
+    duplicate_certificates: Option<RawRateLimit>,
+}
+
 // ---------------------------------------------------------------------------
 // Loader
 // ---------------------------------------------------------------------------
@@ -94,6 +109,107 @@ pub fn load_cas(path: &Path) -> Result<HashMap<String, CaConfig>> {
         out.insert(name, ca);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn write_ca_json(dir: &TempDir, body: &str) -> std::path::PathBuf {
+        let path = dir.path().join("shepherd.ca.json");
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    #[test]
+    fn load_cas_with_rate_limits() {
+        let dir = TempDir::new().unwrap();
+        let path = write_ca_json(
+            &dir,
+            r#"{
+            "cas": {
+                "letsencrypt": {
+                    "protocol": "acme",
+                    "provider": "letsencrypt",
+                    "config": {
+                        "directoryUrl": "https://acme-v02.api.letsencrypt.org/directory",
+                        "accountKeyPath": "/tmp/account.pem",
+                        "rateLimits": {
+                            "certificatesPerDomain": {"count": 50, "windowDays": 7},
+                            "duplicateCertificates": {"count": 5, "windowDays": 7}
+                        }
+                    }
+                }
+            }
+        }"#,
+        );
+
+        let cas = load_cas(&path).unwrap();
+        let le = cas.get("letsencrypt").unwrap();
+        let rl = le.config.rate_limits.as_ref().unwrap();
+        let cpd = rl.certificates_per_domain.as_ref().unwrap();
+        assert_eq!(cpd.count, 50);
+        assert_eq!(cpd.window_days, 7);
+        let dc = rl.duplicate_certificates.as_ref().unwrap();
+        assert_eq!(dc.count, 5);
+        assert_eq!(dc.window_days, 7);
+    }
+
+    #[test]
+    fn load_cas_without_rate_limits_is_none() {
+        let dir = TempDir::new().unwrap();
+        let path = write_ca_json(
+            &dir,
+            r#"{
+            "cas": {
+                "vigil": {
+                    "protocol": "acme",
+                    "provider": "vigil",
+                    "config": {
+                        "directoryUrl": "https://vigil.example.com:7020/acme/directory",
+                        "accountKeyPath": "/tmp/account.pem"
+                    }
+                }
+            }
+        }"#,
+        );
+
+        let cas = load_cas(&path).unwrap();
+        let vigil = cas.get("vigil").unwrap();
+        assert!(vigil.config.rate_limits.is_none());
+    }
+
+    #[test]
+    fn load_cas_partial_rate_limits() {
+        let dir = TempDir::new().unwrap();
+        let path = write_ca_json(
+            &dir,
+            r#"{
+            "cas": {
+                "myca": {
+                    "protocol": "acme",
+                    "provider": "myca",
+                    "config": {
+                        "directoryUrl": "https://acme.example.com/directory",
+                        "accountKeyPath": "/tmp/account.pem",
+                        "rateLimits": {
+                            "certificatesPerDomain": {"count": 100, "windowDays": 30}
+                        }
+                    }
+                }
+            }
+        }"#,
+        );
+
+        let cas = load_cas(&path).unwrap();
+        let ca = cas.get("myca").unwrap();
+        let rl = ca.config.rate_limits.as_ref().unwrap();
+        let cpd = rl.certificates_per_domain.as_ref().unwrap();
+        assert_eq!(cpd.count, 100);
+        assert_eq!(cpd.window_days, 30);
+        assert!(rl.duplicate_certificates.is_none());
+    }
 }
 
 fn parse_ca_entry(name: &str, entry: RawCaEntry, base: &Path) -> Result<CaConfig> {
@@ -195,7 +311,20 @@ fn parse_ca_entry(name: &str, entry: RawCaEntry, base: &Path) -> Result<CaConfig
             default_validation,
             tls,
             insecure_skip_verify: raw.insecure_skip_verify.unwrap_or(false),
-            rate_limits: None,
+            rate_limits: raw.rate_limits.map(|rl| crate::types::CaRateLimits {
+                certificates_per_domain: rl.certificates_per_domain.map(|l| {
+                    crate::types::CaRateLimit {
+                        count: l.count,
+                        window_days: l.window_days,
+                    }
+                }),
+                duplicate_certificates: rl.duplicate_certificates.map(|l| {
+                    crate::types::CaRateLimit {
+                        count: l.count,
+                        window_days: l.window_days,
+                    }
+                }),
+            }),
         },
     })
 }
