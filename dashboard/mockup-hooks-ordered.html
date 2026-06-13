@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hooks (Ordered Multi) — Mockup</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0f172a; --surface: #1e293b; --surface2: #273549;
+  --border: #334155; --text: #e2e8f0; --muted: #94a3b8;
+  --accent: #6366f1; --accent2: #818cf8;
+  --green: #22c55e; --yellow: #f59e0b; --red: #ef4444;
+  --font-mono: 'JetBrains Mono','Fira Code',ui-monospace,monospace;
+}
+body {
+  font-family: Inter, system-ui, sans-serif; font-size: 13px;
+  background: var(--bg); color: var(--text); line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  padding: 32px; display: flex; gap: 40px; align-items: flex-start; flex-wrap: wrap;
+}
+h2 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-bottom: 14px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; width: 380px; }
+.card-header { padding: 8px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; min-height: 36px; }
+.card-title { font-weight: 600; font-size: 13px; }
+.card-body { padding: 12px 14px; }
+.form-section { display: flex; flex-direction: column; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.form-section:last-child { border-bottom: none; margin-bottom: 0; }
+.form-section-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 2px; }
+.form-row { display: grid; grid-template-columns: 120px 1fr; gap: 6px; align-items: center; }
+.form-label { font-size: 12px; color: var(--muted); }
+.form-input, .form-select {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 5px 8px;
+  color: var(--text); font-size: 12px; font-family: inherit; width: 100%;
+}
+.form-input:focus, .form-select:focus { outline: none; border-color: var(--accent); }
+.btn {
+  padding: 5px 12px; border-radius: 5px; border: none; cursor: pointer;
+  font-size: 12px; font-weight: 500; display: inline-flex; align-items: center;
+  gap: 5px; font-family: inherit; transition: background 0.1s, color 0.1s;
+}
+.btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+.btn-ghost:hover { color: var(--text); border-color: var(--accent2); }
+.btn-sm { padding: 3px 8px; font-size: 11px; }
+
+/* ── Mode selector ─────────── */
+.mode-tabs { display: flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; }
+.mode-tab {
+  flex: 1; padding: 5px 0; text-align: center;
+  font-size: 11px; font-weight: 500; cursor: pointer;
+  background: var(--surface2); color: var(--muted);
+  border-right: 1px solid var(--border); transition: all 0.12s;
+  user-select: none;
+}
+.mode-tab:last-child { border-right: none; }
+.mode-tab.active { background: rgba(99,102,241,0.18); color: var(--accent2); }
+.mode-tab:hover:not(.active) { color: var(--text); background: rgba(255,255,255,0.04); }
+
+/* ── Hook ordered list ─────── */
+.hook-list { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.hook-item {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 5px 8px;
+  font-family: var(--font-mono); font-size: 12px; color: var(--text);
+}
+.hook-order {
+  font-size: 10px; color: var(--muted); min-width: 14px;
+  text-align: right; font-family: inherit;
+}
+.hook-name { flex: 1; }
+.hook-badge {
+  font-size: 10px; font-family: inherit;
+  background: rgba(99,102,241,0.15); color: var(--accent2);
+  border-radius: 3px; padding: 1px 5px;
+}
+.btn-icon {
+  width: 22px; height: 22px; padding: 0; border-radius: 3px;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid transparent;
+  color: var(--muted); cursor: pointer; font-size: 12px; line-height: 1;
+  transition: all 0.1s;
+}
+.btn-icon:hover { background: var(--surface); border-color: var(--border); color: var(--text); }
+.btn-icon.remove:hover { color: var(--red); border-color: rgba(239,68,68,0.3); }
+.btn-icon:disabled { opacity: 0.25; cursor: default; }
+
+/* ── Add hook row ─────────── */
+.add-row { display: flex; gap: 6px; align-items: center; margin-top: 2px; }
+.add-row .form-select { flex: 1; width: auto; }
+.btn-add {
+  padding: 4px 10px; font-size: 11px; border-radius: 4px;
+  background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.3);
+  color: var(--accent2); cursor: pointer; font-family: inherit; font-weight: 500;
+  white-space: nowrap; transition: all 0.1s;
+}
+.btn-add:hover { background: rgba(99,102,241,0.25); }
+.btn-add:disabled { opacity: 0.3; cursor: default; }
+
+/* ── Empty state ─────────── */
+.empty-state {
+  padding: 10px; text-align: center;
+  font-size: 11px; color: var(--muted);
+  border: 1px dashed var(--border); border-radius: 4px;
+}
+
+/* ── Payload box ─────────── */
+.payload-box {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 10px 12px; font-family: var(--font-mono); font-size: 11px;
+  color: var(--muted); line-height: 1.6;
+}
+.k { color: var(--accent2); }
+.vs { color: var(--green); }
+.va { color: var(--yellow); }
+.vm { color: var(--muted); font-style: italic; }
+
+.hint { font-size: 11px; color: var(--muted); line-height: 1.5; }
+
+.label-new { display: inline-block; background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.25); color: var(--green); border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 6px; margin-bottom: 10px; }
+
+.section-title { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.section-desc { font-size: 12px; color: var(--muted); margin-bottom: 24px; line-height: 1.6; }
+</style>
+</head>
+<body>
+
+<div style="max-width:860px">
+  <div class="section-title">Hooks — Ordered Multi-select Mockup</div>
+  <div class="section-desc">
+    Three states: <strong>Default</strong> (inherit corgi's defaultHooks — field omitted from payload),
+    <strong>None</strong> (send <code style="font-family:var(--font-mono);background:var(--surface2);padding:1px 4px;border-radius:3px">hooks:[]</code> — suppress all hooks),
+    <strong>Custom</strong> (ordered list you build). Use the tabs to switch modes, the arrows to reorder, and the Add row to add hooks.
+  </div>
+
+  <div style="display:flex; gap: 32px; flex-wrap: wrap; align-items: flex-start;">
+
+    <!-- CARD -->
+    <div>
+      <h2>Proposed UI</h2>
+      <span class="label-new">New</span>
+      <div class="card">
+        <div class="card-header"><span class="card-title">Edit Assignment</span></div>
+        <div class="card-body">
+
+          <!-- stub basic section -->
+          <div class="form-section" style="opacity:0.45">
+            <div class="form-section-label">Basic</div>
+            <div class="form-row"><label class="form-label">Cert Name</label><input class="form-input" value="moxtome.com" readonly></div>
+            <div class="form-row"><label class="form-label">Corgi</label><input class="form-input" value="corgi-prod-1" readonly></div>
+          </div>
+
+          <!-- HOOKS SECTION -->
+          <div class="form-section" id="hooks-section">
+            <div class="form-section-label">Post-install Hooks</div>
+
+            <!-- Mode tabs -->
+            <div class="mode-tabs" id="mode-tabs">
+              <div class="mode-tab active" data-mode="default" onclick="setMode('default')">Default</div>
+              <div class="mode-tab" data-mode="none" onclick="setMode('none')">None</div>
+              <div class="mode-tab" data-mode="custom" onclick="setMode('custom')">Custom</div>
+            </div>
+
+            <!-- Hint / content area -->
+            <div id="hooks-content"></div>
+          </div>
+
+          <!-- stub validation -->
+          <div class="form-section" style="opacity:0.45">
+            <div class="form-section-label">Validation</div>
+            <div class="form-row"><label class="form-label">Type</label><select class="form-select"><option>none-01</option></select></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAYLOAD + NOTES -->
+    <div style="min-width:280px; max-width:340px;">
+      <h2 style="margin-top:50px">Shepherd payload</h2>
+      <div class="payload-box" id="payload-box"></div>
+
+      <div style="margin-top:20px; display:flex; flex-direction:column; gap:10px;">
+        <div style="font-size:11px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:0.06em;">Key behaviours</div>
+        <div style="font-size:12px; color:var(--muted); line-height:1.6;">
+          <strong style="color:var(--text)">Default</strong> — <code style="font-family:var(--font-mono);font-size:11px">hooks</code> field omitted entirely.<br>
+          Corgi falls back to its own <code style="font-family:var(--font-mono);font-size:11px">defaultHooks</code>.
+        </div>
+        <div style="font-size:12px; color:var(--muted); line-height:1.6;">
+          <strong style="color:var(--text)">None</strong> — sends <code style="font-family:var(--font-mono);font-size:11px">hooks: []</code>.<br>
+          Suppresses corgi defaults; no hooks run for this cert.
+        </div>
+        <div style="font-size:12px; color:var(--muted); line-height:1.6;">
+          <strong style="color:var(--text)">Custom</strong> — sends <code style="font-family:var(--font-mono);font-size:11px">hooks: [...]</code> in the order shown.<br>
+          Corgi runs exactly these hooks, in this sequence.
+        </div>
+        <div style="font-size:12px; color:var(--muted); line-height:1.6;">
+          Hooks available in the Add dropdown come from the assigned corgi's <code style="font-family:var(--font-mono);font-size:11px">serviceHooks</code>. Corgi defaults are marked with a badge.
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// Simulated data
+const available = ['caddy', 'nginx', 'docker-reload', 'systemd-reload'];
+const defaults = ['caddy'];
+
+let mode = 'default';
+let selected = []; // ordered list of hook names
+
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll('.mode-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.mode === m);
+  });
+  render();
+}
+
+function moveUp(i) {
+  if (i === 0) return;
+  [selected[i-1], selected[i]] = [selected[i], selected[i-1]];
+  render();
+}
+function moveDown(i) {
+  if (i === selected.length - 1) return;
+  [selected[i], selected[i+1]] = [selected[i+1], selected[i]];
+  render();
+}
+function remove(i) {
+  selected.splice(i, 1);
+  render();
+}
+function addHook() {
+  const sel = document.getElementById('add-select');
+  if (!sel) return;
+  const val = sel.value;
+  if (val && !selected.includes(val)) {
+    selected.push(val);
+    render();
+  }
+}
+
+function render() {
+  const content = document.getElementById('hooks-content');
+  const payload = document.getElementById('payload-box');
+
+  if (mode === 'default') {
+    content.innerHTML = `
+      <div class="hint">
+        Inherits corgi defaults: <span style="font-family:var(--font-mono)">${defaults.join(', ')}</span>.
+        No <code style="font-family:var(--font-mono)">hooks</code> field is sent to Shepherd.
+      </div>`;
+    payload.innerHTML = `<span class="vm">// hooks field omitted — corgi uses defaultHooks</span>`;
+  } else if (mode === 'none') {
+    content.innerHTML = `
+      <div class="hint">
+        No hooks will run for this cert, even if the corgi has defaults configured.
+      </div>`;
+    payload.innerHTML = `<span class="k">"hooks"</span>: <span class="va">[]</span>`;
+  } else {
+    // Custom
+    const remaining = available.filter(h => !selected.includes(h));
+    const listHTML = selected.length === 0
+      ? `<div class="empty-state">No hooks selected — add at least one, or switch to <strong>None</strong> to explicitly suppress defaults.</div>`
+      : `<div class="hook-list">${selected.map((h, i) => `
+          <div class="hook-item">
+            <span class="hook-order">${i+1}.</span>
+            <span class="hook-name">${h}</span>
+            ${defaults.includes(h) ? '<span class="hook-badge">default</span>' : ''}
+            <button class="btn-icon" onclick="moveUp(${i})" ${i===0?'disabled':''} title="Move up">↑</button>
+            <button class="btn-icon" onclick="moveDown(${i})" ${i===selected.length-1?'disabled':''} title="Move down">↓</button>
+            <button class="btn-icon remove" onclick="remove(${i})" title="Remove">×</button>
+          </div>`).join('')}
+        </div>`;
+
+    const addHTML = remaining.length > 0
+      ? `<div class="add-row">
+          <select class="form-select" id="add-select" style="font-family:var(--font-mono);font-size:12px">
+            ${remaining.map(h => `<option value="${h}">${h}</option>`).join('')}
+          </select>
+          <button class="btn-add" onclick="addHook()">+ Add</button>
+        </div>`
+      : `<div style="font-size:11px;color:var(--muted)">All available hooks added.</div>`;
+
+    content.innerHTML = listHTML + addHTML;
+
+    const hooksJson = selected.length === 0
+      ? `<span class="va">[]</span><span class="vm">  // no hooks run (same effect as None)</span>`
+      : `<span class="va">[<br>&nbsp;&nbsp;"</span>${selected.map(h => `<span class="vs">${h}</span>`).join(`<span class="va">",<br>&nbsp;&nbsp;"</span>`)}<span class="va">"<br>]</span>`;
+    payload.innerHTML = `<span class="k">"hooks"</span>: ${hooksJson}`;
+  }
+}
+
+render();
+</script>
+</body>
+</html>

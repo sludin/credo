@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hooks Dropdown — Mockup</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0f172a;
+  --surface: #1e293b;
+  --surface2: #273549;
+  --border: #334155;
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --accent: #6366f1;
+  --accent2: #818cf8;
+  --green: #22c55e;
+  --yellow: #f59e0b;
+  --red: #ef4444;
+  --blue: #3b82f6;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+}
+
+body {
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  padding: 32px;
+  display: flex;
+  gap: 40px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+h2 {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin-bottom: 16px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: 360px;
+}
+
+.card-header {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+}
+
+.card-title { font-weight: 600; font-size: 13px; color: var(--text); }
+
+.card-body { padding: 12px 14px; }
+
+.form-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+.form-section:last-child { border-bottom: none; margin-bottom: 0; }
+
+.form-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 6px;
+  align-items: center;
+}
+
+.form-label { font-size: 12px; color: var(--muted); }
+
+.form-input, .form-select, .form-textarea {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 5px 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  width: 100%;
+}
+.form-input:focus, .form-select:focus { outline: none; border-color: var(--accent); }
+
+.hint {
+  font-size: 11px;
+  color: var(--muted);
+  padding-left: 126px;
+  line-height: 1.5;
+}
+
+/* Checkboxes (old) */
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.checkbox-row input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; }
+.checkbox-row label { cursor: pointer; font-family: var(--font-mono); font-size: 12px; }
+.tag-default {
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin-left: 4px;
+  font-family: inherit;
+}
+
+.help-text { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+
+.btn {
+  padding: 5px 12px;
+  border-radius: 5px;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: inherit;
+  transition: background 0.1s, color 0.1s;
+}
+.btn-ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.btn-sm { padding: 3px 8px; font-size: 11px; }
+
+/* State preview pills */
+.state-pills {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.pill {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.pill:hover { border-color: var(--accent2); color: var(--accent2); }
+.pill.active { border-color: var(--accent); background: rgba(99,102,241,0.12); color: var(--accent2); }
+
+.label-before {
+  display: inline-block;
+  background: rgba(239,68,68,0.1);
+  border: 1px solid rgba(239,68,68,0.25);
+  color: var(--red);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  margin-bottom: 10px;
+}
+.label-after {
+  display: inline-block;
+  background: rgba(34,197,94,0.1);
+  border: 1px solid rgba(34,197,94,0.25);
+  color: var(--green);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  margin-bottom: 10px;
+}
+
+/* Payload preview */
+.payload-box {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.6;
+  margin-top: 8px;
+  min-height: 58px;
+}
+.payload-box .key { color: var(--accent2); }
+.payload-box .val-str { color: var(--green); }
+.payload-box .val-arr { color: #f59e0b; }
+.payload-box .val-null { color: var(--red); }
+
+.section-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.section-desc {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 20px;
+  line-height: 1.6;
+}
+</style>
+</head>
+<body>
+
+<!-- BEFORE -->
+<div>
+  <div class="section-title">Hooks UI Mockup</div>
+  <div class="section-desc">Click the state pills under "After" to preview each selection state.<br>The payload preview shows what gets sent to Shepherd.</div>
+
+  <h2>Before — checkboxes</h2>
+  <span class="label-before">Current</span>
+
+  <div class="card">
+    <div class="card-header"><span class="card-title">Edit Assignment</span></div>
+    <div class="card-body">
+      <!-- stub sections -->
+      <div class="form-section">
+        <div class="form-section-label">Basic</div>
+        <div class="form-row"><label class="form-label">Cert Name</label><input class="form-input" value="moxtome.com" readonly></div>
+        <div class="form-row"><label class="form-label">Corgi</label><input class="form-input" value="corgi-prod-1" readonly></div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-label">Post-install Hooks</div>
+        <div class="help-text">
+          Using corgi defaults: <span style="font-family: var(--font-mono); font-size: 11px;">caddy</span>
+        </div>
+        <div class="checkbox-row">
+          <input type="checkbox" id="old-caddy" checked>
+          <label for="old-caddy" style="font-family:var(--font-mono);font-size:12px">caddy <span class="tag-default">default</span></label>
+        </div>
+        <div class="checkbox-row">
+          <input type="checkbox" id="old-nginx">
+          <label for="old-nginx" style="font-family:var(--font-mono);font-size:12px">nginx</label>
+        </div>
+        <div class="checkbox-row">
+          <input type="checkbox" id="old-docker">
+          <label for="old-docker" style="font-family:var(--font-mono);font-size:12px">docker-reload</label>
+        </div>
+        <button class="btn btn-ghost btn-sm" style="margin-top:4px;width:fit-content">Clear (use defaults)</button>
+      </div>
+
+      <div class="form-section" style="opacity:0.4">
+        <div class="form-section-label">Validation</div>
+        <div class="form-row"><label class="form-label">Type</label><select class="form-select"><option>none-01</option></select></div>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:12px;font-size:11px;color:var(--muted)">
+    ⚠ No way to send <code style="font-family:var(--font-mono);background:var(--surface2);padding:1px 4px;border-radius:3px">hooks: []</code> — clearing checkboxes omits the field entirely, which means "use defaults."
+  </div>
+</div>
+
+<!-- AFTER -->
+<div>
+  <h2 style="margin-top:29px">After — dropdown</h2>
+  <span class="label-after">Proposed</span>
+
+  <div class="card">
+    <div class="card-header"><span class="card-title">Edit Assignment</span></div>
+    <div class="card-body">
+      <div class="form-section">
+        <div class="form-section-label">Basic</div>
+        <div class="form-row"><label class="form-label">Cert Name</label><input class="form-input" value="moxtome.com" readonly></div>
+        <div class="form-row"><label class="form-label">Corgi</label><input class="form-input" value="corgi-prod-1" readonly></div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-label">Post-install Hooks</div>
+        <div class="form-row">
+          <label class="form-label">Behavior</label>
+          <select class="form-select" id="hooks-select" onchange="updateHint()">
+            <option value="default">Default</option>
+            <option value="none">None</option>
+            <option value="caddy">caddy</option>
+            <option value="nginx">nginx</option>
+            <option value="docker-reload">docker-reload</option>
+          </select>
+        </div>
+        <div class="hint" id="hint-text">
+          Runs corgi defaults: <span style="font-family:var(--font-mono)">caddy</span>
+        </div>
+      </div>
+
+      <div class="form-section" style="opacity:0.4">
+        <div class="form-section-label">Validation</div>
+        <div class="form-row"><label class="form-label">Type</label><select class="form-select"><option>none-01</option></select></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- State pills -->
+  <div style="margin-top:12px;font-size:11px;color:var(--muted);margin-bottom:6px">Click to preview each state:</div>
+  <div class="state-pills">
+    <div class="pill active" onclick="setState('default')">Default</div>
+    <div class="pill" onclick="setState('none')">None</div>
+    <div class="pill" onclick="setState('caddy')">caddy</div>
+    <div class="pill" onclick="setState('nginx')">nginx</div>
+  </div>
+
+  <!-- Payload preview -->
+  <div style="margin-top:16px;font-size:11px;color:var(--muted);margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em">Shepherd payload → hooks field</div>
+  <div class="payload-box" id="payload-preview">
+    <span class="key">"hooks"</span>: <span class="val-null">(field omitted — corgi uses its defaultHooks)</span>
+  </div>
+</div>
+
+<script>
+const hints = {
+  default: 'Runs corgi defaults: <span style="font-family:var(--font-mono)">caddy</span>',
+  none: 'No hooks will run for this cert.',
+  caddy: 'Only <span style="font-family:var(--font-mono)">caddy</span> runs for this cert.',
+  nginx: 'Only <span style="font-family:var(--font-mono)">nginx</span> runs for this cert.',
+};
+
+const payloads = {
+  default: '<span class="val-null">(field omitted — corgi uses its defaultHooks)</span>',
+  none: '<span class="key">"hooks"</span>: <span class="val-arr">[]</span>',
+  caddy: '<span class="key">"hooks"</span>: <span class="val-arr">["</span><span class="val-str">caddy</span><span class="val-arr">"]</span>',
+  nginx: '<span class="key">"hooks"</span>: <span class="val-arr">["</span><span class="val-str">nginx</span><span class="val-arr">"]</span>',
+};
+
+function setState(val) {
+  document.getElementById('hooks-select').value = val;
+  document.getElementById('hint-text').innerHTML = hints[val] ?? hints.default;
+  document.getElementById('payload-preview').innerHTML = payloads[val] ?? payloads.default;
+  document.querySelectorAll('.pill').forEach(p => {
+    p.classList.toggle('active', p.textContent.trim().toLowerCase() === val);
+  });
+}
+
+function updateHint() {
+  const val = document.getElementById('hooks-select').value;
+  setState(val);
+}
+</script>
+</body>
+</html>

@@ -61,6 +61,8 @@ type InspectTab = 'structured' | 'raw' | 'pem';
 
 type CaInfo = ShepherdConfigSummary['cas'][number];
 
+type HooksMode = 'default' | 'none' | 'custom';
+
 type FormState = {
   certName: string;
   corgi: string;
@@ -75,7 +77,8 @@ type FormState = {
   validationType: 'none-01' | 'http-01' | 'dns-01';
   validationProvider: string;
   validationDdnsKey: string;
-  hooks: string[];
+  hooksMode: HooksMode;
+  hooksList: string[];
 };
 
 const emptyForm: FormState = {
@@ -83,7 +86,7 @@ const emptyForm: FormState = {
   letsEncryptTarget: '', domain: '', identityUri: '', sans: '',
   days: '90', renewBeforeDays: '30',
   validationType: 'none-01', validationProvider: '', validationDdnsKey: '',
-  hooks: [],
+  hooksMode: 'default', hooksList: [],
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -162,7 +165,8 @@ function assignmentToForm(a: Assignment): FormState {
     validationType: a.validation?.type === 'auto' ? 'none-01' : (a.validation?.type ?? 'none-01'),
     validationProvider: (a.validation?.methods?.['dns-01']?.provider ?? '') as string,
     validationDdnsKey: (a.validation?.methods?.['dns-01']?.providerConfig?.['ddnsKey'] ?? '') as string,
-    hooks: a.hooks ?? [],
+    hooksMode: a.hooks === undefined ? 'default' : a.hooks.length === 0 ? 'none' : 'custom',
+    hooksList: a.hooks ?? [],
   };
 }
 
@@ -190,11 +194,40 @@ function toAssignmentPayload(form: FormState): Record<string, unknown> {
         : undefined,
     };
   }
-  if (form.hooks.length > 0) {
-    payload.hooks = form.hooks;
+  if (form.hooksMode === 'none') {
+    payload.hooks = [];
+  } else if (form.hooksMode === 'custom') {
+    payload.hooks = form.hooksList;
   }
+  // hooksMode === 'default': omit hooks field entirely
   Object.keys(payload).forEach(k => { if (payload[k] === undefined) delete payload[k]; });
   return payload;
+}
+
+function HookAddRow({ remaining, onAdd }: { remaining: string[]; onAdd: (hook: string) => void }) {
+  const [selected, setSelected] = useState(remaining[0] ?? '');
+  const current = remaining.includes(selected) ? selected : (remaining[0] ?? '');
+  return (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+      <select
+        className="form-select"
+        value={current}
+        onChange={e => setSelected(e.target.value)}
+        style={{ fontFamily: 'var(--font-mono)', fontSize: 12, flex: 1 }}
+      >
+        {remaining.map(h => <option key={h} value={h}>{h}</option>)}
+      </select>
+      <button
+        type="button"
+        onClick={() => { onAdd(current); setSelected(''); }}
+        style={{
+          padding: '4px 10px', fontSize: 11, borderRadius: 4, whiteSpace: 'nowrap',
+          background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)',
+          color: 'var(--accent2)', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 500,
+        }}
+      >+ Add</button>
+    </div>
+  );
 }
 
 function deriveStatus(
@@ -692,15 +725,20 @@ export default function Certificates(): React.ReactElement {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCertName, panelMode]);
 
-  // Fetch available hooks when the selected corgi changes
+  // Fetch available hooks when the selected corgi changes; prune hooksList if hooks moved away.
   useEffect(() => {
     if (!form.corgi) { setAvailableHooks([]); setDefaultHooks([]); return; }
     fetchCorgiHooks(form.corgi).then(r => {
       setAvailableHooks(r.availableHooks);
       setDefaultHooks(r.defaultHooks);
+      setForm(f => ({
+        ...f,
+        hooksList: f.hooksList.filter(h => r.availableHooks.includes(h)),
+      }));
     }).catch(() => {
       setAvailableHooks([]);
       setDefaultHooks([]);
+      setForm(f => ({ ...f, hooksList: [] }));
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.corgi]);
@@ -1104,42 +1142,122 @@ export default function Certificates(): React.ReactElement {
                     </div>
 
                     {/* Post-install hooks */}
-                    {availableHooks.length > 0 && (
+                    {form.corgi && (
                       <div className="form-section">
                         <div className="form-section-label">Post-install Hooks</div>
-                        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
-                          {form.hooks.length === 0
-                            ? `Using corgi defaults: ${defaultHooks.length > 0 ? defaultHooks.join(', ') : '(none)'}`
-                            : 'Selected hooks replace corgi defaults for this cert.'}
+                        {/* Mode tabs */}
+                        <div style={{ display: 'flex', border: '1px solid var(--border)', borderRadius: 5, overflow: 'hidden' }}>
+                          {(['default', 'none', 'custom'] as HooksMode[]).map(m => (
+                            <button
+                              key={m}
+                              type="button"
+                              onClick={() => setForm(f => ({ ...f, hooksMode: m }))}
+                              style={{
+                                flex: 1, padding: '5px 0', textAlign: 'center',
+                                fontSize: 11, fontWeight: 500, cursor: 'pointer',
+                                background: form.hooksMode === m ? 'rgba(99,102,241,0.18)' : 'var(--surface2)',
+                                color: form.hooksMode === m ? 'var(--accent2)' : 'var(--muted)',
+                                border: 'none', borderRight: m !== 'custom' ? '1px solid var(--border)' : 'none',
+                                fontFamily: 'inherit', transition: 'all 0.12s', textTransform: 'capitalize',
+                              }}
+                            >
+                              {m}
+                            </button>
+                          ))}
                         </div>
-                        {availableHooks.map(hook => (
-                          <div key={hook} className="form-row" style={{ alignItems: 'center', gap: 8 }}>
-                            <input
-                              type="checkbox"
-                              id={`hook-${hook}`}
-                              checked={form.hooks.includes(hook)}
-                              onChange={e => setForm(f => ({
-                                ...f,
-                                hooks: e.target.checked
-                                  ? [...f.hooks, hook]
-                                  : f.hooks.filter(h => h !== hook),
-                              }))}
-                            />
-                            <label htmlFor={`hook-${hook}`} style={{ cursor: 'pointer', fontFamily: 'monospace', fontSize: 13 }}>
-                              {hook}{defaultHooks.includes(hook) ? ' (default)' : ''}
-                            </label>
+                        {/* Mode content */}
+                        {form.hooksMode === 'default' && (
+                          <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                            Inherits corgi defaults:{' '}
+                            <span style={{ fontFamily: 'var(--font-mono)' }}>
+                              {defaultHooks.length > 0 ? defaultHooks.join(', ') : '(none configured)'}
+                            </span>
+                            . No <code style={{ fontFamily: 'var(--font-mono)' }}>hooks</code> field is sent.
                           </div>
-                        ))}
-                        {form.hooks.length > 0 && (
-                          <button
-                            type="button"
-                            className="btn btn-sm"
-                            style={{ marginTop: 6 }}
-                            onClick={() => setForm(f => ({ ...f, hooks: [] }))}
-                          >
-                            Clear (use defaults)
-                          </button>
                         )}
+                        {form.hooksMode === 'none' && (
+                          <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+                            No hooks will run for this cert, even if the corgi has defaults configured.
+                          </div>
+                        )}
+                        {form.hooksMode === 'custom' && (() => {
+                          const remaining = availableHooks.filter(h => !form.hooksList.includes(h));
+                          return (
+                            <>
+                              {/* Ordered list */}
+                              {form.hooksList.length === 0 ? (
+                                <div style={{
+                                  padding: '10px', textAlign: 'center', fontSize: 11, color: 'var(--muted)',
+                                  border: '1px dashed var(--border)', borderRadius: 4,
+                                }}>
+                                  No hooks added — use the selector below, or switch to <strong>None</strong> to suppress defaults.
+                                </div>
+                              ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                  {form.hooksList.map((hook, i) => (
+                                    <div key={hook} style={{
+                                      display: 'flex', alignItems: 'center', gap: 6,
+                                      background: 'var(--surface2)', border: '1px solid var(--border)',
+                                      borderRadius: 4, padding: '5px 8px',
+                                    }}>
+                                      <span style={{ fontSize: 10, color: 'var(--muted)', minWidth: 14, textAlign: 'right' }}>{i + 1}.</span>
+                                      <span style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }}>{hook}</span>
+                                      {defaultHooks.includes(hook) && (
+                                        <span style={{
+                                          fontSize: 10, background: 'rgba(99,102,241,0.15)', color: 'var(--accent2)',
+                                          borderRadius: 3, padding: '1px 5px',
+                                        }}>default</span>
+                                      )}
+                                      <button type="button" title="Move up" disabled={i === 0}
+                                        onClick={() => setForm(f => {
+                                          const l = [...f.hooksList];
+                                          [l[i - 1], l[i]] = [l[i], l[i - 1]];
+                                          return { ...f, hooksList: l };
+                                        })}
+                                        style={{
+                                          width: 22, height: 22, padding: 0, borderRadius: 3, border: '1px solid transparent',
+                                          background: 'transparent', color: 'var(--muted)', cursor: i === 0 ? 'default' : 'pointer',
+                                          opacity: i === 0 ? 0.25 : 1, fontSize: 12, fontFamily: 'inherit', lineHeight: 1,
+                                        }}
+                                      >↑</button>
+                                      <button type="button" title="Move down" disabled={i === form.hooksList.length - 1}
+                                        onClick={() => setForm(f => {
+                                          const l = [...f.hooksList];
+                                          [l[i], l[i + 1]] = [l[i + 1], l[i]];
+                                          return { ...f, hooksList: l };
+                                        })}
+                                        style={{
+                                          width: 22, height: 22, padding: 0, borderRadius: 3, border: '1px solid transparent',
+                                          background: 'transparent', color: 'var(--muted)',
+                                          cursor: i === form.hooksList.length - 1 ? 'default' : 'pointer',
+                                          opacity: i === form.hooksList.length - 1 ? 0.25 : 1, fontSize: 12, fontFamily: 'inherit', lineHeight: 1,
+                                        }}
+                                      >↓</button>
+                                      <button type="button" title="Remove"
+                                        onClick={() => setForm(f => ({ ...f, hooksList: f.hooksList.filter((_, j) => j !== i) }))}
+                                        style={{
+                                          width: 22, height: 22, padding: 0, borderRadius: 3, border: '1px solid transparent',
+                                          background: 'transparent', color: 'var(--muted)', cursor: 'pointer',
+                                          fontSize: 14, fontFamily: 'inherit', lineHeight: 1,
+                                        }}
+                                      >×</button>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              {/* Add row */}
+                              {remaining.length > 0 && (
+                                <HookAddRow
+                                  remaining={remaining}
+                                  onAdd={hook => setForm(f => ({ ...f, hooksList: [...f.hooksList, hook] }))}
+                                />
+                              )}
+                              {remaining.length === 0 && availableHooks.length > 0 && (
+                                <div style={{ fontSize: 11, color: 'var(--muted)' }}>All available hooks added.</div>
+                              )}
+                            </>
+                          );
+                        })()}
                       </div>
                     )}
 
