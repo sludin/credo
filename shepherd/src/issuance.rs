@@ -74,7 +74,7 @@ pub async fn issue_cert(
     let sans = canonical_sans(assignment);
     {
         let ledger_read = ledger.read().await;
-        if let Some(retry_after) = ledger_read.rate_limit_check(&sans, ca_name, None) {
+        if let Some(retry_after) = ledger_read.rate_limit_check(&sans, ca_name, ca_config.rate_limits.as_ref()) {
             return Err(anyhow::anyhow!(RateLimitedError { retry_after }));
         }
     }

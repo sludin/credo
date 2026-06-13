@@ -460,9 +460,15 @@ pub async fn get_rate_limits(
     check_min_role(Some(&user.role), &Role::Readonly)?;
     let ledger = state.issuance_ledger.read().await;
     let assignments = state.assignments.read().await;
-    let domain_quotas = ledger.domain_quotas(&std::collections::HashMap::new());
-    let identifier_set_quotas =
-        ledger.identifier_set_quotas(&assignments, &std::collections::HashMap::new());
+    let cas = state.cas.read().await;
+    let ca_limits: std::collections::HashMap<String, crate::types::CaRateLimits> = cas
+        .iter()
+        .filter_map(|(name, ca)| {
+            ca.config.rate_limits.clone().map(|rl| (name.clone(), rl))
+        })
+        .collect();
+    let domain_quotas = ledger.domain_quotas(&ca_limits);
+    let identifier_set_quotas = ledger.identifier_set_quotas(&assignments, &ca_limits);
     Ok(Json(json!({
         "domainQuotas": domain_quotas,
         "identifierSetQuotas": identifier_set_quotas,
