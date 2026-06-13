@@ -9,7 +9,11 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "vite": ["node_modules/vite/dist/node/index.d.ts"]
+    }
   },
   "include": ["server/**/*"],
   "exclude": ["node_modules", "dist", "server/**/*.test.ts"]
