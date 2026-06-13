@@ -248,8 +248,8 @@ const PHASE_LABELS: Record<string, string> = {
 function RateLimitsSection({ data }: { data: RateLimitsPayload }): React.ReactElement | null {
   const [open, setOpen] = React.useState(false);
 
-  const atRisk = data.domainQuotas.some(q => q.issued7d / q.limit7d >= 0.8)
-    || data.identifierSetQuotas.some(q => q.issued7d / q.limit7d >= 0.8);
+  const atRisk = data.domainQuotas.some(q => q.issued / q.limit >= 0.8)
+    || data.identifierSetQuotas.some(q => q.issued / q.limit >= 0.8);
   const gated = data.domainQuotas.some(q => q.nextSlotAt !== null)
     || data.identifierSetQuotas.some(q => q.nextSlotAt !== null);
 
@@ -310,7 +310,7 @@ function RateLimitsSection({ data }: { data: RateLimitsPayload }): React.ReactEl
                     <tr key={`${q.registeredDomain}:${q.ca}`}>
                       <td style={{ padding: '3px 6px 3px 0', fontFamily: 'var(--font-mono)', fontSize: 11 }}>{q.registeredDomain}</td>
                       <td style={{ padding: '3px 6px', color: 'var(--muted)' }}>{q.ca}</td>
-                      <td style={{ padding: '3px 0' }}><UsageBar issued={q.issued7d} limit={q.limit7d} /></td>
+                      <td style={{ padding: '3px 0' }}><UsageBar issued={q.issued} limit={q.limit} /></td>
                       <td style={{ textAlign: 'right', padding: '3px 0 3px 6px', color: q.nextSlotAt ? 'var(--red)' : 'var(--muted)', fontSize: 11 }}>
                         {q.nextSlotAt ? fmtDate(q.nextSlotAt) : '—'}
                       </td>
@@ -340,7 +340,7 @@ function RateLimitsSection({ data }: { data: RateLimitsPayload }): React.ReactEl
                     <tr key={q.certName}>
                       <td style={{ padding: '3px 6px 3px 0', fontFamily: 'var(--font-mono)', fontSize: 11 }}>{q.certName}</td>
                       <td style={{ padding: '3px 6px', color: 'var(--muted)' }}>{q.ca}</td>
-                      <td style={{ padding: '3px 0' }}><UsageBar issued={q.issued7d} limit={q.limit7d} /></td>
+                      <td style={{ padding: '3px 0' }}><UsageBar issued={q.issued} limit={q.limit} /></td>
                       <td style={{ textAlign: 'right', padding: '3px 0 3px 6px', color: q.nextSlotAt ? 'var(--red)' : 'var(--muted)', fontSize: 11 }}>
                         {q.nextSlotAt ? fmtDate(q.nextSlotAt) : '—'}
                       </td>

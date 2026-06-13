@@ -254,8 +254,9 @@ export type CertChainPayload = {
 export type DomainQuotaStatus = {
   registeredDomain: string;
   ca: string;
-  issued7d: number;
-  limit7d: number;
+  issued: number;
+  limit: number;
+  windowDays: number;
   nextSlotAt: string | null;
 };
 
@@ -263,8 +264,9 @@ export type IdentifierSetQuotaStatus = {
   certName: string;
   sans: string[];
   ca: string;
-  issued7d: number;
-  limit7d: number;
+  issued: number;
+  limit: number;
+  windowDays: number;
   nextSlotAt: string | null;
 };
 
