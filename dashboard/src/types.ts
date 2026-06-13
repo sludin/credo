@@ -196,7 +196,7 @@ export type LastRenewalJob = {
   certName: string;
   phase: string;
   startedAt: string;
-  updatedAt: string;
+  updatedAt: number; // Unix epoch seconds
   error?: string;
   result?: { issued: boolean; changed: boolean; fingerprint256?: string };
   trace: RenewalTraceEntry[];

@@ -378,7 +378,7 @@ function ActiveJobSection({ job }: { job: LastRenewalJob }): React.ReactElement 
 
 function LastJobSection({ job, expanded, onToggle }: { job: LastRenewalJob; expanded: boolean; onToggle: () => void }): React.ReactElement {
   const phaseColor = job.phase === 'completed' ? 'var(--green)' : job.phase === 'failed' ? 'var(--red)' : 'var(--muted)';
-  const jobDate = new Date(job.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  const jobDate = new Date(job.updatedAt * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   return (
     <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
       <div className="field-row">
