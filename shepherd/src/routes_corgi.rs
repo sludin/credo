@@ -6,7 +6,8 @@ use crate::cert_store::read_cert_material;
 use crate::corgi_client::corgi_post;
 use crate::error::AppError;
 use crate::issuance::issue_cert;
-use crate::renewal_jobs::{complete_job, create_job, fail_job, update_phase};
+use crate::issuance::RateLimitedError;
+use crate::renewal_jobs::{complete_job, create_job, fail_job, rate_limit_job, update_phase};
 use crate::state::AppState;
 use crate::types::{CorgiNodeConfig, ManagedAssignment, RenewalPhase};
 
@@ -95,6 +96,21 @@ pub async fn provision_cert(
         .clone();
     drop(assignments);
 
+    // Return existing active job if present (dedup guard)
+    {
+        let jobs = state.renewal_jobs.read().await;
+        if let Some(job) = jobs
+            .values()
+            .find(|j| j.cert_name == cert_name && !j.phase.is_terminal())
+        {
+            let id = job.id.to_string();
+            let phase = format!("{:?}", job.phase).to_lowercase();
+            return Ok(Json(json!({
+                "jobId": id, "status": "pending", "certName": cert_name, "phase": phase,
+            })));
+        }
+    }
+
     let _current_fp = body
         .get("currentFingerprint")
         .and_then(|v| v.as_str())
@@ -156,13 +172,18 @@ pub async fn provision_cert(
         &state.renewal_jobs,
         job_id,
     )
-    .await
-    .map_err(|e| {
-        let msg = format!("{e:#}");
-        let store = state.renewal_jobs.clone();
-        tokio::spawn(async move { fail_job(&store, job_id, msg).await });
-        AppError::Internal(e)
-    })?;
+    .await;
+    let result = match result {
+        Err(e) => {
+            if let Some(rl) = e.downcast_ref::<RateLimitedError>() {
+                rate_limit_job(&state.renewal_jobs, job_id, rl.retry_after).await;
+            } else {
+                fail_job(&state.renewal_jobs, job_id, format!("{e:#}")).await;
+            }
+            return Err(AppError::Internal(e));
+        }
+        Ok(issued) => issued,
+    };
     complete_job(&state.renewal_jobs, job_id, result.fingerprint256.clone()).await;
 
     // Install on corgi
@@ -311,8 +332,13 @@ pub async fn renew_cert(
                 }
             }
             Err(e) => {
-                fail_job(&state2.renewal_jobs, job_id, e.to_string()).await;
-                tracing::warn!(corgi = %corgi_id, cert = %cert_name2, error = %format!("{e:#}"), "Renewal failed");
+                if let Some(rl) = e.downcast_ref::<RateLimitedError>() {
+                    rate_limit_job(&state2.renewal_jobs, job_id, rl.retry_after).await;
+                } else {
+                    let msg = format!("{e:#}");
+                    fail_job(&state2.renewal_jobs, job_id, msg.clone()).await;
+                    tracing::warn!(corgi = %corgi_id, cert = %cert_name2, error = %msg, "Renewal failed");
+                }
             }
         }
     });
