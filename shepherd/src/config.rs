@@ -50,7 +50,8 @@ pub struct ShepherdConfig {
     // Logging
     pub log_level: LogLevel,
 
-    // DNS override for outbound Corgi connections
+    // DNS override for outbound Corgi connections.
+    // TODO: not yet implemented — parsed from config but not applied to HTTP client resolution.
     pub dns_override: HashMap<String, String>,
 
     // Identity

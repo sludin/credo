@@ -138,7 +138,6 @@ struct FlockEntry {
     san_names: Vec<String>,
     fingerprint256: Option<String>,
     valid_to: Option<String>,
-    domain: Option<String>,
     #[serde(default)]
     key_exists: bool,
 }

@@ -78,7 +78,7 @@ Shepherd reads several companion JSON files. Each has a default path relative to
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `dnsOverride` | object | `{}` | Map of hostname → IP used for outbound connections to Corgi nodes. Useful when DNS is not yet configured |
+| `dnsOverride` | object | `{}` | (**Not yet implemented**) Map of hostname → IP for outbound Corgi connections. Useful when DNS is not yet configured. Currently parsed but not applied |
 
 ## Logging
 
@@ -270,3 +270,4 @@ Managed certificate assignments. Each entry maps a certificate name to a Corgi n
 | `identityUri` | no | URI SAN to embed in the certificate |
 | `days` | no | Certificate validity in days (overrides CA default) |
 | `renewBeforeDays` | no | Renewal threshold in days (overrides CA default) |
+| `forceRevalidate` | no | (**Not yet implemented**) Force a full ACME revalidation cycle regardless of cert age. Intended for testing |

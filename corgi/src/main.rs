@@ -228,8 +228,6 @@ async fn cmd_check_config() -> Result<()> {
     let config = load_config().context("Loading config")?;
     init_logging(config.log_level);
 
-    let ok = true;
-
     println!("Config: {}", config.config_path.display());
     println!("  Node ID:       {}", config.node_id);
     println!("  Common name:   {}", config.common_name);
@@ -250,7 +248,7 @@ async fn cmd_check_config() -> Result<()> {
 
     for (label, path) in &[
         ("TLS cert", &config.tls.cert_path),
-        ("TLS key", &config.tls.cert_path),
+        ("TLS key", &config.tls.key_path),
         ("mTLS client cert", &config.mtls.cert_path),
         ("mTLS client key", &config.mtls.key_path),
     ] {
@@ -292,12 +290,7 @@ async fn cmd_check_config() -> Result<()> {
     }
 
     println!();
-    if ok {
-        println!("Config looks good.");
-    } else {
-        println!("Config has issues — see above.");
-        std::process::exit(1);
-    }
+    println!("Config checks complete.");
 
     Ok(())
 }

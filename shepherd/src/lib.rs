@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub mod accounts;
 pub mod acme_client;
 pub mod alerts;

@@ -240,7 +240,7 @@ fn verify_rsa_jws(
 
 async fn validate_jws(
     state: &AppState,
-    headers: &HeaderMap,
+    _headers: &HeaderMap, // TODO: needed for RFC 8555 §6.4 url validation
     body: &Value,
     require_kid: bool,
     require_jwk: bool,
@@ -291,14 +291,9 @@ async fn validate_jws(
         }
     }
 
-    // Verify URL matches
-    let (scheme, host) = extract_host_scheme(headers);
-    let request_path = protected_json
-        .get("url")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    // We check this loosely — the URL in protected must contain the correct host
-    let _ = (scheme, host, request_path);
+    // TODO: validate JWS url matches request URL (RFC 8555 §6.4)
+    // The protected.url field must exactly match the request URL being processed.
+    // This requires plumbing the actual request URI through to validate_jws().
 
     let alg = protected_json
         .get("alg")

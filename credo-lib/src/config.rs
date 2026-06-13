@@ -21,45 +21,8 @@ pub fn interpolate(s: &str, vars: &HashMap<String, String>) -> String {
     result
 }
 
-/// Build a fully-resolved variable map from the config `vars` block.
-///
-/// Phase 1: sequential pass — each var is resolved against previously-inserted
-/// vars, so `b = "${a}/bar"` works when `a` is declared first.
-///
-/// Phase 2: convergence loop — iterate the whole map until no value changes.
-/// Handles forward references without an arbitrary iteration limit. Circular
-/// references (e.g. `a = "${b}"`, `b = "${a}"`) collapse to stable self-
-/// referential strings on the first pass and never loop. Unresolvable `${...}`
-/// patterns survive as literals and will produce clear errors at path resolution.
-pub fn collect_vars(raw: &serde_json::Value) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-
-    if let Some(obj) = raw.get("vars").and_then(|v| v.as_object()) {
-        for (k, v) in obj {
-            let raw_str = match v {
-                serde_json::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            };
-            let resolved = interpolate(&raw_str, &map);
-            map.insert(k.clone(), resolved);
-        }
-    }
-
-    loop {
-        let snapshot = map.clone();
-        for val in map.values_mut() {
-            *val = interpolate(val, &snapshot);
-        }
-        if map == snapshot {
-            break;
-        }
-    }
-
-    map
-}
-
 /// Recursively replace `${VAR}` in all string values of a JSON tree.
-pub fn interpolate_json(
+fn interpolate_json(
     value: &serde_json::Value,
     vars: &HashMap<String, String>,
 ) -> serde_json::Value {
@@ -85,7 +48,7 @@ pub fn interpolate_json(
 
 /// Recursively merge `overlay` into `base`. Objects are merged key-by-key;
 /// all other types are replaced. The main config overlays on top of includes.
-pub fn deep_merge(base: &mut serde_json::Value, overlay: &serde_json::Value) {
+fn deep_merge(base: &mut serde_json::Value, overlay: &serde_json::Value) {
     match (base, overlay) {
         (serde_json::Value::Object(base_map), serde_json::Value::Object(overlay_map)) => {
             for (k, v) in overlay_map {
@@ -100,7 +63,7 @@ pub fn deep_merge(base: &mut serde_json::Value, overlay: &serde_json::Value) {
 /// Process the `includes` array in `value`, load each file relative to
 /// `config_path`, deep-merge them as the base, then overlay the main config.
 /// `seen` tracks canonical paths to detect circular includes.
-pub fn resolve_includes(
+fn resolve_includes(
     mut value: serde_json::Value,
     config_path: &Path,
     seen: &mut Vec<PathBuf>,
@@ -286,7 +249,7 @@ fn vars_with_env(raw: &serde_json::Value) -> HashMap<String, String> {
 /// ignored, giving config authors a way to disable entries without deleting
 /// them.  Call this AFTER interpolation but BEFORE deserializing into a typed
 /// struct with `#[serde(deny_unknown_fields)]`.
-pub fn strip_underscore_keys(value: &mut serde_json::Value) {
+fn strip_underscore_keys(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
             map.retain(|k, _| !k.starts_with('_'));

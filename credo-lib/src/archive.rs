@@ -4,7 +4,7 @@
 ///   <store>/archive/<name>/cert-NNN.pem, key-NNN.pem, fullchain-NNN.pem, chain-NNN.pem
 ///   <store>/live/<name>/   → symlinks to latest archive entries
 use anyhow::{bail, Context, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 // ---------------------------------------------------------------------------
 // PEM chain splitting
@@ -93,42 +93,4 @@ pub fn replace_symlink(target_path: &Path, link_path: &Path) -> Result<()> {
             target_path.display()
         )
     })
-}
-
-// ---------------------------------------------------------------------------
-// CertStorePaths helper
-// ---------------------------------------------------------------------------
-
-pub struct CertStorePaths {
-    pub archive_dir: PathBuf,
-    pub live_dir: PathBuf,
-}
-
-impl CertStorePaths {
-    pub fn new(store_root: &Path, cert_name: &str) -> Self {
-        let safe = sanitize_cert_name(cert_name);
-        CertStorePaths {
-            archive_dir: store_root.join("archive").join(&safe),
-            live_dir: store_root.join("live").join(&safe),
-        }
-    }
-
-    pub fn ensure_dirs(&self) -> Result<()> {
-        std::fs::create_dir_all(&self.archive_dir)?;
-        std::fs::create_dir_all(&self.live_dir)?;
-        Ok(())
-    }
-}
-
-/// Replace characters that are not safe in directory names.
-fn sanitize_cert_name(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }

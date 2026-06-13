@@ -230,13 +230,6 @@ pub fn load_config() -> Result<VigilConfig> {
         ),
     };
 
-    let ca_block = raw
-        .ca_ecdsa_intermediate_key_path
-        .as_ref()
-        .map(|_| RawCaBlock::default())
-        .unwrap_or_default();
-    let _ = ca_block;
-
     let ca_config = {
         let raw_ca: RawCaBlock = processed
             .get("ca")

@@ -74,7 +74,9 @@ pub async fn issue_cert(
     let sans = canonical_sans(assignment);
     {
         let ledger_read = ledger.read().await;
-        if let Some(retry_after) = ledger_read.rate_limit_check(&sans, ca_name, ca_config.rate_limits.as_ref()) {
+        if let Some(retry_after) =
+            ledger_read.rate_limit_check(&sans, ca_name, ca_config.rate_limits.as_ref())
+        {
             return Err(anyhow::anyhow!(RateLimitedError { retry_after }));
         }
     }
@@ -182,7 +184,7 @@ async fn run_issuance(
     csr_der: &[u8],
     validation_method: &str,
     http_challenge_port: Option<u16>,
-    _force_revalidate: bool,
+    _force_revalidate: bool, // TODO: not yet implemented — bypass cert-age check and force ACME revalidation
     assignment: &ManagedAssignment,
     pool: &Arc<RwLock<CorgiClientPool>>,
     corgis: &[CorgiNodeConfig],
