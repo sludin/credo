@@ -94,6 +94,19 @@ export function fetchActiveJobs(): Promise<LastRenewalJob[]> {
     .then(r => r.jobs ?? []);
 }
 
+export interface LastTerminalJobSummary {
+  certName: string;
+  phase: string;
+  error?: string;
+  updatedAt: number;
+}
+
+/** Returns the most recent terminal job per cert — used to detect failed renewals in the 30s poll. */
+export function fetchLastTerminalJobsPerCert(): Promise<LastTerminalJobSummary[]> {
+  return requestJson<{ jobs: LastTerminalJobSummary[] }>('/api/renewal-jobs/last-per-cert')
+    .then(r => r.jobs ?? []);
+}
+
 export function fetchRateLimits(): Promise<RateLimitsPayload> {
   return requestJson<RateLimitsPayload>('/api/rate-limits');
 }

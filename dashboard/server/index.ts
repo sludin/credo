@@ -507,6 +507,27 @@ async function main(): Promise<void> {
     res.json(response.data);
   }));
 
+  app.get('/api/renewal-jobs/last-per-cert', asyncHandler(async (_req: Request, res: Response) => {
+    const response = await clients.api.get('/admin/renewal-jobs');
+    type JobEntry = { certName: string; phase: string; error?: string; updatedAt: number };
+    const allJobs: JobEntry[] =
+      ((response.data as { jobs?: JobEntry[] })?.jobs ?? []);
+
+    // Terminal phases — must match shepherd's RenewalPhase::is_terminal() (Completed|Failed|Cancelled)
+    const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
+
+    const latestByCert = new Map<string, typeof allJobs[number]>();
+    for (const job of allJobs) {
+      if (!TERMINAL.has(job.phase)) continue;
+      const existing = latestByCert.get(job.certName);
+      if (!existing || job.updatedAt > existing.updatedAt) {
+        latestByCert.set(job.certName, job);
+      }
+    }
+
+    res.json({ jobs: Array.from(latestByCert.values()) });
+  }));
+
   app.get('/api/rate-limits', asyncHandler(async (_req: Request, res: Response) => {
     const response = await clients.api.get('/admin/rate-limits');
     res.json(response.data);

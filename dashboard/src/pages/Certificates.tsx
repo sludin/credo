@@ -7,6 +7,7 @@ import {
   fetchCerts,
   fetchFlock,
   fetchActiveJobs,
+  fetchLastTerminalJobsPerCert,
   fetchCertDetails,
   fetchLastJob,
   fetchActiveJob,
@@ -18,6 +19,7 @@ import {
   updateAssignment,
   deleteAssignment,
 } from '../api';
+import type { LastTerminalJobSummary } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
 import { deriveStatus, statusTone, statusLabel, type UnifiedStatus } from './Certificates.testable';
 import { Topbar } from '../components/Shell';
@@ -481,6 +483,9 @@ export default function Certificates(): React.ReactElement {
   // Rate limits
   const [rateLimits, setRateLimits] = useState<RateLimitsPayload | null>(null);
 
+  // Last failed renewal per cert (for error status when cert is still valid)
+  const [lastFailedByCert, setLastFailedByCert] = useState<Map<string, boolean>>(new Map());
+
   // Toast / error
   const [toast, setToast] = useState<{ msg: string; error?: boolean } | null>(null);
   const [renewing, setRenewing] = useState(false);
@@ -488,13 +493,14 @@ export default function Certificates(): React.ReactElement {
 
   const { secondsAgo, refresh } = usePoller(async () => {
     try {
-      const [a, f, c, jobs, cfg, rl] = await Promise.all([
+      const [a, f, c, jobs, cfg, rl, lastTerminal] = await Promise.all([
         fetchAssignments(),
         fetchFlock(),
         fetchCerts(),
         fetchActiveJobs(),
         fetchShepherdConfigSummary(),
         fetchRateLimits().catch(() => null),
+        fetchLastTerminalJobsPerCert().catch(() => [] as LastTerminalJobSummary[]),
       ]);
       setAssignments(a.assignments);
 
@@ -516,6 +522,11 @@ export default function Certificates(): React.ReactElement {
 
       // Active job set
       setActiveJobNames(new Set(jobs.map(j => j.certName)));
+      setLastFailedByCert(new Map(
+        lastTerminal
+          .filter(j => j.phase === 'failed')
+          .map(j => [j.certName, true] as [string, boolean])
+      ));
 
       // CA options
       const dynamicCas = cfg.cas.map(ca => ca.name).filter(Boolean);
@@ -548,7 +559,8 @@ export default function Certificates(): React.ReactElement {
 
     // Use flock SANs for mismatch check when available
     const actualDnsSans = sanNames.length > 0 ? sanNames : null;
-    const status = deriveStatus(assignment, flockCert, certEntry, daysLeft, isRenewing, actualDnsSans, false);
+    const lastFailed = lastFailedByCert.get(assignment.certName) ?? false;
+    const status = deriveStatus(assignment, flockCert, certEntry, daysLeft, isRenewing, actualDnsSans, lastFailed);
 
     return {
       certName: assignment.certName,
