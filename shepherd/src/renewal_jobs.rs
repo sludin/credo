@@ -116,10 +116,7 @@ pub fn load_terminal_jobs_sync(path: &Path) -> HashMap<Uuid, RenewalJob> {
 /// Called after complete_job / fail_job so history survives shepherd restarts.
 pub async fn persist_terminal_jobs(store: &JobStore, path: &Path) {
     let jobs = store.read().await;
-    let terminal: Vec<&RenewalJob> = jobs
-        .values()
-        .filter(|j| j.phase.is_terminal())
-        .collect();
+    let terminal: Vec<&RenewalJob> = jobs.values().filter(|j| j.phase.is_terminal()).collect();
     match serde_json::to_string_pretty(&terminal) {
         Ok(json) => {
             if let Err(e) = std::fs::write(path, json) {
