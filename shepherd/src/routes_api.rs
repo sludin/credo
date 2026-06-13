@@ -9,7 +9,7 @@ use axum::response::IntoResponse;
 use crate::assignments::{file_mtime, load_assignments, save_assignments};
 use crate::auth::check_min_role;
 use crate::cert_store;
-use crate::corgi_client::corgi_post;
+use crate::corgi_client::{corgi_get_hooks, corgi_post};
 use crate::corgis::load_corgis;
 use crate::error::AppError;
 use crate::issuance::issue_cert;
@@ -277,6 +277,33 @@ pub async fn refresh_token(
     Ok(Json(json!({
         "accessToken": access,
         "refreshToken": new_refresh,
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// Corgi hook discovery (proxies to corgi's GET /hooks)
+// ---------------------------------------------------------------------------
+
+pub async fn get_corgi_hooks(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Path(corgi_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+    let corgis = state.corgis.read().await;
+    let node = corgis
+        .iter()
+        .find(|c| c.name == corgi_id)
+        .ok_or_else(|| AppError::NotFound(format!("Corgi '{corgi_id}' not found")))?
+        .clone();
+    drop(corgis);
+    let resp = corgi_get_hooks(&state.corgi_client_pool, &state.hooks_cache, &node)
+        .await
+        .map_err(AppError::Internal)?;
+    Ok(Json(json!({
+        "corgiId": corgi_id,
+        "availableHooks": resp.available_hooks,
+        "defaultHooks": resp.default_hooks,
     })))
 }
 
@@ -810,6 +837,45 @@ pub async fn reload_corgis(
     ))
 }
 
+/// Validate that all hook names in an assignment exist on the target corgi.
+/// Skipped when the assignment has no hooks or no corgi assigned.
+async fn validate_assignment_hooks(
+    state: &AppState,
+    assignment: &crate::types::ManagedAssignment,
+) -> Result<(), AppError> {
+    let hooks = match assignment.hooks.as_deref() {
+        None | Some([]) => return Ok(()),
+        Some(h) => h,
+    };
+    let corgi_name = match assignment.corgi.as_deref() {
+        Some(n) => n.to_string(),
+        None => return Ok(()),
+    };
+    let corgis = state.corgis.read().await;
+    let node = match corgis.iter().find(|c| c.name == corgi_name) {
+        Some(n) => n.clone(),
+        None => return Ok(()), // corgi not configured yet; skip validation
+    };
+    drop(corgis);
+    let available = corgi_get_hooks(&state.corgi_client_pool, &state.hooks_cache, &node)
+        .await
+        .map_err(|e| {
+            AppError::BadRequest(format!(
+                "Cannot reach corgi '{corgi_name}' to validate hooks: {e}"
+            ))
+        })?;
+    for hook in hooks {
+        let name = hook.name();
+        if !available.available_hooks.iter().any(|h| h == name) {
+            return Err(AppError::BadRequest(format!(
+                "Hook '{name}' is not available on corgi '{corgi_name}'. Available: {:?}",
+                available.available_hooks
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub async fn create_assignment(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
@@ -826,6 +892,7 @@ pub async fn create_assignment(
             "Assignment must have certName or domain".into(),
         ));
     }
+    validate_assignment_hooks(&state, &assignment).await?;
     let mut assignments = state.assignments.write().await;
     if assignments
         .iter()
@@ -850,15 +917,16 @@ pub async fn update_assignment(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Admin)?;
+    // Replace the whole record with the incoming body, preserving cert_name
+    let mut updated: crate::types::ManagedAssignment = serde_json::from_value(body)
+        .map_err(|e| AppError::BadRequest(format!("Invalid assignment: {e}")))?;
+    updated.cert_name = cert_name.clone();
+    validate_assignment_hooks(&state, &updated).await?;
     let mut assignments = state.assignments.write().await;
     let assignment = assignments
         .iter_mut()
         .find(|a| a.cert_name == cert_name)
         .ok_or_else(|| AppError::NotFound(format!("No assignment for '{cert_name}'")))?;
-    // Replace the whole record with the incoming body, preserving cert_name
-    let mut updated: crate::types::ManagedAssignment = serde_json::from_value(body)
-        .map_err(|e| AppError::BadRequest(format!("Invalid assignment: {e}")))?;
-    updated.cert_name = cert_name.clone();
     *assignment = updated.clone();
     let path = state.config.load().assignments_config_path.clone();
     save_assignments(&path, &assignments).map_err(AppError::Internal)?;

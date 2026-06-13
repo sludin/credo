@@ -86,7 +86,8 @@ pub struct FlockEntry {
     pub csr_path: Option<PathBuf>,
     pub domain: Option<String>,
     pub monitor: bool,
-    pub hooks: Vec<HookRef>,
+    /// None = inherit defaultHooks at runtime. Some([]) = no hooks. Some([refs]) = use exactly these.
+    pub hooks: Option<Vec<HookRef>>,
     pub csr_subject: Option<CsrSubjectWire>,
     pub identity_uri: Option<String>,
     pub sans: Vec<String>,
@@ -166,7 +167,6 @@ pub struct CorgiConfig {
     pub fullchain_path: Option<PathBuf>,
     pub csr_path: Option<PathBuf>,
     pub file_policy: FilePolicyConfig,
-    pub cert_hooks: HashMap<String, Vec<HookRef>>,
 }
 
 #[derive(Debug, Clone)]
@@ -306,9 +306,6 @@ struct RawConfig {
 
     #[serde(rename = "filePolicy")]
     file_policy: Option<RawFilePolicy>,
-
-    #[serde(rename = "certHooks", default)]
-    cert_hooks: serde_json::Map<String, Value>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -502,7 +499,10 @@ fn parse_flock_entry(
         .map(|s| resolve_path(base_dir, s))
         .unwrap_or_else(|| cert_store_dir.join("live").join(&name).join("privkey.pem"));
 
-    let hooks = parse_hook_refs(v["hooks"].as_array().unwrap_or(&vec![]));
+    let hooks = v
+        .get("hooks")
+        .and_then(|h| h.as_array())
+        .map(|arr| parse_hook_refs(arr));
 
     let csr_subject: Option<CsrSubjectWire> = v
         .get("csrSubject")
@@ -689,6 +689,9 @@ pub fn load_config() -> Result<CorgiConfig> {
             .and_then(parse_mode),
     };
 
+    // Parse defaultHooks early so flock entries can inherit them
+    let default_hooks = parse_hook_refs(&raw.default_hooks);
+
     // Flock entries
     let flock: Vec<FlockEntry> = raw
         .flock
@@ -696,15 +699,6 @@ pub fn load_config() -> Result<CorgiConfig> {
         .enumerate()
         .map(|(i, v)| parse_flock_entry(v, &base_dir, &cert_store_dir, i, &file_policy))
         .collect::<Result<Vec<_>>>()?;
-
-    // Per-cert hook overrides
-    let mut cert_hooks: HashMap<String, Vec<HookRef>> = HashMap::new();
-    for (cert_name, hooks_val) in &raw.cert_hooks {
-        let hooks = parse_hook_refs(hooks_val.as_array().unwrap_or(&vec![]));
-        if !hooks.is_empty() {
-            cert_hooks.insert(cert_name.clone(), hooks);
-        }
-    }
 
     // Service hooks
     let mut service_hooks = HashMap::new();
@@ -923,7 +917,7 @@ pub fn load_config() -> Result<CorgiConfig> {
         mtls_port,
         bind,
         service_hooks,
-        default_hooks: parse_hook_refs(&raw.default_hooks),
+        default_hooks,
         log_level,
         auth: AuthConfig { mode: auth_mode },
         rbac_identities,
@@ -935,6 +929,5 @@ pub fn load_config() -> Result<CorgiConfig> {
         fullchain_path,
         csr_path,
         file_policy,
-        cert_hooks,
     })
 }

@@ -1,4 +1,36 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
+
+// ---------------------------------------------------------------------------
+// Hook reference — used by Corgi for cert-install hooks; shared on the wire
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum HookRef {
+    Simple(String),
+    Parameterized {
+        name: String,
+        args: HashMap<String, String>,
+    },
+}
+
+impl HookRef {
+    pub fn name(&self) -> &str {
+        match self {
+            HookRef::Simple(s) => s,
+            HookRef::Parameterized { name, .. } => name,
+        }
+    }
+
+    pub fn args(&self) -> HashMap<String, String> {
+        match self {
+            HookRef::Simple(_) => HashMap::new(),
+            HookRef::Parameterized { args, .. } => args.clone(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

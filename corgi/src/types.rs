@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-// Role and ClientIdentity live in credo-lib; re-export for convenience.
-pub use credo_lib::types::{ClientIdentity, Role};
+// Role, ClientIdentity, and HookRef live in credo-lib; re-export for convenience.
+pub use credo_lib::types::{ClientIdentity, HookRef, Role};
 
 // ---------------------------------------------------------------------------
 // API response types
@@ -59,7 +59,7 @@ pub struct ManagedAssignment {
     pub identity_uri: Option<String>,
     pub monitor: Option<bool>,
     #[serde(default)]
-    pub hooks: Vec<HookRef>,
+    pub hooks: Option<Vec<HookRef>>,
     pub csr_subject: Option<CsrSubjectWire>,
     #[serde(default)]
     pub sans: Vec<String>,
@@ -84,32 +84,6 @@ pub struct CsrSubjectWire {
     pub organizational_unit: Option<String>,
     #[serde(rename = "emailAddress")]
     pub email_address: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum HookRef {
-    Simple(String),
-    Parameterized {
-        name: String,
-        args: std::collections::HashMap<String, String>,
-    },
-}
-
-impl HookRef {
-    pub fn name(&self) -> &str {
-        match self {
-            HookRef::Simple(s) => s,
-            HookRef::Parameterized { name, .. } => name,
-        }
-    }
-
-    pub fn args(&self) -> std::collections::HashMap<String, String> {
-        match self {
-            HookRef::Simple(_) => std::collections::HashMap::new(),
-            HookRef::Parameterized { args, .. } => args.clone(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

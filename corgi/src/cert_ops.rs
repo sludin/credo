@@ -419,7 +419,13 @@ pub fn read_cert_status(entry: &FlockEntry) -> crate::types::CertificateStatus {
         cert_matches_key = check_cert_matches_key(&entry.path, &entry.key_path);
     }
 
-    let hooks: Vec<String> = entry.hooks.iter().map(|h| h.name().to_string()).collect();
+    let hooks: Vec<String> = entry
+        .hooks
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|h| h.name().to_string())
+        .collect();
 
     crate::types::CertificateStatus {
         name: entry.name.clone(),

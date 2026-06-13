@@ -567,6 +567,7 @@ mod tests {
             key_owner: None,
             key_group: None,
             key_algorithm: None,
+            hooks: None,
         }
     }
 

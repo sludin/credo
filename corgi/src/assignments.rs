@@ -32,11 +32,7 @@ pub fn merge_assignments(
             (live.join("fullchain.pem"), live.join("privkey.pem"))
         };
 
-        let hooks = config
-            .cert_hooks
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| config.default_hooks.clone());
+        let hooks = assignment.hooks.clone();
 
         let entry = FlockEntry {
             name: name.clone(),
