@@ -358,10 +358,6 @@ function RateLimitsSection({ data }: { data: RateLimitsPayload }): React.ReactEl
 
 function ActiveJobSection({ job }: { job: LastRenewalJob }): React.ReactElement {
   const phaseLabel = PHASE_LABELS[job.phase] ?? job.phase;
-  const domainCount = job.domains?.length ?? 0;
-  const succeededCount = job.domainStatus
-    ? Object.values(job.domainStatus).filter(s => s === 'succeeded').length
-    : 0;
   return (
     <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
       <div className="field-row">
@@ -371,22 +367,10 @@ function ActiveJobSection({ job }: { job: LastRenewalJob }): React.ReactElement 
           <span style={{ fontWeight: 500 }}>{phaseLabel}</span>
         </span>
       </div>
-      {job.currentDomain && (
-        <div className="field-row">
-          <span className="field-label">Domain</span>
-          <span className="field-value mono" style={{ fontSize: 12 }}>
-            {job.currentDomain}
-            {job.domainStatus?.[job.currentDomain] && (
-              <span className="text-muted" style={{ marginLeft: 6 }}>({job.domainStatus[job.currentDomain]})</span>
-            )}
-          </span>
-        </div>
-      )}
-      {domainCount > 0 && (
-        <div className="field-row">
-          <span className="field-label">Progress</span>
-          <span className="field-value text-muted" style={{ fontSize: 12 }}>{succeededCount} / {domainCount} domains</span>
-        </div>
+      {job.trace.length > 0 && (
+        <pre className="pem-block" style={{ marginTop: 8, fontSize: 11, maxHeight: 200, overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+          {job.trace.map(formatTraceLine).join('\n')}
+        </pre>
       )}
     </div>
   );
@@ -691,6 +675,7 @@ export default function Certificates(): React.ReactElement {
         if (!job || TERMINAL.includes(job.phase)) {
           void fetchLastJob(certName).then(j => setLastJob(j)).catch(() => {});
           if (activeJobTimerRef.current) { clearInterval(activeJobTimerRef.current); activeJobTimerRef.current = null; }
+          refresh();
         }
       } catch { /* ignore */ }
     }

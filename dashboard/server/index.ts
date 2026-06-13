@@ -495,7 +495,7 @@ async function main(): Promise<void> {
 
   app.get('/api/certs/:certName/active-job', asyncHandler(async (req: Request, res: Response) => {
     const response = await clients.api.get(
-      `/admin/renewal-jobs?domain=${encodeURIComponent(req.params.certName)}&active=true`
+      `/admin/renewal-jobs?certName=${encodeURIComponent(req.params.certName)}&active=true`
     );
     const jobs = (response.data as { jobs?: unknown[] })?.jobs ?? [];
     const job = jobs.length > 0 ? jobs[0] : null;
