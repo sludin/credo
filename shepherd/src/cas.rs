@@ -195,6 +195,7 @@ fn parse_ca_entry(name: &str, entry: RawCaEntry, base: &Path) -> Result<CaConfig
             default_validation,
             tls,
             insecure_skip_verify: raw.insecure_skip_verify.unwrap_or(false),
+            rate_limits: None,
         },
     })
 }

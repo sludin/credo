@@ -63,6 +63,26 @@ pub struct CorgiMtlsConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Rate limit config (within CA config)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaRateLimit {
+    pub count: u32,
+    pub window_days: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaRateLimits {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificates_per_domain: Option<CaRateLimit>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duplicate_certificates: Option<CaRateLimit>,
+}
+
+// ---------------------------------------------------------------------------
 // CA config (from shepherd.ca.json)
 // ---------------------------------------------------------------------------
 
@@ -87,6 +107,7 @@ pub struct AcmeCaConfig {
     pub default_validation: String,
     pub tls: Option<AcmeTlsConfig>,
     pub insecure_skip_verify: bool,
+    pub rate_limits: Option<CaRateLimits>,
 }
 
 #[derive(Debug, Clone)]
@@ -228,8 +249,9 @@ pub struct IssuanceEvent {
 pub struct DomainQuotaStatus {
     pub registered_domain: String,
     pub ca: String,
-    pub issued_7d: u32,
-    pub limit_7d: u32,
+    pub issued: u32,
+    pub limit: u32,
+    pub window_days: u32,
     pub next_slot_at: Option<DateTime<Utc>>,
 }
 
@@ -240,8 +262,9 @@ pub struct IdentifierSetQuotaStatus {
     pub cert_name: String,
     pub sans: Vec<String>,
     pub ca: String,
-    pub issued_7d: u32,
-    pub limit_7d: u32,
+    pub issued: u32,
+    pub limit: u32,
+    pub window_days: u32,
     pub next_slot_at: Option<DateTime<Utc>>,
 }
 
@@ -319,4 +342,37 @@ pub struct CertStoreEntry {
     pub valid_to: Option<DateTime<Utc>>,
     pub expires_in_days: Option<i64>,
     pub subject: Option<String>,
+}
+
+#[cfg(test)]
+mod rate_limit_type_tests {
+    use super::*;
+
+    #[test]
+    fn ca_rate_limits_serializes_correctly() {
+        let rl = CaRateLimits {
+            certificates_per_domain: Some(CaRateLimit {
+                count: 50,
+                window_days: 7,
+            }),
+            duplicate_certificates: Some(CaRateLimit {
+                count: 5,
+                window_days: 7,
+            }),
+        };
+        let json = serde_json::to_string(&rl).unwrap();
+        assert!(json.contains("\"certificatesPerDomain\""));
+        assert!(json.contains("\"windowDays\""));
+        assert!(json.contains("50"));
+    }
+
+    #[test]
+    fn ca_rate_limits_none_fields_omitted() {
+        let rl = CaRateLimits {
+            certificates_per_domain: None,
+            duplicate_certificates: None,
+        };
+        let json = serde_json::to_string(&rl).unwrap();
+        assert!(!json.contains("certificatesPerDomain"));
+    }
 }

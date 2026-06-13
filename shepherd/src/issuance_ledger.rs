@@ -156,8 +156,9 @@ impl IssuanceLedger {
                 DomainQuotaStatus {
                     registered_domain: domain,
                     ca,
-                    issued_7d,
-                    limit_7d: DOMAIN_LIMIT,
+                    issued: issued_7d,
+                    limit: DOMAIN_LIMIT,
+                    window_days: 7,
                     next_slot_at,
                 }
             })
@@ -202,8 +203,9 @@ impl IssuanceLedger {
                     cert_name: assignment.cert_name.clone(),
                     sans,
                     ca,
-                    issued_7d,
-                    limit_7d: IDENTIFIER_SET_LIMIT,
+                    issued: issued_7d,
+                    limit: IDENTIFIER_SET_LIMIT,
+                    window_days: 7,
                     next_slot_at,
                 }
             })
