@@ -1,7 +1,8 @@
 /// Shepherd test harness: spins up shepherd's agent and dashboard Axum routers
 /// over plain HTTP on random ports.
 use anyhow::{Context, Result};
-use shepherd::config::{LogLevel, ShepherdConfig, TlsConfig};
+use credo_lib::LogLevel;
+use shepherd::config::{ShepherdConfig, TlsConfig};
 use shepherd::state::AppState;
 use std::collections::HashMap;
 use std::path::Path;

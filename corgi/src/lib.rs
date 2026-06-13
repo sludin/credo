@@ -8,7 +8,6 @@ pub mod cert_ops;
 pub mod config;
 pub mod error;
 pub mod hooks;
-pub mod log_middleware;
 pub mod routes;
 pub mod server;
 pub mod shepherd;

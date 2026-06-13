@@ -1,11 +1,11 @@
 use crate::config::{AuthMode, CorgiConfig};
 use crate::error::AppError;
-use crate::log_middleware::LogIdentity;
 use crate::server::PeerCertDer;
 use crate::types::{ClientIdentity, Role};
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
+use credo_lib::log::LogIdentity;
 
 // Re-export shared helpers so existing call sites still compile.
 pub use credo_lib::auth::{check_min_role, identity_from_der};

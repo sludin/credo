@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
 
 async fn cmd_bootstrap(_out: Option<String>, dry_run: bool) -> Result<()> {
     let config = load_config().context("Loading config")?;
-    init_logging(config.log_level);
+    credo_lib::log::init_logging(config.log_level);
 
     if dry_run {
         println!(
@@ -110,7 +110,7 @@ async fn cmd_server_start() -> Result<()> {
     let _pid_guard = credo_lib::pid::PidGuard::new(pid_path)?;
 
     let config = load_config().context("Loading config")?;
-    init_logging(config.log_level);
+    credo_lib::log::init_logging(config.log_level);
 
     tracing::info!(
         node_id = %config.node_id,
@@ -226,7 +226,7 @@ fn cmd_server_stop() -> Result<()> {
 
 async fn cmd_check_config() -> Result<()> {
     let config = load_config().context("Loading config")?;
-    init_logging(config.log_level);
+    credo_lib::log::init_logging(config.log_level);
 
     println!("Config: {}", config.config_path.display());
     println!("  Node ID:       {}", config.node_id);
@@ -293,12 +293,4 @@ async fn cmd_check_config() -> Result<()> {
     println!("Config checks complete.");
 
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Logging setup
-// ---------------------------------------------------------------------------
-
-fn init_logging(level: corgi::config::LogLevel) {
-    credo_lib::log::init_logging(credo_lib::LogLevel::from_str(level.as_tracing_filter()));
 }

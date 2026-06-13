@@ -114,7 +114,7 @@ pub async fn run_server_start(bootstrap: bool) -> Result<()> {
     let _pid_guard = credo_lib::pid::PidGuard::new(pid_path)?;
 
     let config = crate::config::load_config().context("Loading config")?;
-    init_logging(config.log_level);
+    credo_lib::log::init_logging(config.log_level);
 
     // Ensure data directories exist
     crate::storage::ensure_users_db(&config.users_db_path)?;
@@ -458,8 +458,4 @@ fn write_output(path: Option<&str>, data: &[u8]) -> Result<()> {
                 .context("Writing to stdout")
         }
     }
-}
-
-fn init_logging(level: crate::config::LogLevel) {
-    credo_lib::log::init_logging(credo_lib::LogLevel::from_str(level.as_tracing_filter()));
 }

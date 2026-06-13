@@ -125,10 +125,11 @@ use crate::test_dir::{make_test_dir, TestDir};
 /// over plain HTTP on random ports.
 use anyhow::Result;
 use corgi::config::{
-    AuthConfig, AuthMode, CorgiConfig, FilePolicyConfig, HttpChallengeConfig, LogLevel, MtlsConfig,
+    AuthConfig, AuthMode, CorgiConfig, FilePolicyConfig, HttpChallengeConfig, MtlsConfig,
     ProxyAuthConfig, ShepherdSyncConfig, TlsConfig,
 };
 use corgi::state::AppState;
+use credo_lib::LogLevel;
 use std::collections::HashMap;
 use std::path::Path;
 use tokio::sync::oneshot;

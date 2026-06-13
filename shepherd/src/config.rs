@@ -48,7 +48,7 @@ pub struct ShepherdConfig {
     pub issuance_ledger_path: PathBuf,
 
     // Logging
-    pub log_level: LogLevel,
+    pub log_level: credo_lib::LogLevel,
 
     // DNS override for outbound Corgi connections.
     // TODO: not yet implemented — parsed from config but not applied to HTTP client resolution.
@@ -69,25 +69,6 @@ pub struct TlsConfig {
     /// Written by bootstrap; never inside the corgi certstore.
     pub bootstrap_cert_path: Option<PathBuf>,
     pub bootstrap_key_path: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum LogLevel {
-    Fatal,
-    Warn,
-    Info,
-    Debug,
-}
-
-impl LogLevel {
-    pub fn as_tracing_filter(self) -> &'static str {
-        match self {
-            LogLevel::Fatal => "error",
-            LogLevel::Warn => "warn",
-            LogLevel::Info => "info",
-            LogLevel::Debug => "debug",
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -256,12 +237,7 @@ fn build_config(
     let bind = raw.bind.unwrap_or_else(|| "127.0.0.1".to_string());
 
     // --- Log level ---
-    let log_level = match raw.log_level.as_deref().unwrap_or("info") {
-        "fatal" => LogLevel::Fatal,
-        "warn" => LogLevel::Warn,
-        "debug" => LogLevel::Debug,
-        _ => LogLevel::Info,
-    };
+    let log_level = credo_lib::LogLevel::from_str(raw.log_level.as_deref().unwrap_or("info"));
 
     Ok(ShepherdConfig {
         config_path,

@@ -495,6 +495,7 @@ dependencies = [
  "anyhow",
  "axum",
  "corgi",
+ "credo-lib",
  "hex",
  "pem",
  "rcgen",

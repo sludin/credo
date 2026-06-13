@@ -5,7 +5,6 @@ use axum::Router;
 use std::sync::Arc;
 
 use crate::auth::auth_middleware;
-use crate::log_middleware::log_middleware;
 use crate::routes;
 use crate::state::AppState;
 
@@ -35,7 +34,9 @@ pub fn build_challenge_router(state: AppState) -> Router {
             "/.well-known/acme-challenge/:token",
             get(routes::challenge_get),
         )
-        .layer(middleware::from_fn(log_middleware))
+        .layer(middleware::from_fn(|req, next| {
+            credo_lib::log::log_request("C", req, next)
+        }))
         .with_state(state)
 }
 
@@ -58,6 +59,8 @@ pub fn build_control_router(state: AppState) -> Router {
             state.clone(),
             auth_middleware,
         ))
-        .layer(middleware::from_fn(log_middleware))
+        .layer(middleware::from_fn(|req, next| {
+            credo_lib::log::log_request("C", req, next)
+        }))
         .with_state(state)
 }

@@ -265,7 +265,7 @@ async fn run_server_with_tls(
 ) -> Result<()> {
     use tokio::signal::unix::{signal, SignalKind};
 
-    init_logging(config.log_level);
+    credo_lib::log::init_logging(config.log_level);
 
     tracing::info!(
         agent_port = config.agent_port,
@@ -355,7 +355,7 @@ async fn run_server_with_tls(
 
 async fn cmd_check_config() -> Result<()> {
     let config = load_config().context("Loading config")?;
-    init_logging(config.log_level);
+    credo_lib::log::init_logging(config.log_level);
 
     println!("Config: {}", config.config_path.display());
     println!("  Agent port:     {}:{}", config.bind, config.agent_port);
@@ -856,12 +856,4 @@ fn cmd_account_remove(name: &str) -> Result<()> {
         .context("Saving accounts")?;
     println!("Account '{name}' removed.");
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Logging setup
-// ---------------------------------------------------------------------------
-
-fn init_logging(level: shepherd::config::LogLevel) {
-    credo_lib::log::init_logging(credo_lib::LogLevel::from_str(level.as_tracing_filter()));
 }

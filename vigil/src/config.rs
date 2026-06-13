@@ -50,7 +50,7 @@ pub struct VigilConfig {
     pub ct_log_path: PathBuf,
     pub common_name: String,
     pub tls: TlsConfig,
-    pub log_level: LogLevel,
+    pub log_level: credo_lib::LogLevel,
     pub rbac_identities: Vec<RbacIdentityConfig>,
     pub issuance_policy: IssuancePolicyConfig,
     pub config_dir: PathBuf,
@@ -66,24 +66,6 @@ pub struct VigilConfig {
     /// Explicit recursive resolver IPs for http-01 validation and dns-01 NS lookups.
     /// Empty (default) means use the system resolver from /etc/resolv.conf.
     pub dns_resolver_addrs: Vec<std::net::IpAddr>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum LogLevel {
-    Fatal,
-    Warn,
-    Info,
-    Debug,
-}
-
-impl LogLevel {
-    pub fn as_tracing_filter(&self) -> &'static str {
-        match self {
-            LogLevel::Fatal | LogLevel::Warn => "warn",
-            LogLevel::Info => "info",
-            LogLevel::Debug => "debug",
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -272,19 +254,8 @@ pub fn load_config() -> Result<VigilConfig> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let log_level = match raw
-        .log_level
-        .as_deref()
-        .unwrap_or("info")
-        .trim()
-        .to_lowercase()
-        .as_str()
-    {
-        "fatal" => LogLevel::Fatal,
-        "warn" => LogLevel::Warn,
-        "debug" => LogLevel::Debug,
-        _ => LogLevel::Info,
-    };
+    let log_level =
+        credo_lib::LogLevel::from_str(raw.log_level.as_deref().unwrap_or("info").trim());
 
     // Apply env-var overrides for CA paths (set by run-with-config-ca.sh)
     let ca_key_path = std::env::var("VIGIL_CA_KEY_PATH")

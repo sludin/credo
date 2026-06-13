@@ -156,7 +156,7 @@ pub struct CorgiConfig {
     pub bind: String,
     pub service_hooks: HashMap<String, ServiceHookDef>,
     pub default_hooks: Vec<HookRef>,
-    pub log_level: LogLevel,
+    pub log_level: credo_lib::LogLevel,
     pub auth: AuthConfig,
     pub rbac_identities: Vec<RbacIdentity>,
     pub proxy_auth: ProxyAuthConfig,
@@ -192,25 +192,6 @@ pub struct HttpChallengeConfig {
 #[derive(Debug, Clone)]
 pub struct AuthConfig {
     pub mode: AuthMode,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum LogLevel {
-    Fatal,
-    Warn,
-    Info,
-    Debug,
-}
-
-impl LogLevel {
-    pub fn as_tracing_filter(&self) -> &'static str {
-        match self {
-            LogLevel::Fatal => "error",
-            LogLevel::Warn => "warn",
-            LogLevel::Info => "info",
-            LogLevel::Debug => "debug",
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -824,12 +805,7 @@ pub fn load_config() -> Result<CorgiConfig> {
         "CORGI_LOG_LEVEL",
         raw.log_level.as_deref().unwrap_or("info"),
     );
-    let log_level = match log_level_str.to_lowercase().as_str() {
-        "fatal" => LogLevel::Fatal,
-        "warn" => LogLevel::Warn,
-        "debug" => LogLevel::Debug,
-        _ => LogLevel::Info,
-    };
+    let log_level = credo_lib::LogLevel::from_str(&log_level_str);
 
     // Ports
     let mtls_port = env::var("CORGI_MTLS_PORT")

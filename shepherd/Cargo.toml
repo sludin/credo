@@ -13,79 +13,75 @@ name = "shepherd"
 path = "src/main.rs"
 
 [dependencies]
-credo-lib = { path = "../credo-lib" }
+credo-lib = { workspace = true }
 
-# Async runtime + HTTP (mirrors rest of workspace)
-tokio          = { version = "1",   features = ["full"] }
-axum           = { version = "0.7", features = ["macros"] }
-hyper          = { version = "1",   features = ["http1", "server"] }
-hyper-util     = { version = "0.1", features = ["tokio", "server-auto"] }
-http-body-util = "0.1"
-tower          = { version = "0.4", features = ["util"] }
+# Async runtime + HTTP
+tokio          = { workspace = true }
+axum           = { workspace = true }
+hyper          = { workspace = true }
+hyper-util     = { workspace = true }
+http-body-util = { workspace = true }
+tower          = { workspace = true }
 
-# TLS (pure Rust — cross-compile safe; ring uses cc/Zig for assembly)
-rustls         = { version = "0.23", default-features = false, features = ["ring", "tls12"] }
-tokio-rustls   = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
-rustls-pemfile = "2"
+# TLS
+rustls         = { workspace = true }
+tokio-rustls   = { workspace = true }
+rustls-pemfile = { workspace = true }
 webpki-roots   = "1"
 
-# ACME client (pure Rust — no OpenSSL)
+# ACME client
 instant-acme = "0.6"
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring"] }
 bytes        = "1"
 
-# mTLS HTTP client for outbound Corgi calls
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# HTTP client
+reqwest = { workspace = true }
 
-# DNS resolver for authoritative NS polling (dns-01 challenge propagation)
+# DNS resolver
 hickory-resolver = { version = "0.26", default-features = false, features = ["tokio", "system-config"] }
 
 # JWT (ES256)
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
-p256 = { version = "0.13", features = ["pkcs8", "pem", "ecdsa"] }
+p256         = { workspace = true, features = ["ecdsa"] }
 
-# X.509 / PEM parsing
-x509-parser = { version = "0.16", features = ["verify"] }
-pem         = "3"
-pkcs8       = { version = "0.10", features = ["pem"] }
+# X.509 / PEM
+x509-parser = { workspace = true, features = ["verify"] }
+pem         = { workspace = true }
+pkcs8       = { workspace = true }
 
 # Crypto
-sha2   = "0.10"
-hex    = "0.4"
-base64 = "0.22"
+sha2   = { workspace = true }
+hex    = { workspace = true }
+base64 = { workspace = true }
 
 # Serialization
-serde      = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde      = { workspace = true }
+serde_json = { workspace = true }
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { workspace = true }
 
 # Logging
-tracing            = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 # Error handling
-anyhow    = "1"
-thiserror = "1"
+anyhow    = { workspace = true }
+thiserror = { workspace = true }
 
 # Time
-chrono = { version = "0.4", features = ["serde"] }
-time   = { version = "0.3", features = ["std"] }
-
-# .env file loading
-dotenvy = "0.15"
-
-# Public Suffix List — eTLD+1 extraction for rate-limit domain grouping
-psl = "2"
+chrono = { workspace = true }
+time   = { workspace = true }
 
 # Misc
-rand      = "0.8"
-rcgen     = { version = "0.12", features = ["pem"] }
-uuid      = { version = "1", features = ["v4", "serde"] }
-arc-swap  = "1"
+dotenvy  = { workspace = true }
+psl      = "2"
+rand     = { workspace = true }
+rcgen    = { workspace = true }
+uuid     = { workspace = true, features = ["serde"] }
+arc-swap = { workspace = true }
 
 [dev-dependencies]
 credo-test = { path = "../credo-test" }
-tempfile   = "3"
-tokio      = { version = "1", features = ["full"] }
+tempfile   = { workspace = true }
+tokio      = { workspace = true }

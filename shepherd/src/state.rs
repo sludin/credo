@@ -116,8 +116,12 @@ impl AppState {
             .filter_map(|ca| ca.config.rate_limits.as_ref())
             .flat_map(|rl| {
                 [
-                    rl.certificates_per_domain.as_ref().map(|l| l.window_days as i64),
-                    rl.duplicate_certificates.as_ref().map(|l| l.window_days as i64),
+                    rl.certificates_per_domain
+                        .as_ref()
+                        .map(|l| l.window_days as i64),
+                    rl.duplicate_certificates
+                        .as_ref()
+                        .map(|l| l.window_days as i64),
                 ]
             })
             .flatten()
@@ -138,7 +142,10 @@ impl AppState {
             assignments_mtime: Arc::new(Mutex::new(None)),
             accounts_mtime: Arc::new(Mutex::new(None)),
             ca_mtime: Arc::new(Mutex::new(None)),
-            issuance_ledger: Arc::new(RwLock::new(IssuanceLedger::load(issuance_ledger_path, max_window_days))),
+            issuance_ledger: Arc::new(RwLock::new(IssuanceLedger::load(
+                issuance_ledger_path,
+                max_window_days,
+            ))),
             corgi_client_pool: Arc::new(RwLock::new(
                 match (cert_pem.as_deref(), key_pem.as_deref()) {
                     (Some(c), Some(k)) => CorgiClientPool::with_bootstrap_identity(c, k),

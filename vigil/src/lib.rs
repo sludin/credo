@@ -11,7 +11,6 @@ pub mod config;
 pub mod ctlog;
 pub mod error;
 pub mod issuance_policy;
-pub mod log_middleware;
 pub mod openssl_db;
 pub mod pki_wire;
 pub mod revocation;

@@ -10,6 +10,6 @@ pub mod types;
 
 // Convenience re-exports used by every service
 pub use error::AppError;
-pub use log::LogLevel;
+pub use log::{LogIdentity, LogLevel};
 pub use tls::PeerCertDer;
 pub use types::{ClientIdentity, HookRef, Role};

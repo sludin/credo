@@ -9,22 +9,23 @@ name = "credo_test"
 path = "src/lib.rs"
 
 [dependencies]
-vigil   = { path = "../vigil" }
-shepherd = { path = "../shepherd" }
-corgi   = { path = "../corgi" }
+credo-lib = { workspace = true }
+vigil     = { path = "../vigil" }
+shepherd  = { path = "../shepherd" }
+corgi     = { path = "../corgi" }
 
-tokio      = { version = "1", features = ["full"] }
-axum       = { version = "0.7" }
-reqwest    = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
-tempfile   = "3"
-anyhow     = "1"
-serde_json = "1"
-rcgen      = { version = "0.12", features = ["pem"] }
-time       = { version = "0.3", features = ["std"] }
-hex          = "0.4"
-sha2         = "0.10"
-x509-parser  = "0.16"
-pem          = "3"
+tokio      = { workspace = true }
+axum       = { workspace = true }
+reqwest    = { workspace = true }
+tempfile   = { workspace = true }
+anyhow     = { workspace = true }
+serde_json = { workspace = true }
+rcgen      = { workspace = true }
+time       = { workspace = true }
+hex        = { workspace = true }
+sha2       = { workspace = true }
+x509-parser = { workspace = true }
+pem        = { workspace = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full", "test-util"] }
+tokio = { workspace = true }

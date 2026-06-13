@@ -5,9 +5,9 @@ use axum::{
 };
 
 use crate::error::AppError;
-use crate::log_middleware::LogIdentity;
 use crate::state::AppState;
 use crate::types::VigilUser;
+use credo_lib::log::LogIdentity;
 
 // Re-export shared helpers so existing call sites still compile.
 pub use credo_lib::tls::PeerCertDer;

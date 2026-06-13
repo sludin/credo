@@ -9,7 +9,7 @@ use vigil::config::{CaConfig, IssuancePolicyConfig, TlsConfig, VigilConfig};
 /// Returns a minimal VigilConfig suitable only for signing CSRs via ca::sign_csr.
 /// All paths except the CA key/cert are set to non-existent temp values.
 pub fn signing_config(tmp_dir: &Path) -> VigilConfig {
-    use vigil::config::LogLevel;
+    use credo_lib::LogLevel;
     VigilConfig {
         port: 0,
         bind: "127.0.0.1".to_string(),

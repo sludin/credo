@@ -135,7 +135,7 @@ impl TestVigil {
 }
 
 pub fn build_vigil_config(tmp: &Path) -> VigilConfig {
-    use vigil::config::LogLevel;
+    use credo_lib::LogLevel;
     VigilConfig {
         port: 0,
         bind: "127.0.0.1".to_string(),

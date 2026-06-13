@@ -13,7 +13,6 @@ use serde_json::json;
 use crate::auth::{auth_middleware, AuthUser};
 use crate::bootstrap::handle_bootstrap;
 use crate::error::AppError;
-use crate::log_middleware::log_middleware;
 use crate::pki_wire::{
     build_ocsp_error_response, build_ocsp_response_from_request, build_signed_crl_der,
     build_signed_crl_pem,
@@ -36,7 +35,9 @@ pub fn build_router(state: AppState) -> Router {
             "/acme/new-nonce",
             head(crate::acme::new_nonce_head).get(crate::acme::new_nonce_get),
         )
-        .layer(middleware::from_fn(log_middleware))
+        .layer(middleware::from_fn(|req, next| {
+            credo_lib::log::log_request("V", req, next)
+        }))
         .with_state(state.clone());
 
     let acme_protected = Router::new()
@@ -57,13 +58,17 @@ pub fn build_router(state: AppState) -> Router {
             state.clone(),
             auth_middleware,
         ))
-        .layer(middleware::from_fn(log_middleware))
+        .layer(middleware::from_fn(|req, next| {
+            credo_lib::log::log_request("V", req, next)
+        }))
         .with_state(state.clone());
 
     // Bootstrap (no mTLS, ephemeral)
     let bootstrap = Router::new()
         .route("/bootstrap", post(handle_bootstrap))
-        .layer(middleware::from_fn(log_middleware))
+        .layer(middleware::from_fn(|req, next| {
+            credo_lib::log::log_request("V", req, next)
+        }))
         .with_state(state.clone());
 
     // mTLS-protected routes
@@ -83,7 +88,9 @@ pub fn build_router(state: AppState) -> Router {
             state.clone(),
             auth_middleware,
         ))
-        .layer(middleware::from_fn(log_middleware))
+        .layer(middleware::from_fn(|req, next| {
+            credo_lib::log::log_request("V", req, next)
+        }))
         .with_state(state.clone());
 
     Router::new()

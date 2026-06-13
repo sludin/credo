@@ -7,9 +7,9 @@ use credo_lib::auth::identity_from_der;
 
 use crate::error::AppError;
 use crate::jwt::verify_jwt;
-use crate::log_middleware::LogIdentity;
 use crate::state::AppState;
 use crate::types::{AuthenticatedUser, CorgiNodeConfig, Role};
+use credo_lib::log::LogIdentity;
 
 // ---------------------------------------------------------------------------
 // Corgi agent auth middleware (agent port)
