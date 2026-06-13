@@ -1,13 +1,44 @@
 use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 use crate::types::CorgiNodeConfig;
 use credo_lib::log::RequestLogEntry;
+
+const HOOKS_CACHE_TTL: Duration = Duration::from_secs(60);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CorgiHooksResponse {
+    pub available_hooks: Vec<String>,
+    pub default_hooks: Vec<String>,
+}
+
+/// Fetch the available hook list from a corgi node, using a per-node in-memory cache.
+pub async fn corgi_get_hooks(
+    pool: &Arc<RwLock<CorgiClientPool>>,
+    hooks_cache: &Arc<std::sync::Mutex<HashMap<String, (CorgiHooksResponse, Instant)>>>,
+    node: &CorgiNodeConfig,
+) -> Result<CorgiHooksResponse> {
+    {
+        let cache = hooks_cache.lock().unwrap();
+        if let Some((cached, fetched_at)) = cache.get(&node.name) {
+            if fetched_at.elapsed() < HOOKS_CACHE_TTL {
+                return Ok(cached.clone());
+            }
+        }
+    }
+    let resp: CorgiHooksResponse = corgi_get(pool, node, "/hooks").await?;
+    hooks_cache
+        .lock()
+        .unwrap()
+        .insert(node.name.clone(), (resp.clone(), Instant::now()));
+    Ok(resp)
+}
 
 fn url_hostname(url: &str) -> String {
     url.split("://")

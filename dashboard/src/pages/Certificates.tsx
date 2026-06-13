@@ -12,6 +12,7 @@ import {
   fetchActiveJob,
   fetchRateLimits,
   fetchShepherdConfigSummary,
+  fetchCorgiHooks,
   renewCert,
   createAssignment,
   updateAssignment,
@@ -74,6 +75,7 @@ type FormState = {
   validationType: 'none-01' | 'http-01' | 'dns-01';
   validationProvider: string;
   validationDdnsKey: string;
+  hooks: string[];
 };
 
 const emptyForm: FormState = {
@@ -81,6 +83,7 @@ const emptyForm: FormState = {
   letsEncryptTarget: '', domain: '', identityUri: '', sans: '',
   days: '90', renewBeforeDays: '30',
   validationType: 'none-01', validationProvider: '', validationDdnsKey: '',
+  hooks: [],
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -159,6 +162,7 @@ function assignmentToForm(a: Assignment): FormState {
     validationType: a.validation?.type === 'auto' ? 'none-01' : (a.validation?.type ?? 'none-01'),
     validationProvider: (a.validation?.methods?.['dns-01']?.provider ?? '') as string,
     validationDdnsKey: (a.validation?.methods?.['dns-01']?.providerConfig?.['ddnsKey'] ?? '') as string,
+    hooks: a.hooks ?? [],
   };
 }
 
@@ -185,6 +189,9 @@ function toAssignmentPayload(form: FormState): Record<string, unknown> {
         ? { 'dns-01': { provider: form.validationProvider.trim() || undefined, providerConfig: form.validationDdnsKey.trim() ? { ddnsKey: form.validationDdnsKey.trim() } : undefined } }
         : undefined,
     };
+  }
+  if (form.hooks.length > 0) {
+    payload.hooks = form.hooks;
   }
   Object.keys(payload).forEach(k => { if (payload[k] === undefined) delete payload[k]; });
   return payload;
@@ -472,6 +479,8 @@ export default function Certificates(): React.ReactElement {
   const [form, setForm] = useState<FormState>(emptyForm);
   const [editTarget, setEditTarget] = useState<{ certName: string; corgi: string } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [availableHooks, setAvailableHooks] = useState<string[]>([]);
+  const [defaultHooks, setDefaultHooks] = useState<string[]>([]);
 
   // Rate limits
   const [rateLimits, setRateLimits] = useState<RateLimitsPayload | null>(null);
@@ -682,6 +691,19 @@ export default function Certificates(): React.ReactElement {
     return () => { if (activeJobTimerRef.current) { clearInterval(activeJobTimerRef.current); activeJobTimerRef.current = null; } };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCertName, panelMode]);
+
+  // Fetch available hooks when the selected corgi changes
+  useEffect(() => {
+    if (!form.corgi) { setAvailableHooks([]); setDefaultHooks([]); return; }
+    fetchCorgiHooks(form.corgi).then(r => {
+      setAvailableHooks(r.availableHooks);
+      setDefaultHooks(r.defaultHooks);
+    }).catch(() => {
+      setAvailableHooks([]);
+      setDefaultHooks([]);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.corgi]);
 
   async function loadCertDetails(certName: string): Promise<void> {
     setCertDetails(null);
@@ -1080,6 +1102,46 @@ export default function Certificates(): React.ReactElement {
                         <input className="form-input" type="number" value={form.renewBeforeDays} onChange={e => setForm(f => ({ ...f, renewBeforeDays: e.target.value }))} />
                       </div>
                     </div>
+
+                    {/* Post-install hooks */}
+                    {availableHooks.length > 0 && (
+                      <div className="form-section">
+                        <div className="form-section-label">Post-install Hooks</div>
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
+                          {form.hooks.length === 0
+                            ? `Using corgi defaults: ${defaultHooks.length > 0 ? defaultHooks.join(', ') : '(none)'}`
+                            : 'Selected hooks replace corgi defaults for this cert.'}
+                        </div>
+                        {availableHooks.map(hook => (
+                          <div key={hook} className="form-row" style={{ alignItems: 'center', gap: 8 }}>
+                            <input
+                              type="checkbox"
+                              id={`hook-${hook}`}
+                              checked={form.hooks.includes(hook)}
+                              onChange={e => setForm(f => ({
+                                ...f,
+                                hooks: e.target.checked
+                                  ? [...f.hooks, hook]
+                                  : f.hooks.filter(h => h !== hook),
+                              }))}
+                            />
+                            <label htmlFor={`hook-${hook}`} style={{ cursor: 'pointer', fontFamily: 'monospace', fontSize: 13 }}>
+                              {hook}{defaultHooks.includes(hook) ? ' (default)' : ''}
+                            </label>
+                          </div>
+                        ))}
+                        {form.hooks.length > 0 && (
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            style={{ marginTop: 6 }}
+                            onClick={() => setForm(f => ({ ...f, hooks: [] }))}
+                          >
+                            Clear (use defaults)
+                          </button>
+                        )}
+                      </div>
+                    )}
 
                     {/* Validation */}
                     <div className="form-section">

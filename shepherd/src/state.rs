@@ -1,13 +1,13 @@
 use arc_swap::ArcSwap;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 use tokio::sync::{Notify, RwLock};
 use uuid::Uuid;
 
 use crate::acme_client::AcmeAccountCache;
 use crate::config::ShepherdConfig;
-use crate::corgi_client::CorgiClientPool;
+use crate::corgi_client::{CorgiClientPool, CorgiHooksResponse};
 use crate::issuance_ledger::IssuanceLedger;
 use crate::jwt::JwtKeys;
 use crate::refresh_tokens::RefreshTokenStore;
@@ -45,6 +45,8 @@ pub struct AppState {
     pub vigil_client: Arc<RwLock<Option<reqwest::Client>>>,
     /// One-time admin token for bootstrap API endpoints (None in normal mode)
     pub bootstrap_admin_token: Arc<Mutex<Option<String>>>,
+    /// Cached corgi hook lists: corgi_name → (response, fetched_at)
+    pub hooks_cache: Arc<Mutex<HashMap<String, (CorgiHooksResponse, Instant)>>>,
 }
 
 impl AppState {
@@ -115,6 +117,7 @@ impl AppState {
             in_progress: Arc::new(Mutex::new(HashMap::new())),
             vigil_client: Arc::new(RwLock::new(vigil_client)),
             bootstrap_admin_token: Arc::new(Mutex::new(admin_token)),
+            hooks_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }

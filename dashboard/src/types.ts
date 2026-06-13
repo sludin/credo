@@ -85,6 +85,7 @@ export type Assignment = {
   fingerprint256?: string;
   validation?: AssignmentValidation;
   monitor?: boolean;
+  hooks?: string[];
 };
 
 export type AssignmentsPayload = {

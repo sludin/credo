@@ -1,10 +1,10 @@
 pub mod archive;
-pub mod pid;
 pub mod auth;
 pub mod config;
 pub mod error;
 pub mod file_policy;
 pub mod log;
+pub mod pid;
 pub mod tls;
 pub mod types;
 
@@ -12,4 +12,4 @@ pub mod types;
 pub use error::AppError;
 pub use log::LogLevel;
 pub use tls::PeerCertDer;
-pub use types::{ClientIdentity, Role};
+pub use types::{ClientIdentity, HookRef, Role};

@@ -42,6 +42,7 @@ pub fn build_challenge_router(state: AppState) -> Router {
 pub fn build_control_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(routes::control_health))
+        .route("/hooks", get(routes::hooks_list))
         .route("/flock", get(routes::flock_list))
         .route("/flock/:name", get(routes::flock_get))
         .route("/flock/:name/csr", post(routes::flock_csr))

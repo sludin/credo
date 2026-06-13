@@ -217,3 +217,13 @@ export function fetchRemoteCert(host: string, port: number): Promise<CertChainPa
     `/api/cert-remote?host=${encodeURIComponent(host)}&port=${port}`,
   );
 }
+
+export type CorgiHooksPayload = {
+  corgiId: string;
+  availableHooks: string[];
+  defaultHooks: string[];
+};
+
+export function fetchCorgiHooks(corgiId: string): Promise<CorgiHooksPayload> {
+  return requestJson<CorgiHooksPayload>(`/api/corgis/${encodeURIComponent(corgiId)}/hooks`);
+}

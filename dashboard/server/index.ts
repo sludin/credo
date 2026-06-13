@@ -610,6 +610,12 @@ async function main(): Promise<void> {
     res.status(204).end();
   }));
 
+  // ── Corgi hook discovery ───────────────────────────────────────────────────
+  app.get('/api/corgis/:id/hooks', asyncHandler(async (req: Request, res: Response) => {
+    const response = await clients.api.get(`/admin/corgis/${encodeURIComponent(req.params.id)}/hooks`);
+    res.json(response.data);
+  }));
+
   // ── CA config ──────────────────────────────────────────────────────────────
   app.get('/api/admin/cas', asyncHandler(async (_req: Request, res: Response) => {
     const response = await clients.api.get('/admin/cas');

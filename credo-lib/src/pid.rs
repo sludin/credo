@@ -66,8 +66,7 @@ pub fn stop_service(pid_path: &Path, timeout_secs: u64) -> Result<()> {
     kill(Pid::from_raw(pid as i32), Signal::SIGTERM)
         .with_context(|| format!("failed to send SIGTERM to PID {}", pid))?;
 
-    let deadline =
-        std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     while std::time::Instant::now() < deadline {
         if !is_running(pid) {
             return Ok(());
@@ -75,7 +74,11 @@ pub fn stop_service(pid_path: &Path, timeout_secs: u64) -> Result<()> {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    bail!("service (PID {}) did not stop within {}s", pid, timeout_secs)
+    bail!(
+        "service (PID {}) did not stop within {}s",
+        pid,
+        timeout_secs
+    )
 }
 
 #[cfg(test)]

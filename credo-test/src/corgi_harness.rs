@@ -291,6 +291,5 @@ fn build_corgi_config(tmp: &Path, cert_store_dir: &Path) -> CorgiConfig {
             cert_mode: None,
             key_mode: None,
         },
-        cert_hooks: HashMap::new(),
     }
 }

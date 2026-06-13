@@ -178,6 +178,20 @@ pub async fn flock_restart(
     Ok(Json(json!({ "restarted": true, "results": results })))
 }
 
+pub async fn hooks_list(
+    State(state): State<AppState>,
+    role: Option<Extension<Role>>,
+) -> Result<Json<Value>, AppError> {
+    check_min_role(role.as_ref().map(|e| &e.0), &Role::Readonly)?;
+    let config = state.config.load_full();
+    let available: Vec<&str> = config.service_hooks.keys().map(|s| s.as_str()).collect();
+    let defaults: Vec<&str> = config.default_hooks.iter().map(|h| h.name()).collect();
+    Ok(Json(json!({
+        "availableHooks": available,
+        "defaultHooks": defaults,
+    })))
+}
+
 pub async fn sync_assignments(
     State(state): State<AppState>,
     role: Option<Extension<Role>>,
