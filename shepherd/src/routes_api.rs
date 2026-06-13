@@ -775,9 +775,15 @@ async fn admin_provision_or_renew(
                 }
 
                 complete_job(&state2.renewal_jobs, job_id, result.fingerprint256.clone()).await;
+                if let Some(path) = &state2.renewal_jobs_history_path {
+                    crate::renewal_jobs::persist_terminal_jobs(&state2.renewal_jobs, path).await;
+                }
             }
             Err(e) => {
                 fail_job(&state2.renewal_jobs, job_id, e.to_string()).await;
+                if let Some(path) = &state2.renewal_jobs_history_path {
+                    crate::renewal_jobs::persist_terminal_jobs(&state2.renewal_jobs, path).await;
+                }
                 tracing::warn!(cert = %cert_name2, error = %e, "Admin-triggered renewal failed");
             }
         }

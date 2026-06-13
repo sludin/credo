@@ -385,6 +385,9 @@ async fn cert_maintenance(
                 format!("CA '{}' not configured", assignment.ca),
             )
             .await;
+            if let Some(path) = &state.renewal_jobs_history_path {
+                crate::renewal_jobs::persist_terminal_jobs(&state.renewal_jobs, path).await;
+            }
             anyhow::bail!("CA '{}' not configured", assignment.ca);
         }
     };
@@ -420,6 +423,9 @@ async fn cert_maintenance(
             }
             let msg = format!("{:#}", e);
             fail_job(&state.renewal_jobs, job_id, msg.clone()).await;
+            if let Some(path) = &state.renewal_jobs_history_path {
+                crate::renewal_jobs::persist_terminal_jobs(&state.renewal_jobs, path).await;
+            }
             anyhow::bail!("Renewal failed: {msg}");
         }
         Ok(issued) => {
@@ -484,6 +490,9 @@ async fn cert_maintenance(
             }
 
             complete_job(&state.renewal_jobs, job_id, issued.fingerprint256.clone()).await;
+            if let Some(path) = &state.renewal_jobs_history_path {
+                crate::renewal_jobs::persist_terminal_jobs(&state.renewal_jobs, path).await;
+            }
         }
     }
 

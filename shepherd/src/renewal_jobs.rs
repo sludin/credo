@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -80,6 +81,53 @@ pub async fn append_trace(
             identifier: identifier.map(str::to_string),
             status: status.map(str::to_string),
         });
+    }
+}
+
+/// Load terminal jobs from a JSON file written by `persist_terminal_jobs`.
+/// Missing file → empty map (first run). Corrupt file → warn and start empty.
+pub fn load_terminal_jobs_sync(path: &Path) -> HashMap<Uuid, RenewalJob> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => match serde_json::from_str::<Vec<RenewalJob>>(&content) {
+            Ok(jobs) => {
+                tracing::info!(
+                    path = %path.display(),
+                    count = jobs.len(),
+                    "Loaded renewal job history"
+                );
+                jobs.into_iter().map(|j| (j.id, j)).collect()
+            }
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e,
+                    "Failed to parse renewal job history; starting empty");
+                HashMap::new()
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e,
+                "Failed to read renewal job history; starting empty");
+            HashMap::new()
+        }
+    }
+}
+
+/// Write all terminal jobs in the store to a JSON file.
+/// Called after complete_job / fail_job so history survives shepherd restarts.
+pub async fn persist_terminal_jobs(store: &JobStore, path: &Path) {
+    let jobs = store.read().await;
+    let terminal: Vec<&RenewalJob> = jobs
+        .values()
+        .filter(|j| j.phase.is_terminal())
+        .collect();
+    match serde_json::to_string_pretty(&terminal) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(path, json) {
+                tracing::warn!(path = %path.display(), error = %e,
+                    "Failed to persist renewal job history");
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "Failed to serialize renewal jobs"),
     }
 }
 

@@ -378,7 +378,7 @@ function ActiveJobSection({ job }: { job: LastRenewalJob }): React.ReactElement 
 
 function LastJobSection({ job, expanded, onToggle }: { job: LastRenewalJob; expanded: boolean; onToggle: () => void }): React.ReactElement {
   const phaseColor = job.phase === 'completed' ? 'var(--green)' : job.phase === 'failed' ? 'var(--red)' : 'var(--muted)';
-  const jobDate = new Date(job.updatedAt * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  const jobDate = new Date(job.updatedAt * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   return (
     <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
       <div className="field-row">
@@ -456,6 +456,7 @@ export default function Certificates(): React.ReactElement {
   const [logsExpanded, setLogsExpanded] = useState(false);
   const [activeJob, setActiveJob] = useState<LastRenewalJob | null>(null);
   const activeJobTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [renewTrigger, setRenewTrigger] = useState(0);
 
   // Form state
   const [form, setForm] = useState<FormState>(emptyForm);
@@ -662,9 +663,10 @@ export default function Certificates(): React.ReactElement {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCertName, panelMode]);
 
-  // Poll active job for selected cert.
-  // Keeps running while the panel is open so clicking Renew updates within 2s.
-  // Stops only when a terminal job is detected (job just finished).
+  // Poll for the active renewal job every 2s.
+  // Starts on panel open (catches in-progress renewals) and re-starts each time
+  // handleRenew() increments renewTrigger. Stops as soon as there is no active job
+  // so it does not poll continuously when nothing is renewing.
   useEffect(() => {
     if (activeJobTimerRef.current) { clearInterval(activeJobTimerRef.current); activeJobTimerRef.current = null; }
     if (!selectedCertName || panelMode === 'edit' || panelMode === 'new') return;
@@ -679,14 +681,13 @@ export default function Certificates(): React.ReactElement {
         } else {
           setActiveJob(null);
           if (hadActiveJob) {
-            // Job just finished — load last job, clear badge, stop polling.
+            // Transition active → done: reload last job, clear Error badge, stop.
             hadActiveJob = false;
             void fetchLastJob(certName).then(j => setLastJob(j)).catch(() => {});
-            if (activeJobTimerRef.current) { clearInterval(activeJobTimerRef.current); activeJobTimerRef.current = null; }
             refresh();
           }
-          // If never had an active job (null from the start), keep polling
-          // so a subsequent Renew click is picked up within 2s.
+          // No active job (initial check or post-completion) — stop polling.
+          if (activeJobTimerRef.current) { clearInterval(activeJobTimerRef.current); activeJobTimerRef.current = null; }
         }
       } catch { /* ignore */ }
     }
@@ -694,7 +695,7 @@ export default function Certificates(): React.ReactElement {
     activeJobTimerRef.current = setInterval(() => { void pollActive(); }, 2000);
     return () => { if (activeJobTimerRef.current) { clearInterval(activeJobTimerRef.current); activeJobTimerRef.current = null; } };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCertName, panelMode]);
+  }, [selectedCertName, panelMode, renewTrigger]);
 
   // Fetch available hooks when the selected corgi changes; prune hooksList if hooks moved away.
   useEffect(() => {
@@ -736,6 +737,7 @@ export default function Certificates(): React.ReactElement {
     try {
       await renewCert(selectedCertName, row.corgi);
       setToast({ msg: `Renewal triggered for ${selectedCertName}` });
+      setRenewTrigger(t => t + 1); // restart the 2s active-job poller
       refresh();
     } catch (err) {
       setToast({ msg: err instanceof Error ? err.message : 'Failed to trigger renewal', error: true });
@@ -907,9 +909,9 @@ export default function Certificates(): React.ReactElement {
                         className="btn btn-ghost btn-sm"
                         style={canEdit ? undefined : { marginLeft: 'auto' }}
                         onClick={() => { void handleRenew(); }}
-                        disabled={renewing}
+                        disabled={renewing || activeJob !== null}
                       >
-                        {renewing ? 'Renewing…' : 'Renew'}
+                        {renewing || activeJob !== null ? 'Renewing…' : 'Renew'}
                       </button>
                     )}
                     <button

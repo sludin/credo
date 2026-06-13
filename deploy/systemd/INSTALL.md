@@ -26,10 +26,10 @@ The `ssl-cert` group must already exist (it is created by the `ssl-cert` Debian/
 ## 2. Set data directory ownership
 
 ```bash
-sudo chown shepherd:shepherd  /var/apps/credo/shepherd
-sudo chown vigil:vigil        /var/apps/credo/vigil
-sudo chown corgi:corgi        /var/apps/credo/corgi
-sudo chown dashboard:dashboard /var/apps/credo/dashboard
+sudo chown shepherd:credo  /var/apps/credo/shepherd
+sudo chown vigil:credo        /var/apps/credo/vigil
+sudo chown corgi:credo        /var/apps/credo/corgi
+sudo chown dashboard:credo /var/apps/credo/dashboard
 ```
 
 ## 3. Install unit files
@@ -46,6 +46,7 @@ sudo systemctl daemon-reload
 ```bash
 sudo systemctl enable --now credo-vigil
 sudo systemctl enable --now credo-shepherd
+sudo systemctl enable --now credo-corgi
 sudo systemctl enable --now credo-dashboard
 ```
 

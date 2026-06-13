@@ -1,5 +1,6 @@
 use arc_swap::ArcSwap;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Instant, SystemTime};
 use tokio::sync::{Notify, RwLock};
@@ -47,6 +48,8 @@ pub struct AppState {
     pub bootstrap_admin_token: Arc<Mutex<Option<String>>>,
     /// Cached corgi hook lists: corgi_name → (response, fetched_at)
     pub hooks_cache: Arc<Mutex<HashMap<String, (CorgiHooksResponse, Instant)>>>,
+    /// Path to write terminal renewal job history (None = no persistence)
+    pub renewal_jobs_history_path: Option<PathBuf>,
 }
 
 impl AppState {
@@ -75,6 +78,25 @@ impl AppState {
                     .map(|p| p.join("shepherd-refresh-tokens.json"))
             });
 
+        // Derive renewal job history path (terminal jobs persisted here so they
+        // survive shepherd restarts). Prefer renewalJobsDir; fall back to same
+        // directory as the assignments config.
+        let renewal_jobs_history_path = config
+            .renewal_jobs_dir
+            .as_ref()
+            .map(|d| d.join("shepherd.renewal-jobs.json"))
+            .or_else(|| {
+                config
+                    .assignments_config_path
+                    .parent()
+                    .map(|p| p.join("shepherd.renewal-jobs.json"))
+            });
+
+        let initial_jobs = renewal_jobs_history_path
+            .as_ref()
+            .map(|p| crate::renewal_jobs::load_terminal_jobs_sync(p))
+            .unwrap_or_default();
+
         let vigil_client = if config.vigil_url.is_some() {
             match build_vigil_client(&config, &cas, cert_pem.as_deref(), key_pem.as_deref()) {
                 Ok(c) => Some(c),
@@ -93,7 +115,7 @@ impl AppState {
             config: Arc::new(ArcSwap::from_pointee(config)),
             jwt_keys: Arc::new(jwt_keys),
             corgi_state: Arc::new(RwLock::new(HashMap::new())),
-            renewal_jobs: Arc::new(RwLock::new(HashMap::new())),
+            renewal_jobs: Arc::new(RwLock::new(initial_jobs)),
             accounts: Arc::new(RwLock::new(accounts)),
             refresh_tokens: Arc::new(RefreshTokenStore::new(refresh_token_path)),
             assignments: Arc::new(RwLock::new(vec![])),
@@ -118,6 +140,7 @@ impl AppState {
             vigil_client: Arc::new(RwLock::new(vigil_client)),
             bootstrap_admin_token: Arc::new(Mutex::new(admin_token)),
             hooks_cache: Arc::new(Mutex::new(HashMap::new())),
+            renewal_jobs_history_path,
         }
     }
 }
