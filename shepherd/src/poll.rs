@@ -399,6 +399,8 @@ async fn cert_maintenance(
         &corgis,
         &state.acme_accounts,
         &state.issuance_ledger,
+        &state.renewal_jobs,
+        job_id,
     )
     .await;
 

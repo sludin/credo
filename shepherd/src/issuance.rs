@@ -4,12 +4,15 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
 
+use uuid::Uuid;
+
 use crate::acme_client::AcmeAccountCache;
 use crate::cert_store::persist_issued_material;
 use crate::corgi_client::{corgi_delete, corgi_post, CorgiClientPool};
 use crate::dns_providers::{create_provider, DnsProviderContext};
 use crate::issuance_ledger::{canonical_sans, extract_registered_domain, IssuanceLedger};
-use crate::types::{AcmeCaConfig, CorgiNodeConfig, IssuanceEvent, ManagedAssignment};
+use crate::renewal_jobs::{append_trace, update_phase, JobStore};
+use crate::types::{AcmeCaConfig, CorgiNodeConfig, IssuanceEvent, ManagedAssignment, RenewalPhase};
 
 // ---------------------------------------------------------------------------
 // Public result type
@@ -60,6 +63,8 @@ pub async fn issue_cert(
     corgis: &[CorgiNodeConfig],
     account_cache: &AcmeAccountCache,
     ledger: &Arc<RwLock<IssuanceLedger>>,
+    jobs: &JobStore,
+    job_id: Uuid,
 ) -> Result<IssuanceResult> {
     if domains.is_empty() {
         anyhow::bail!("at least one domain is required for ACME issuance of '{cert_name}'");
@@ -73,6 +78,8 @@ pub async fn issue_cert(
             return Err(anyhow::anyhow!(RateLimitedError { retry_after }));
         }
     }
+
+    append_trace(jobs, job_id, "order-submitted", Some(ca_name), None, None).await;
 
     let csr_der = pem_to_csr_der(csr_pem)
         .ok_or_else(|| anyhow::anyhow!("Could not parse CSR PEM for '{cert_name}'"))?;
@@ -109,6 +116,8 @@ pub async fn issue_cert(
         assignment,
         pool,
         corgis,
+        jobs,
+        job_id,
     )
     .await
     .with_context(|| format!("ACME issuance for '{cert_name}' via CA '{ca_name}'"))?;
@@ -177,6 +186,8 @@ async fn run_issuance(
     assignment: &ManagedAssignment,
     pool: &Arc<RwLock<CorgiClientPool>>,
     corgis: &[CorgiNodeConfig],
+    jobs: &JobStore,
+    job_id: Uuid,
 ) -> Result<String> {
     let identifiers: Vec<Identifier> = domains.iter().map(|d| Identifier::Dns(d.clone())).collect();
 
@@ -200,6 +211,17 @@ async fn run_issuance(
         .await
         .context("Fetching ACME authorizations")?;
     tracing::debug!(cert = %cert_name, count = authorizations.len(), "ACME authorizations loaded");
+
+    update_phase(jobs, job_id, RenewalPhase::Validating).await;
+    append_trace(
+        jobs,
+        job_id,
+        "validating-domains",
+        Some(&format!("{} domain(s)", authorizations.len())),
+        None,
+        None,
+    )
+    .await;
 
     // DNS cleanups deferred until after cert is issued
     #[allow(clippy::type_complexity)]
@@ -357,10 +379,21 @@ async fn run_issuance(
             .set_challenge_ready(&challenge.url)
             .await
             .with_context(|| format!("Submitting challenge ready for '{domain}'"))?;
+        append_trace(
+            jobs,
+            job_id,
+            "challenge-ready",
+            Some(validation_method),
+            Some(domain),
+            Some("waiting"),
+        )
+        .await;
     }
 
     // Poll order status until Ready (all authorizations valid)
     let order_state = wait_for_order_ready(cert_name, ca_name, &mut order).await?;
+    update_phase(jobs, job_id, RenewalPhase::Finalizing).await;
+    append_trace(jobs, job_id, "order-ready", None, None, Some("ok")).await;
     if order_state == OrderStatus::Invalid {
         let detail = order
             .state()
@@ -387,6 +420,7 @@ async fn run_issuance(
 
     // Get certificate (poll until available)
     let cert_chain = wait_for_certificate(cert_name, ca_name, &mut order).await?;
+    append_trace(jobs, job_id, "certificate-issued", None, None, Some("ok")).await;
 
     // Run deferred cleanups
     for cleanup in deferred_cleanups {
@@ -740,4 +774,42 @@ fn urlencoded(s: &str) -> String {
             _ => format!("%{:02X}", c as u8),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[allow(dead_code)]
+    fn _issue_cert_accepts_job_store(
+        ca_config: &AcmeCaConfig,
+        ca_name: &str,
+        cert_name: &str,
+        cert_store_dir: &std::path::Path,
+        domains: &[String],
+        csr_pem: &str,
+        assignment: &ManagedAssignment,
+        pool: &Arc<RwLock<CorgiClientPool>>,
+        corgis: &[CorgiNodeConfig],
+        account_cache: &AcmeAccountCache,
+        ledger: &Arc<RwLock<IssuanceLedger>>,
+        jobs: &JobStore,
+        job_id: Uuid,
+    ) {
+        let _ = issue_cert(
+            ca_config,
+            ca_name,
+            cert_name,
+            cert_store_dir,
+            domains,
+            csr_pem,
+            assignment,
+            pool,
+            corgis,
+            account_cache,
+            ledger,
+            jobs,
+            job_id,
+        );
+    }
 }

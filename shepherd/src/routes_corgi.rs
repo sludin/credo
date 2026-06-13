@@ -132,6 +132,15 @@ pub async fn provision_cert(
     let domains = build_domains(&assignment);
     let store_dir = state.config.load().cert_store_dir.clone();
 
+    let job_id = create_job(
+        &state.renewal_jobs,
+        &cert_name,
+        domains.clone(),
+        &assignment.ca,
+    )
+    .await;
+    update_phase(&state.renewal_jobs, job_id, RenewalPhase::SubmittingOrder).await;
+
     let result = issue_cert(
         &ca_config,
         &assignment.ca,
@@ -144,9 +153,17 @@ pub async fn provision_cert(
         &corgis,
         &state.acme_accounts,
         &state.issuance_ledger,
+        &state.renewal_jobs,
+        job_id,
     )
     .await
-    .map_err(AppError::Internal)?;
+    .map_err(|e| {
+        let msg = format!("{e:#}");
+        let store = state.renewal_jobs.clone();
+        tokio::spawn(async move { fail_job(&store, job_id, msg).await });
+        AppError::Internal(e)
+    })?;
+    complete_job(&state.renewal_jobs, job_id, result.fingerprint256.clone()).await;
 
     // Install on corgi
     if result.changed {
@@ -269,6 +286,8 @@ pub async fn renew_cert(
             &corgis,
             &state2.acme_accounts,
             &state2.issuance_ledger,
+            &state2.renewal_jobs,
+            job_id,
         )
         .await
         {

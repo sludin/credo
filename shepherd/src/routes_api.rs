@@ -720,6 +720,8 @@ async fn admin_provision_or_renew(
             &corgis,
             &state2.acme_accounts,
             &state2.issuance_ledger,
+            &state2.renewal_jobs,
+            job_id,
         )
         .await
         {
