@@ -179,6 +179,30 @@ Defines the certificate authorities Shepherd uses for ACME issuance. Each entry 
 }
 ```
 
+#### `rateLimits` (optional)
+
+Per-CA rate limiting for certificate issuance. If absent, no rate limits are enforced for this CA. Configure this for public CAs (e.g. Let's Encrypt) to track and respect their quotas; omit for private CAs (e.g. Vigil) and staging environments.
+
+```json
+"rateLimits": {
+  "certificatesPerDomain": { "count": 50, "windowDays": 7 },
+  "duplicateCertificates": { "count": 5, "windowDays": 7 }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `certificatesPerDomain` | object \| omit | Limit issuances per registered domain (eTLD+1). Omit for no limit on this category. |
+| `duplicateCertificates` | object \| omit | Limit re-issuances of the exact same SAN set. Omit for no limit on this category. |
+| `count` | integer | Maximum certificates allowed within the window. |
+| `windowDays` | integer | Rolling window duration in days. |
+
+**Examples:**
+- Let's Encrypt production: `certificatesPerDomain: {count: 50, windowDays: 7}`, `duplicateCertificates: {count: 5, windowDays: 7}`
+- Vigil / LE Staging: omit `rateLimits` (no limits enforced)
+
+> **Note:** The issuance ledger's prune window is set at startup to the maximum `windowDays` across all configured CAs (default: 7 days). If you add a CA with a longer window after startup, restart shepherd to avoid pruning needed events.
+
 ### `shepherd.accounts.json`
 
 RBAC identity registry. Each account maps one or more Vigil URI SANs to a role (`admin`, `operator`, `readonly`).

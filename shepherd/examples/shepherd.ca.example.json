@@ -17,6 +17,34 @@
         "tlsKey":  "${corgiRoot}/store/live/shepherd.${vigilDomain}/privkey.pem",
         "ca":      "${caTrustPath}"
       }
+    },
+
+    "letsencrypt": {
+      "protocol": "acme",
+      "provider": "letsencrypt",
+      "config": {
+        "directoryUrl": "https://acme-v02.api.letsencrypt.org/directory",
+        "accountEmail": "ops@${domain}",
+        "accountKeyPath": "./le-account.pem",
+        "supportedValidations": ["http-01", "dns-01"],
+        "defaultValidation": "http-01",
+        "rateLimits": {
+          "certificatesPerDomain": { "count": 50, "windowDays": 7 },
+          "duplicateCertificates": { "count": 5, "windowDays": 7 }
+        }
+      }
+    },
+
+    "letsencrypt-staging": {
+      "protocol": "acme",
+      "provider": "letsencrypt-staging",
+      "config": {
+        "directoryUrl": "https://acme-staging-v02.api.letsencrypt.org/directory",
+        "accountEmail": "ops@${domain}",
+        "accountKeyPath": "./le-staging-account.pem",
+        "supportedValidations": ["http-01", "dns-01"],
+        "defaultValidation": "http-01"
+      }
     }
   }
 }
