@@ -387,7 +387,8 @@ pub async fn get_certstore_fullchain(
 #[derive(serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct RenewalJobsQuery {
-    pub active: Option<bool>,
+    /// "true" filters to non-terminal jobs; absent or any other value = no filter.
+    pub active: Option<String>,
     pub cert_name: Option<String>,
 }
 
@@ -401,7 +402,7 @@ pub async fn get_renewal_jobs(
     let jobs_list: Vec<_> = jobs
         .values()
         .filter(|j| {
-            if params.active == Some(true) && j.phase.is_terminal() {
+            if params.active.as_deref() == Some("true") && j.phase.is_terminal() {
                 return false;
             }
             if let Some(ref name) = params.cert_name {
@@ -1282,11 +1283,11 @@ mod tests {
     #[test]
     fn renewal_jobs_query_struct_has_cert_name() {
         let q = RenewalJobsQuery {
-            active: Some(true),
+            active: Some("true".into()),
             cert_name: Some("foo.com".into()),
         };
         assert_eq!(q.cert_name.as_deref(), Some("foo.com"));
-        assert_eq!(q.active, Some(true));
+        assert_eq!(q.active.as_deref(), Some("true"));
     }
 }
 
