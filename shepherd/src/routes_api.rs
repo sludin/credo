@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::Json;
 use chrono::Utc;
 use serde_json::json;
@@ -384,13 +384,34 @@ pub async fn get_certstore_fullchain(
     Ok(([(header::CONTENT_TYPE, "text/plain")], pem))
 }
 
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RenewalJobsQuery {
+    pub active: Option<bool>,
+    pub cert_name: Option<String>,
+}
+
 pub async fn get_renewal_jobs(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Query(params): Query<RenewalJobsQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
     let jobs = state.renewal_jobs.read().await;
-    let jobs_list: Vec<_> = jobs.values().collect();
+    let jobs_list: Vec<_> = jobs
+        .values()
+        .filter(|j| {
+            if params.active == Some(true) && j.phase.is_terminal() {
+                return false;
+            }
+            if let Some(ref name) = params.cert_name {
+                if &j.cert_name != name {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
     Ok(Json(json!({ "jobs": jobs_list })))
 }
 
@@ -1201,6 +1222,32 @@ fn csr_has_no_dns_sans(csr_pem: &str) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::RenewalPhase;
+
+    #[test]
+    fn renewal_jobs_query_active_excludes_terminal() {
+        assert!(RenewalPhase::Completed.is_terminal());
+        assert!(RenewalPhase::Failed.is_terminal());
+        assert!(RenewalPhase::Cancelled.is_terminal());
+        assert!(!RenewalPhase::Validating.is_terminal());
+        assert!(!RenewalPhase::RateLimited.is_terminal());
+        assert!(!RenewalPhase::Installing.is_terminal());
+    }
+
+    #[test]
+    fn renewal_jobs_query_struct_has_cert_name() {
+        let q = RenewalJobsQuery {
+            active: Some(true),
+            cert_name: Some("foo.com".into()),
+        };
+        assert_eq!(q.cert_name.as_deref(), Some("foo.com"));
+        assert_eq!(q.active, Some(true));
+    }
 }
 
 /// Verify the PoP signature:
