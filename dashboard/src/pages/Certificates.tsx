@@ -671,11 +671,13 @@ export default function Certificates(): React.ReactElement {
     async function pollActive(): Promise<void> {
       try {
         const job = await fetchActiveJob(certName);
-        setActiveJob(job);
         if (!job || TERMINAL.includes(job.phase)) {
+          setActiveJob(null);
           void fetchLastJob(certName).then(j => setLastJob(j)).catch(() => {});
           if (activeJobTimerRef.current) { clearInterval(activeJobTimerRef.current); activeJobTimerRef.current = null; }
           refresh();
+        } else {
+          setActiveJob(job);
         }
       } catch { /* ignore */ }
     }
