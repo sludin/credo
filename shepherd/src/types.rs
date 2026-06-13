@@ -179,6 +179,16 @@ impl RenewalPhase {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TraceEntry {
+    pub at: String,
+    pub step: String,
+    pub detail: Option<String>,
+    pub identifier: Option<String>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RenewalJob {
     pub id: Uuid,
     pub cert_name: String,
@@ -190,7 +200,7 @@ pub struct RenewalJob {
     pub error: Option<String>,
     pub fingerprint256: Option<String>,
     #[serde(default)]
-    pub trace: Vec<String>,
+    pub trace: Vec<TraceEntry>,
     pub rate_limited_until: Option<DateTime<Utc>>,
 }
 
