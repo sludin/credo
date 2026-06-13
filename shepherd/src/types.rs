@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-pub use credo_lib::types::Role;
+pub use credo_lib::types::{HookRef, Role};
 
 // ---------------------------------------------------------------------------
 // Account (RBAC — identities[] only, no credentials field)
@@ -134,6 +134,10 @@ pub struct ManagedAssignment {
     pub key_owner: Option<String>,
     pub key_group: Option<String>,
     pub key_algorithm: Option<String>,
+    /// Hook names to run on the corgi after cert install.
+    /// None/absent = inherit corgi's defaultHooks. Some([]) = explicitly no hooks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hooks: Option<Vec<HookRef>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

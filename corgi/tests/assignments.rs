@@ -68,7 +68,6 @@ fn make_config(dir: &TempDir) -> corgi::config::CorgiConfig {
             cert_mode: None,
             key_mode: None,
         },
-        cert_hooks: HashMap::new(),
     }
 }
 
@@ -82,7 +81,7 @@ fn base_entry(name: &str, dir: &TempDir) -> FlockEntry {
         csr_path: None,
         domain: Some(format!("{name}.credo.test")),
         monitor: false,
-        hooks: vec![],
+        hooks: None,
         csr_subject: None,
         identity_uri: None,
         sans: vec![],
@@ -107,7 +106,7 @@ fn assignment(cert_name: &str) -> ManagedAssignment {
         domain: None,
         identity_uri: None,
         monitor: None,
-        hooks: vec![],
+        hooks: None,
         csr_subject: None,
         sans: vec![],
         restart: None,
@@ -243,4 +242,53 @@ fn multiple_assignments_all_merged() {
     );
 
     assert_eq!(merged.len(), 2);
+}
+
+/// Assignment with hooks=None inherits the corgi defaultHooks (None propagates).
+#[test]
+fn assignment_absent_hooks_inherits_defaults() {
+    let dir = TempDir::new().unwrap();
+    let config = make_config(&dir);
+    let config_flock = vec![base_entry("cert-a", &dir)];
+
+    let a = assignment("cert-a"); // hooks: None
+    let merged = merge_assignments(&config_flock, &[a], &config);
+
+    assert!(
+        merged[0].hooks.is_none(),
+        "None hooks must be preserved so run_hooks can fall back to defaultHooks"
+    );
+}
+
+/// Assignment with hooks=Some([]) suppresses all hooks, including defaultHooks.
+#[test]
+fn assignment_empty_hooks_suppresses_defaults() {
+    let dir = TempDir::new().unwrap();
+    let config = make_config(&dir);
+    let config_flock = vec![base_entry("cert-b", &dir)];
+
+    let mut a = assignment("cert-b");
+    a.hooks = Some(vec![]);
+    let merged = merge_assignments(&config_flock, &[a], &config);
+
+    assert_eq!(
+        merged[0].hooks,
+        Some(vec![]),
+        "Some([]) hooks must be preserved to suppress defaultHooks at runtime"
+    );
+}
+
+/// Flock entry with hooks=None inherits defaultHooks (no override in config).
+#[test]
+fn flock_entry_absent_hooks_inherits_defaults() {
+    let dir = TempDir::new().unwrap();
+    let config = make_config(&dir);
+    let entry = base_entry("cert-c", &dir); // hooks: None
+
+    let merged = merge_assignments(&[entry], &[], &config);
+
+    assert!(
+        merged[0].hooks.is_none(),
+        "flock entry with no hooks must inherit defaultHooks at runtime"
+    );
 }

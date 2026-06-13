@@ -15,35 +15,17 @@ pub struct HookResult {
     pub stderr: String,
 }
 
-/// Execute all hooks for a flock entry (defaultHooks + entry hooks), deduplicated.
+/// Execute all hooks for a flock entry.
+/// Uses entry.hooks when set; falls back to config.default_hooks when None.
 pub async fn run_hooks(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResult> {
-    let mut all_refs: Vec<HookRef> = config.default_hooks.clone();
-    all_refs.extend(entry.hooks.clone());
-
-    // Deduplicate by (name, args) serialized key
-    let mut seen = HashSet::new();
-    let mut deduped: Vec<HookRef> = vec![];
-    for r in all_refs {
-        let key = match &r {
-            HookRef::Simple(s) => s.clone(),
-            HookRef::Parameterized { name, args } => {
-                let mut pairs: Vec<_> = args.iter().collect();
-                pairs.sort_by_key(|(k, _)| *k);
-                format!(
-                    "{}:{}",
-                    name,
-                    serde_json::to_string(&pairs).unwrap_or_default()
-                )
-            }
-        };
-        if seen.insert(key) {
-            deduped.push(r);
-        }
-    }
+    let refs: &[HookRef] = match &entry.hooks {
+        Some(h) => h,
+        None => &config.default_hooks,
+    };
 
     let mut results = vec![];
 
-    for hook_ref in deduped {
+    for hook_ref in refs {
         let hook_name = hook_ref.name().to_string();
         let hook_def = match config.service_hooks.get(&hook_name) {
             Some(d) => d,
@@ -263,7 +245,7 @@ pub fn validate_hooks(config: &CorgiConfig) {
     let all_refs: Vec<_> = config
         .default_hooks
         .iter()
-        .chain(config.flock.iter().flat_map(|e| e.hooks.iter()))
+        .chain(config.flock.iter().flat_map(|e| e.hooks.iter().flatten()))
         .map(|r| r.name().to_string())
         .collect();
 
