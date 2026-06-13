@@ -19,6 +19,7 @@ import {
   deleteAssignment,
 } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
+import { deriveStatus, statusTone, statusLabel, type UnifiedStatus } from './Certificates.testable';
 import { Topbar } from '../components/Shell';
 import { usePermission } from '../hooks/usePermission';
 import type {
@@ -34,8 +35,6 @@ import type {
 } from '../types';
 
 // ── Types ──────────────────────────────────────────────────────────────────
-
-type UnifiedStatus = 'valid' | 'renewing' | 'expiring' | 'diff' | 'none' | 'error';
 
 type UnifiedCertRow = {
   certName: string;
@@ -230,52 +229,16 @@ function HookAddRow({ remaining, onAdd }: { remaining: string[]; onAdd: (hook: s
   );
 }
 
-function deriveStatus(
-  assignment: Assignment,
-  flockCert: FlockCert | null,
-  certEntry: CertStoreEntry | null,
-  daysLeft: number | null,
-  isRenewing: boolean,
-  actualDnsSans: string[] | null,
-): UnifiedStatus {
-  if (isRenewing) return 'renewing';
-  if (!flockCert && !certEntry?.exists) return 'none';
-  if (flockCert?.status === 'not-ok') return 'error';
-  if (daysLeft !== null && daysLeft < 0) return 'error';
-  // SAN mismatch check
-  if (actualDnsSans && actualDnsSans.length > 0) {
-    const configuredSans = [...new Set([assignment.domain ?? assignment.certName, ...(assignment.sans ?? [])].filter(Boolean) as string[])];
-    const configSet = new Set(configuredSans);
-    const actualSet = new Set(actualDnsSans);
-    const hasMismatch = configuredSans.some(s => !actualSet.has(s)) || actualDnsSans.some(s => !configSet.has(s));
-    if (hasMismatch) return 'diff';
-  }
-  const renewBefore = assignment.renewBeforeDays ?? 30;
-  if (daysLeft !== null && daysLeft <= renewBefore) return 'expiring';
-  return 'valid';
-}
-
-function statusTone(s: UnifiedStatus): 'green' | 'yellow' | 'red' | 'blue' | 'muted' {
-  if (s === 'valid') return 'green';
-  if (s === 'expiring' || s === 'diff') return 'yellow';
-  if (s === 'error') return 'red';
-  if (s === 'renewing') return 'blue';
-  return 'muted';
-}
-
-function statusLabel(s: UnifiedStatus, daysLeft: number | null): string {
-  if (s === 'valid') return 'Valid';
-  if (s === 'expiring') return daysLeft !== null ? `Expiring ${daysLeft}d` : 'Expiring';
-  if (s === 'diff') return 'Diff';
-  if (s === 'error') return 'Error';
-  if (s === 'renewing') return 'Renewing';
-  return 'None';
-}
-
 const PHASE_LABELS: Record<string, string> = {
-  queued: 'Queued', validating: 'Validating domains', ordering: 'Placing ACME order',
-  issuing: 'Issuing certificate', installing: 'Installing certificate',
-  completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled',
+  queued:             'Queued',
+  'submitting-order': 'Submitting ACME order',
+  validating:         'Validating domains',
+  finalizing:         'Finalizing order',
+  installing:         'Installing certificate',
+  completed:          'Completed',
+  failed:             'Failed',
+  cancelled:          'Cancelled',
+  'rate-limited':     'Rate limited',
 };
 
 // ── Sub-components ─────────────────────────────────────────────────────────
@@ -585,7 +548,7 @@ export default function Certificates(): React.ReactElement {
 
     // Use flock SANs for mismatch check when available
     const actualDnsSans = sanNames.length > 0 ? sanNames : null;
-    const status = deriveStatus(assignment, flockCert, certEntry, daysLeft, isRenewing, actualDnsSans);
+    const status = deriveStatus(assignment, flockCert, certEntry, daysLeft, isRenewing, actualDnsSans, false);
 
     return {
       certName: assignment.certName,
@@ -609,7 +572,7 @@ export default function Certificates(): React.ReactElement {
     const match = rows.find(r => r.certName === autoSelectCert);
     if (match) {
       setSelectedCertName(match.certName);
-      setPanelMode(match.status === 'none' ? 'none-info' : 'detail');
+      setPanelMode(match.status === 'invalid' ? 'none-info' : 'detail');
       initDoneRef.current = true;
     }
   }, [rows, autoSelectCert]);
@@ -650,7 +613,7 @@ export default function Certificates(): React.ReactElement {
       return;
     }
     setSelectedCertName(row.certName);
-    setPanelMode(row.status === 'none' ? 'none-info' : 'detail');
+    setPanelMode(row.status === 'invalid' ? 'none-info' : 'detail');
     setInspectTab('structured');
     setCertDetails(null);
     setLastJob(undefined);
@@ -686,7 +649,7 @@ export default function Certificates(): React.ReactElement {
     if (editTarget) {
       const row = rows.find(r => r.certName === editTarget.certName);
       if (row) {
-        setPanelMode(row.status === 'none' ? 'none-info' : 'detail');
+        setPanelMode(row.status === 'invalid' ? 'none-info' : 'detail');
         return;
       }
     }
