@@ -662,22 +662,31 @@ export default function Certificates(): React.ReactElement {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCertName, panelMode]);
 
-  // Poll active job for selected cert
+  // Poll active job for selected cert.
+  // Keeps running while the panel is open so clicking Renew updates within 2s.
+  // Stops only when a terminal job is detected (job just finished).
   useEffect(() => {
     if (activeJobTimerRef.current) { clearInterval(activeJobTimerRef.current); activeJobTimerRef.current = null; }
     if (!selectedCertName || panelMode === 'edit' || panelMode === 'new') return;
-    const TERMINAL = ['completed', 'failed', 'cancelled'];
     const certName = selectedCertName;
+    let hadActiveJob = false;
     async function pollActive(): Promise<void> {
       try {
         const job = await fetchActiveJob(certName);
-        if (!job || TERMINAL.includes(job.phase)) {
-          setActiveJob(null);
-          void fetchLastJob(certName).then(j => setLastJob(j)).catch(() => {});
-          if (activeJobTimerRef.current) { clearInterval(activeJobTimerRef.current); activeJobTimerRef.current = null; }
-          refresh();
-        } else {
+        if (job) {
+          hadActiveJob = true;
           setActiveJob(job);
+        } else {
+          setActiveJob(null);
+          if (hadActiveJob) {
+            // Job just finished — load last job, clear badge, stop polling.
+            hadActiveJob = false;
+            void fetchLastJob(certName).then(j => setLastJob(j)).catch(() => {});
+            if (activeJobTimerRef.current) { clearInterval(activeJobTimerRef.current); activeJobTimerRef.current = null; }
+            refresh();
+          }
+          // If never had an active job (null from the start), keep polling
+          // so a subsequent Renew click is picked up within 2s.
         }
       } catch { /* ignore */ }
     }

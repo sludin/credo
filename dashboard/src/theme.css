@@ -251,6 +251,10 @@ tr.expanded td { background: rgba(99,102,241,0.05); }
   50% { opacity: 0.4; transform: scale(0.7); }
 }
 
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 .tab-strip { display: flex; gap: 0; border-bottom: 1px solid var(--border); padding: 0 14px; }
 .tab-btn {
   padding: 6px 12px; background: none; border: none;
