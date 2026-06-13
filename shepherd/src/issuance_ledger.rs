@@ -3,11 +3,9 @@ use chrono::{DateTime, Duration, Utc};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use crate::types::{DomainQuotaStatus, IdentifierSetQuotaStatus, IssuanceEvent, ManagedAssignment};
-
-const DOMAIN_LIMIT: u32 = 50;
-const IDENTIFIER_SET_LIMIT: u32 = 5;
-const WINDOW_DAYS: i64 = 7;
+use crate::types::{
+    CaRateLimits, DomainQuotaStatus, IdentifierSetQuotaStatus, IssuanceEvent, ManagedAssignment,
+};
 
 // ---------------------------------------------------------------------------
 // IssuanceLedger
@@ -16,16 +14,21 @@ const WINDOW_DAYS: i64 = 7;
 pub struct IssuanceLedger {
     events: Vec<IssuanceEvent>,
     path: PathBuf,
+    max_window_days: i64,
 }
 
 impl IssuanceLedger {
-    /// Load ledger from disk, pruning events older than 7 days.
+    /// Load ledger from disk, pruning events older than `max_window_days`.
     /// Missing file → empty ledger (no error). Corrupt file → warn and start empty.
-    pub fn load(path: PathBuf) -> Self {
+    pub fn load(path: PathBuf, max_window_days: i64) -> Self {
         match std::fs::read_to_string(&path) {
             Ok(content) => match serde_json::from_str::<Vec<IssuanceEvent>>(&content) {
                 Ok(events) => {
-                    let mut ledger = Self { events, path };
+                    let mut ledger = Self {
+                        events,
+                        path,
+                        max_window_days,
+                    };
                     ledger.prune();
                     ledger
                 }
@@ -38,12 +41,14 @@ impl IssuanceLedger {
                     Self {
                         events: vec![],
                         path,
+                        max_window_days,
                     }
                 }
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self {
                 events: vec![],
                 path,
+                max_window_days,
             },
             Err(e) => {
                 tracing::warn!(
@@ -54,6 +59,7 @@ impl IssuanceLedger {
                 Self {
                     events: vec![],
                     path,
+                    max_window_days,
                 }
             }
         }
@@ -66,9 +72,9 @@ impl IssuanceLedger {
         self.flush()
     }
 
-    /// Count events for a registered domain + CA within the 7-day window.
-    pub fn domain_count_7d(&self, registered_domain: &str, ca: &str) -> u32 {
-        let cutoff = Utc::now() - Duration::days(WINDOW_DAYS);
+    /// Count events for a registered domain + CA within the given window.
+    pub fn domain_count_window(&self, registered_domain: &str, ca: &str, window_days: i64) -> u32 {
+        let cutoff = Utc::now() - Duration::days(window_days);
         self.events
             .iter()
             .filter(|e| {
@@ -77,90 +83,114 @@ impl IssuanceLedger {
             .count() as u32
     }
 
-    /// Count events for an exact SAN set + CA within the 7-day window.
-    pub fn identifier_count_7d(&self, sans: &[String], ca: &str) -> u32 {
-        let cutoff = Utc::now() - Duration::days(WINDOW_DAYS);
+    /// Count events for an exact SAN set + CA within the given window.
+    pub fn identifier_count_window(&self, sans: &[String], ca: &str, window_days: i64) -> u32 {
+        let cutoff = Utc::now() - Duration::days(window_days);
         self.events
             .iter()
             .filter(|e| e.ca == ca && e.sans == sans && e.issued_at > cutoff)
             .count() as u32
     }
 
-    /// Check both rate limits for a proposed issuance.
-    /// Returns `Some(retry_after)` if gated (the earliest time when the gate opens),
-    /// or `None` if both limits allow the issuance.
-    pub fn rate_limit_check(&self, sans: &[String], ca: &str) -> Option<DateTime<Utc>> {
-        let cutoff = Utc::now() - Duration::days(WINDOW_DAYS);
+    /// Check rate limits for a proposed issuance.
+    /// Returns `Some(retry_after)` if gated, or `None` if the issuance is allowed.
+    /// If `limits` is `None`, the CA is unconstrained and `None` is always returned.
+    pub fn rate_limit_check(
+        &self,
+        sans: &[String],
+        ca: &str,
+        limits: Option<&CaRateLimits>,
+    ) -> Option<DateTime<Utc>> {
+        let limits = limits?; // None limits → no gate
         let mut retry_after: Option<DateTime<Utc>> = None;
 
-        // Collect all unique registered domains from the SAN list.
-        let registered_domains: HashSet<String> = sans
-            .iter()
-            .filter_map(|san| extract_registered_domain(san))
-            .collect();
-
-        // Check domain limit (50/7d) for each registered domain in the SAN list.
-        for domain in &registered_domains {
-            let domain_events: Vec<&IssuanceEvent> = self
-                .events
+        if let Some(domain_limit) = &limits.certificates_per_domain {
+            let window_days = domain_limit.window_days as i64;
+            let cutoff = Utc::now() - Duration::days(window_days);
+            let registered_domains: HashSet<String> = sans
                 .iter()
-                .filter(|e| e.ca == ca && e.registered_domain == *domain && e.issued_at > cutoff)
+                .filter_map(|san| extract_registered_domain(san))
                 .collect();
 
-            if domain_events.len() as u32 >= DOMAIN_LIMIT {
-                let oldest = domain_events.iter().map(|e| e.issued_at).min().unwrap();
-                let r = oldest + Duration::days(WINDOW_DAYS);
-                retry_after = Some(retry_after.map_or(r, |prev: DateTime<Utc>| prev.max(r)));
+            for domain in &registered_domains {
+                let domain_events: Vec<&IssuanceEvent> = self
+                    .events
+                    .iter()
+                    .filter(|e| {
+                        e.ca == ca && e.registered_domain == *domain && e.issued_at > cutoff
+                    })
+                    .collect();
+
+                if domain_events.len() as u32 >= domain_limit.count {
+                    let oldest = domain_events.iter().map(|e| e.issued_at).min().unwrap();
+                    let r = oldest + Duration::days(window_days);
+                    retry_after = Some(retry_after.map_or(r, |prev: DateTime<Utc>| prev.max(r)));
+                }
             }
         }
 
-        // Check identifier set limit (5/7d) for the exact SAN set.
-        let id_events: Vec<&IssuanceEvent> = self
-            .events
-            .iter()
-            .filter(|e| e.ca == ca && e.sans == sans && e.issued_at > cutoff)
-            .collect();
+        if let Some(dup_limit) = &limits.duplicate_certificates {
+            let window_days = dup_limit.window_days as i64;
+            let cutoff = Utc::now() - Duration::days(window_days);
+            let id_events: Vec<&IssuanceEvent> = self
+                .events
+                .iter()
+                .filter(|e| e.ca == ca && e.sans == sans && e.issued_at > cutoff)
+                .collect();
 
-        if id_events.len() as u32 >= IDENTIFIER_SET_LIMIT {
-            let oldest = id_events.iter().map(|e| e.issued_at).min().unwrap();
-            let r = oldest + Duration::days(WINDOW_DAYS);
-            retry_after = Some(retry_after.map_or(r, |prev: DateTime<Utc>| prev.max(r)));
+            if id_events.len() as u32 >= dup_limit.count {
+                let oldest = id_events.iter().map(|e| e.issued_at).min().unwrap();
+                let r = oldest + Duration::days(window_days);
+                retry_after = Some(retry_after.map_or(r, |prev: DateTime<Utc>| prev.max(r)));
+            }
         }
 
         retry_after
     }
 
     /// Compute per-registered-domain quota status for the API response.
-    pub fn domain_quotas(&self) -> Vec<DomainQuotaStatus> {
-        let cutoff = Utc::now() - Duration::days(WINDOW_DAYS);
-
-        // Group events by (registered_domain, ca).
+    /// Only includes (domain, CA) pairs where the CA has `certificates_per_domain` configured.
+    pub fn domain_quotas(
+        &self,
+        ca_limits: &HashMap<String, CaRateLimits>,
+    ) -> Vec<DomainQuotaStatus> {
         let mut groups: HashMap<(String, String), Vec<&IssuanceEvent>> = HashMap::new();
-        for event in self.events.iter().filter(|e| e.issued_at > cutoff) {
-            groups
-                .entry((event.registered_domain.clone(), event.ca.clone()))
-                .or_default()
-                .push(event);
+        for event in &self.events {
+            if ca_limits
+                .get(&event.ca)
+                .and_then(|rl| rl.certificates_per_domain.as_ref())
+                .is_some()
+            {
+                groups
+                    .entry((event.registered_domain.clone(), event.ca.clone()))
+                    .or_default()
+                    .push(event);
+            }
         }
 
         let mut result: Vec<DomainQuotaStatus> = groups
             .into_iter()
-            .map(|((domain, ca), evts)| {
-                let issued_7d = evts.len() as u32;
-                let next_slot_at = if issued_7d >= DOMAIN_LIMIT {
-                    let oldest = evts.iter().map(|e| e.issued_at).min().unwrap();
-                    Some(oldest + Duration::days(WINDOW_DAYS))
+            .filter_map(|((domain, ca), all_evts)| {
+                let domain_limit = ca_limits.get(&ca)?.certificates_per_domain.as_ref()?;
+                let window_days = domain_limit.window_days as i64;
+                let cutoff = Utc::now() - Duration::days(window_days);
+                let evts_in_window: Vec<_> =
+                    all_evts.iter().filter(|e| e.issued_at > cutoff).collect();
+                let issued = evts_in_window.len() as u32;
+                let next_slot_at = if issued >= domain_limit.count {
+                    let oldest = evts_in_window.iter().map(|e| e.issued_at).min()?;
+                    Some(oldest + Duration::days(window_days))
                 } else {
                     None
                 };
-                DomainQuotaStatus {
+                Some(DomainQuotaStatus {
                     registered_domain: domain,
                     ca,
-                    issued: issued_7d,
-                    limit: DOMAIN_LIMIT,
-                    window_days: 7,
+                    issued,
+                    limit: domain_limit.count,
+                    window_days: domain_limit.window_days,
                     next_slot_at,
-                }
+                })
             })
             .collect();
 
@@ -173,47 +203,53 @@ impl IssuanceLedger {
     }
 
     /// Compute per-cert (exact SAN set) quota status for the API response.
+    /// Only includes assignments whose CA has `duplicate_certificates` configured.
     pub fn identifier_set_quotas(
         &self,
         assignments: &[ManagedAssignment],
+        ca_limits: &HashMap<String, CaRateLimits>,
     ) -> Vec<IdentifierSetQuotaStatus> {
-        let cutoff = Utc::now() - Duration::days(WINDOW_DAYS);
-
         assignments
             .iter()
-            .map(|assignment| {
+            .filter_map(|assignment| {
+                let dup_limit = ca_limits
+                    .get(&assignment.ca)?
+                    .duplicate_certificates
+                    .as_ref()?;
+                let window_days = dup_limit.window_days as i64;
+                let cutoff = Utc::now() - Duration::days(window_days);
                 let sans = canonical_sans(assignment);
-                let ca = assignment.ca.clone();
+                let ca = &assignment.ca;
 
                 let matching: Vec<&IssuanceEvent> = self
                     .events
                     .iter()
-                    .filter(|e| e.ca == ca && e.sans == sans && e.issued_at > cutoff)
+                    .filter(|e| e.ca == *ca && e.sans == sans && e.issued_at > cutoff)
                     .collect();
 
-                let issued_7d = matching.len() as u32;
-                let next_slot_at = if issued_7d >= IDENTIFIER_SET_LIMIT {
-                    let oldest = matching.iter().map(|e| e.issued_at).min().unwrap();
-                    Some(oldest + Duration::days(WINDOW_DAYS))
+                let issued = matching.len() as u32;
+                let next_slot_at = if issued >= dup_limit.count {
+                    let oldest = matching.iter().map(|e| e.issued_at).min()?;
+                    Some(oldest + Duration::days(window_days))
                 } else {
                     None
                 };
 
-                IdentifierSetQuotaStatus {
+                Some(IdentifierSetQuotaStatus {
                     cert_name: assignment.cert_name.clone(),
                     sans,
-                    ca,
-                    issued: issued_7d,
-                    limit: IDENTIFIER_SET_LIMIT,
-                    window_days: 7,
+                    ca: ca.clone(),
+                    issued,
+                    limit: dup_limit.count,
+                    window_days: dup_limit.window_days,
                     next_slot_at,
-                }
+                })
             })
             .collect()
     }
 
     fn prune(&mut self) {
-        let cutoff = Utc::now() - Duration::days(WINDOW_DAYS);
+        let cutoff = Utc::now() - Duration::days(self.max_window_days);
         self.events.retain(|e| e.issued_at > cutoff);
     }
 
@@ -279,12 +315,26 @@ mod tests {
         }
     }
 
+    fn le_limits() -> crate::types::CaRateLimits {
+        use crate::types::{CaRateLimit, CaRateLimits};
+        CaRateLimits {
+            certificates_per_domain: Some(CaRateLimit {
+                count: 50,
+                window_days: 7,
+            }),
+            duplicate_certificates: Some(CaRateLimit {
+                count: 5,
+                window_days: 7,
+            }),
+        }
+    }
+
     fn empty_ledger(dir: &TempDir) -> IssuanceLedger {
-        IssuanceLedger::load(dir.path().join("ledger.json"))
+        IssuanceLedger::load(dir.path().join("ledger.json"), 7)
     }
 
     // -----------------------------------------------------------------------
-    // domain_count_7d
+    // domain_count_window
     // -----------------------------------------------------------------------
 
     #[test]
@@ -313,7 +363,7 @@ mod tests {
             8,
         )); // outside
 
-        assert_eq!(ledger.domain_count_7d("example.com", "le"), 2);
+        assert_eq!(ledger.domain_count_window("example.com", "le", 7), 2);
     }
 
     #[test]
@@ -335,7 +385,7 @@ mod tests {
             1,
         ));
 
-        assert_eq!(ledger.domain_count_7d("example.com", "le"), 1);
+        assert_eq!(ledger.domain_count_window("example.com", "le", 7), 1);
     }
 
     #[test]
@@ -357,11 +407,11 @@ mod tests {
             1,
         ));
 
-        assert_eq!(ledger.domain_count_7d("example.com", "le"), 1);
+        assert_eq!(ledger.domain_count_window("example.com", "le", 7), 1);
     }
 
     // -----------------------------------------------------------------------
-    // identifier_count_7d
+    // identifier_count_window
     // -----------------------------------------------------------------------
 
     #[test]
@@ -380,7 +430,7 @@ mod tests {
             1,
         )); // different set
 
-        assert_eq!(ledger.identifier_count_7d(&sans, "le"), 1);
+        assert_eq!(ledger.identifier_count_window(&sans, "le", 7), 1);
     }
 
     #[test]
@@ -398,7 +448,7 @@ mod tests {
             .events
             .push(make_event("c3", "example.com", sans.clone(), "le", 8)); // outside
 
-        assert_eq!(ledger.identifier_count_7d(&sans, "le"), 2);
+        assert_eq!(ledger.identifier_count_window(&sans, "le", 7), 2);
     }
 
     // -----------------------------------------------------------------------
@@ -438,7 +488,7 @@ mod tests {
     fn load_from_missing_file_starts_empty() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("nonexistent.json");
-        let ledger = IssuanceLedger::load(path);
+        let ledger = IssuanceLedger::load(path, 7);
         assert!(ledger.events.is_empty());
     }
 
@@ -447,7 +497,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("ledger.json");
         std::fs::write(&path, b"not valid json at all{{{{").unwrap();
-        let ledger = IssuanceLedger::load(path);
+        let ledger = IssuanceLedger::load(path, 7);
         assert!(ledger.events.is_empty());
     }
 
@@ -459,7 +509,7 @@ mod tests {
         let json = serde_json::to_string(&vec![old_event]).unwrap();
         std::fs::write(&path, json).unwrap();
 
-        let ledger = IssuanceLedger::load(path);
+        let ledger = IssuanceLedger::load(path, 7);
         assert!(ledger.events.is_empty());
     }
 
@@ -474,14 +524,14 @@ mod tests {
         let sans = vec!["api.example.com".to_string()];
 
         {
-            let mut ledger = IssuanceLedger::load(path.clone());
+            let mut ledger = IssuanceLedger::load(path.clone(), 7);
             let event = make_event("api-cert", "example.com", sans.clone(), "le", 1);
             ledger.append(event).unwrap();
         }
 
-        let ledger2 = IssuanceLedger::load(path);
-        assert_eq!(ledger2.domain_count_7d("example.com", "le"), 1);
-        assert_eq!(ledger2.identifier_count_7d(&sans, "le"), 1);
+        let ledger2 = IssuanceLedger::load(path, 7);
+        assert_eq!(ledger2.domain_count_window("example.com", "le", 7), 1);
+        assert_eq!(ledger2.identifier_count_window(&sans, "le", 7), 1);
     }
 
     // -----------------------------------------------------------------------
@@ -502,7 +552,9 @@ mod tests {
             ));
         }
         let sans = vec!["new.example.com".to_string()];
-        assert!(ledger.rate_limit_check(&sans, "le").is_some());
+        assert!(ledger
+            .rate_limit_check(&sans, "le", Some(&le_limits()))
+            .is_some());
     }
 
     #[test]
@@ -519,7 +571,9 @@ mod tests {
             ));
         }
         let sans = vec!["new.example.com".to_string()];
-        assert!(ledger.rate_limit_check(&sans, "le").is_none());
+        assert!(ledger
+            .rate_limit_check(&sans, "le", Some(&le_limits()))
+            .is_none());
     }
 
     // -----------------------------------------------------------------------
@@ -540,7 +594,9 @@ mod tests {
                 1,
             ));
         }
-        assert!(ledger.rate_limit_check(&sans, "le").is_some());
+        assert!(ledger
+            .rate_limit_check(&sans, "le", Some(&le_limits()))
+            .is_some());
     }
 
     #[test]
@@ -557,7 +613,9 @@ mod tests {
                 1,
             ));
         }
-        assert!(ledger.rate_limit_check(&sans, "le").is_none());
+        assert!(ledger
+            .rate_limit_check(&sans, "le", Some(&le_limits()))
+            .is_none());
     }
 
     // -----------------------------------------------------------------------
@@ -589,8 +647,10 @@ mod tests {
             ));
         }
 
-        let retry = ledger.rate_limit_check(&sans, "le").unwrap();
-        let expected = oldest_issued_at + Duration::days(WINDOW_DAYS);
+        let retry = ledger
+            .rate_limit_check(&sans, "le", Some(&le_limits()))
+            .unwrap();
+        let expected = oldest_issued_at + Duration::days(7);
         let diff = (retry - expected).num_seconds().abs();
         assert!(
             diff <= 1,
@@ -680,5 +740,132 @@ mod tests {
         };
         let result = canonical_sans(&assignment);
         assert_eq!(result, vec!["api.example.com"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // rate_limit_check — no limits (None)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn unlimited_ca_never_blocked() {
+        let dir = TempDir::new().unwrap();
+        let mut ledger = empty_ledger(&dir);
+        let sans = vec!["api.example.com".to_string()];
+        for i in 0..100u32 {
+            ledger.events.push(make_event(
+                &format!("c{i}"),
+                "example.com",
+                sans.clone(),
+                "vigil",
+                1,
+            ));
+        }
+        // None limits = no rate limiting
+        assert!(ledger.rate_limit_check(&sans, "vigil", None).is_none());
+    }
+
+    #[test]
+    fn custom_window_uses_configured_days() {
+        use crate::types::{CaRateLimit, CaRateLimits};
+        let dir = TempDir::new().unwrap();
+        let mut ledger = empty_ledger(&dir);
+        let sans = vec!["api.example.com".to_string()];
+        // 3 events, all within the last 5 days (days_ago = 1)
+        for i in 0..3u32 {
+            ledger.events.push(make_event(
+                &format!("c{i}"),
+                "example.com",
+                sans.clone(),
+                "myca",
+                1,
+            ));
+        }
+        let limits = CaRateLimits {
+            certificates_per_domain: None,
+            duplicate_certificates: Some(CaRateLimit {
+                count: 3,
+                window_days: 5,
+            }),
+        };
+        // Should be blocked (3 >= 3 within 5 days)
+        assert!(ledger
+            .rate_limit_check(&sans, "myca", Some(&limits))
+            .is_some());
+    }
+
+    #[test]
+    fn custom_window_outside_window_not_blocked() {
+        use crate::types::{CaRateLimit, CaRateLimits};
+        let dir = TempDir::new().unwrap();
+        // Use max_window_days=30 so events at day 11 aren't pruned
+        let mut ledger = IssuanceLedger::load(dir.path().join("ledger.json"), 30);
+        let sans = vec!["api.example.com".to_string()];
+        // 3 events, all 11 days ago (outside a 5-day window)
+        for i in 0..3u32 {
+            ledger.events.push(make_event(
+                &format!("c{i}"),
+                "example.com",
+                sans.clone(),
+                "myca",
+                11,
+            ));
+        }
+        let limits = CaRateLimits {
+            certificates_per_domain: None,
+            duplicate_certificates: Some(CaRateLimit {
+                count: 3,
+                window_days: 5,
+            }),
+        };
+        // Events are outside the 5-day window → not blocked
+        assert!(ledger
+            .rate_limit_check(&sans, "myca", Some(&limits))
+            .is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // domain_quotas — CA-aware
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn domain_quotas_only_shows_cas_with_limits() {
+        use crate::types::{CaRateLimit, CaRateLimits};
+        use std::collections::HashMap;
+        let dir = TempDir::new().unwrap();
+        let mut ledger = empty_ledger(&dir);
+        ledger.events.push(make_event(
+            "c1",
+            "example.com",
+            vec!["a.example.com".into()],
+            "le",
+            1,
+        ));
+        ledger.events.push(make_event(
+            "c2",
+            "example.com",
+            vec!["b.example.com".into()],
+            "vigil",
+            1,
+        ));
+
+        let mut ca_limits = HashMap::new();
+        ca_limits.insert(
+            "le".into(),
+            CaRateLimits {
+                certificates_per_domain: Some(CaRateLimit {
+                    count: 50,
+                    window_days: 7,
+                }),
+                duplicate_certificates: None,
+            },
+        );
+        // vigil not in map → unlimited → should not appear in quotas
+
+        let quotas = ledger.domain_quotas(&ca_limits);
+        assert_eq!(quotas.len(), 1);
+        assert_eq!(quotas[0].ca, "le");
+        assert_eq!(quotas[0].limit, 50);
+        assert_eq!(quotas[0].window_days, 7);
+        assert_eq!(quotas[0].issued, 1);
     }
 }

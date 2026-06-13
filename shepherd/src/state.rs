@@ -125,7 +125,7 @@ impl AppState {
             assignments_mtime: Arc::new(Mutex::new(None)),
             accounts_mtime: Arc::new(Mutex::new(None)),
             ca_mtime: Arc::new(Mutex::new(None)),
-            issuance_ledger: Arc::new(RwLock::new(IssuanceLedger::load(issuance_ledger_path))),
+            issuance_ledger: Arc::new(RwLock::new(IssuanceLedger::load(issuance_ledger_path, 7))),
             corgi_client_pool: Arc::new(RwLock::new(
                 match (cert_pem.as_deref(), key_pem.as_deref()) {
                     (Some(c), Some(k)) => CorgiClientPool::with_bootstrap_identity(c, k),
