@@ -11,7 +11,9 @@ use crate::corgi_client::{corgi_get, corgi_post};
 use crate::corgis::load_corgis;
 use crate::issuance::issue_cert;
 use crate::issuance::RateLimitedError;
-use crate::renewal_jobs::{complete_job, create_job, fail_job, rate_limit_job, update_phase};
+use crate::renewal_jobs::{
+    append_trace, complete_job, create_job, fail_job, rate_limit_job, update_phase,
+};
 use crate::state::AppState;
 use crate::types::{
     CorgiFlockEntry, CorgiNodeConfig, CorgiNodeState, CorgiStatus, ManagedAssignment, RenewalPhase,
@@ -421,9 +423,17 @@ async fn cert_maintenance(
             anyhow::bail!("Renewal failed: {msg}");
         }
         Ok(issued) => {
-            complete_job(&state.renewal_jobs, job_id, issued.fingerprint256.clone()).await;
+            update_phase(&state.renewal_jobs, job_id, RenewalPhase::Installing).await;
+            append_trace(
+                &state.renewal_jobs,
+                job_id,
+                "installing-on-corgi",
+                None,
+                None,
+                Some("in-progress"),
+            )
+            .await;
 
-            // Install on corgi
             if let Err(e) = corgi_post::<serde_json::Value>(
                 &state.corgi_client_pool,
                 node,
@@ -442,6 +452,15 @@ async fn cert_maintenance(
                     error = %e,
                     "Cert issued but install on corgi failed; corgi will sync on next poll"
                 );
+                append_trace(
+                    &state.renewal_jobs,
+                    job_id,
+                    "install-failed",
+                    Some(&e.to_string()),
+                    None,
+                    Some("warn"),
+                )
+                .await;
             } else {
                 tracing::info!(
                     corgi = %node.name,
@@ -449,11 +468,22 @@ async fn cert_maintenance(
                     fingerprint256 = %issued.fingerprint256,
                     "Renewed cert installed on corgi"
                 );
+                append_trace(
+                    &state.renewal_jobs,
+                    job_id,
+                    "installed-on-corgi",
+                    None,
+                    None,
+                    Some("ok"),
+                )
+                .await;
                 // The production cert is now in corgi's certstore.  Evict the cached
                 // mTLS client so the next connection rebuilds from the production cert
                 // instead of the bootstrap fallback.
                 crate::corgi_client::evict(&state.corgi_client_pool, &node.name).await;
             }
+
+            complete_job(&state.renewal_jobs, job_id, issued.fingerprint256.clone()).await;
         }
     }
 
@@ -606,5 +636,10 @@ mod tests {
     fn no_domain_no_sans_returns_empty() {
         let a = assignment(None, &[]);
         assert!(build_domains(&a).is_empty());
+    }
+
+    #[test]
+    fn installing_phase_is_not_terminal() {
+        assert!(!crate::types::RenewalPhase::Installing.is_terminal());
     }
 }

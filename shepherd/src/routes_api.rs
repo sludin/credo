@@ -14,7 +14,7 @@ use crate::corgis::load_corgis;
 use crate::error::AppError;
 use crate::issuance::issue_cert;
 use crate::jwt::{jwks_response, sign_jwt};
-use crate::renewal_jobs::{complete_job, create_job, fail_job, update_phase};
+use crate::renewal_jobs::{append_trace, complete_job, create_job, fail_job, update_phase};
 use crate::routes_corgi::build_domains;
 use crate::state::AppState;
 use crate::types::{AuthenticatedUser, RenewalPhase, Role};
@@ -726,16 +726,54 @@ async fn admin_provision_or_renew(
         .await
         {
             Ok(result) => {
-                complete_job(&state2.renewal_jobs, job_id, result.fingerprint256.clone()).await;
+                update_phase(&state2.renewal_jobs, job_id, RenewalPhase::Installing).await;
+                append_trace(
+                    &state2.renewal_jobs,
+                    job_id,
+                    "installing-on-corgi",
+                    None,
+                    None,
+                    Some("in-progress"),
+                )
+                .await;
+
                 if result.changed {
-                    let _ = corgi_post::<serde_json::Value>(
+                    match corgi_post::<serde_json::Value>(
                         &state2.corgi_client_pool,
                         &node2,
                         &format!("/flock/{}/install", urlencoded(&cert_name2)),
                         &json!({ "certPem": result.cert_pem }),
                     )
-                    .await;
+                    .await
+                    {
+                        Ok(_) => {
+                            append_trace(
+                                &state2.renewal_jobs,
+                                job_id,
+                                "installed-on-corgi",
+                                None,
+                                None,
+                                Some("ok"),
+                            )
+                            .await;
+                        }
+                        Err(e) => {
+                            tracing::warn!(cert = %cert_name2, error = %e,
+                                "Admin-triggered renewal: corgi install failed (non-fatal)");
+                            append_trace(
+                                &state2.renewal_jobs,
+                                job_id,
+                                "install-failed",
+                                Some(&e.to_string()),
+                                None,
+                                Some("warn"),
+                            )
+                            .await;
+                        }
+                    }
                 }
+
+                complete_job(&state2.renewal_jobs, job_id, result.fingerprint256.clone()).await;
             }
             Err(e) => {
                 fail_job(&state2.renewal_jobs, job_id, e.to_string()).await;
