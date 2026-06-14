@@ -47,7 +47,8 @@ fn setup_db(dir: &TempDir) -> (PathBuf, PathBuf) {
 }
 
 fn test_ca_metadata() -> RootCAMetadata {
-    use vigil::config::{CaConfig, IssuancePolicyConfig, LogLevel, TlsConfig, VigilConfig};
+    use credo_lib::LogLevel;
+    use vigil::config::{CaConfig, IssuancePolicyConfig, TlsConfig, VigilConfig};
     let tmp = TempDir::new().unwrap();
     std::fs::create_dir_all(tmp.path().join("certs")).unwrap();
     let f = fixtures();

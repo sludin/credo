@@ -45,6 +45,16 @@ impl AcmeTestClient {
         }
     }
 
+    /// Convert an http:// test URL back to https:// for use in JWS protected headers.
+    /// vigil's extract_host_scheme always returns "https", so the JWS url field must match.
+    fn jws_url(url: &str) -> String {
+        if let Some(rest) = url.strip_prefix("http://") {
+            format!("https://{}", rest)
+        } else {
+            url.to_string()
+        }
+    }
+
     fn public_jwk(&self) -> Value {
         let pt = self.key.verifying_key().to_encoded_point(false);
         json!({
@@ -109,7 +119,11 @@ impl AcmeTestClient {
     async fn register(&mut self) {
         let url = format!("{}/acme/new-account", self.base);
         let nonce = self.nonce().await;
-        let body = self.jws_with_jwk(&nonce, &url, json!({"contact": ["mailto:test@credo.test"]}));
+        let body = self.jws_with_jwk(
+            &nonce,
+            &Self::jws_url(&url),
+            json!({"contact": ["mailto:test@credo.test"]}),
+        );
         let resp = self.http.post(&url).json(&body).send().await.unwrap();
         assert_eq!(resp.status(), 201, "new-account must return 201");
         let loc = resp.headers()["location"].to_str().unwrap().to_string();
@@ -123,7 +137,7 @@ impl AcmeTestClient {
         if let Some(m) = validation_method {
             payload["validationMethod"] = json!(m);
         }
-        let body = self.jws_with_kid(&nonce, &url, payload);
+        let body = self.jws_with_kid(&nonce, &Self::jws_url(&url), payload);
         let resp = self.http.post(&url).json(&body).send().await.unwrap();
         assert_eq!(resp.status(), 201, "new-order must return 201");
         resp.json().await.unwrap()
@@ -140,14 +154,20 @@ impl AcmeTestClient {
         if let Some(m) = validation_method {
             payload["validationMethod"] = json!(m);
         }
-        let body = self.jws_with_kid(&nonce, &url, payload);
+        let body = self.jws_with_kid(&nonce, &Self::jws_url(&url), payload);
         self.http.post(&url).json(&body).send().await.unwrap()
     }
 
     async fn get_authz(&self, authz_url: &str) -> Value {
         let url = Self::norm(authz_url);
         let nonce = self.nonce().await;
-        let body = self.jws_with_kid(&nonce, &url, json!({}));
+        // authz_url is the https:// URL from vigil's response; use it as-is in the JWS.
+        let jws_url = if authz_url.starts_with("https://") {
+            authz_url.to_string()
+        } else {
+            Self::jws_url(&url)
+        };
+        let body = self.jws_with_kid(&nonce, &jws_url, json!({}));
         let resp = self.http.post(&url).json(&body).send().await.unwrap();
         assert_eq!(resp.status(), 200, "get-authz must return 200");
         resp.json().await.unwrap()
@@ -172,7 +192,13 @@ impl AcmeTestClient {
     async fn respond_challenge(&self, challenge_url: &str) -> reqwest::Response {
         let url = Self::norm(challenge_url);
         let nonce = self.nonce().await;
-        let body = self.jws_with_kid(&nonce, &url, json!({}));
+        // challenge_url is the https:// URL from vigil's response; use it as-is in the JWS.
+        let jws_url = if challenge_url.starts_with("https://") {
+            challenge_url.to_string()
+        } else {
+            Self::jws_url(&url)
+        };
+        let body = self.jws_with_kid(&nonce, &jws_url, json!({}));
         self.http.post(&url).json(&body).send().await.unwrap()
     }
 

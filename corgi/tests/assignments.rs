@@ -2,10 +2,11 @@
 /// Ports deprecated assignments.test.ts and covers production merge behavior.
 use corgi::assignments::merge_assignments;
 use corgi::config::{
-    AuthConfig, AuthMode, FilePolicyConfig, FlockEntry, HttpChallengeConfig, LogLevel, MtlsConfig,
+    AuthConfig, AuthMode, FilePolicyConfig, FlockEntry, HttpChallengeConfig, MtlsConfig,
     ProxyAuthConfig, ShepherdSyncConfig, TlsConfig,
 };
 use corgi::types::ManagedAssignment;
+use credo_lib::LogLevel;
 use std::collections::HashMap;
 use tempfile::TempDir;
 

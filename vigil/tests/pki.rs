@@ -15,7 +15,7 @@ fn fixtures() -> PathBuf {
 }
 
 fn signing_config(tmp: &TempDir) -> VigilConfig {
-    use vigil::config::LogLevel;
+    use credo_lib::LogLevel;
     let f = fixtures();
     VigilConfig {
         port: 0,
