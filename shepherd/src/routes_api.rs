@@ -744,15 +744,11 @@ async fn admin_provision_or_renew(
                 .await;
 
                 if result.changed {
-                    match corgi_post::<serde_json::Value>(
+                    match crate::corgi_client::push_cert_install(
                         &state2.corgi_client_pool,
                         &node2,
-                        &format!("/flock/{}/install", urlencoded(&cert_name2)),
-                        &json!({
-                            "certPem":      result.cert_pem,
-                            "chainPem":     result.chain_pem,
-                            "fullchainPem": result.fullchain_pem,
-                        }),
+                        &cert_name2,
+                        &result,
                     )
                     .await
                     {

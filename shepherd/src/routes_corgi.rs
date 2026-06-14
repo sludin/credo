@@ -188,15 +188,11 @@ pub async fn provision_cert(
 
     // Install on corgi
     if result.changed {
-        if let Err(e) = corgi_post::<serde_json::Value>(
+        if let Err(e) = crate::corgi_client::push_cert_install(
             &state.corgi_client_pool,
             &node,
-            &format!("/flock/{}/install", urlencoded(&cert_name)),
-            &json!({
-                "certPem":      result.cert_pem,
-                "chainPem":     result.chain_pem,
-                "fullchainPem": result.fullchain_pem,
-            }),
+            &cert_name,
+            &result,
         )
         .await
         {
@@ -315,15 +311,11 @@ pub async fn renew_cert(
             Ok(result) => {
                 complete_job(&state2.renewal_jobs, job_id, result.fingerprint256.clone()).await;
                 if result.changed {
-                    let ok = corgi_post::<serde_json::Value>(
+                    let ok = crate::corgi_client::push_cert_install(
                         &state2.corgi_client_pool,
                         &node2,
-                        &format!("/flock/{}/install", urlencoded(&cert_name2)),
-                        &json!({
-                            "certPem":      result.cert_pem,
-                            "chainPem":     result.chain_pem,
-                            "fullchainPem": result.fullchain_pem,
-                        }),
+                        &cert_name2,
+                        &result,
                     )
                     .await;
                     if ok.is_ok() {

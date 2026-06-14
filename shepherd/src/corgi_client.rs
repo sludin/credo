@@ -256,6 +256,32 @@ pub async fn corgi_post<T: DeserializeOwned>(
     serde_json::from_str::<T>(&resp_body).with_context(|| format!("Parsing response from {url}"))
 }
 
+/// Push freshly-issued cert material to a corgi node's install endpoint.
+/// All three PEM fields are required for the corgi to build a valid fullchain.
+pub async fn push_cert_install(
+    pool: &Arc<RwLock<CorgiClientPool>>,
+    node: &crate::types::CorgiNodeConfig,
+    cert_name: &str,
+    result: &crate::issuance::IssuanceResult,
+) -> Result<()> {
+    corgi_post::<serde_json::Value>(
+        pool,
+        node,
+        &format!("/flock/{}/install", urlencoded(cert_name)),
+        &serde_json::json!({
+            "certPem":      result.cert_pem,
+            "chainPem":     result.chain_pem,
+            "fullchainPem": result.fullchain_pem,
+        }),
+    )
+    .await
+    .map(|_| ())
+}
+
+fn urlencoded(s: &str) -> String {
+    s.replace('/', "%2F")
+}
+
 pub async fn corgi_delete(
     pool: &Arc<RwLock<CorgiClientPool>>,
     node: &CorgiNodeConfig,

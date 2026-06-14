@@ -439,15 +439,11 @@ async fn cert_maintenance(
             )
             .await;
 
-            if let Err(e) = corgi_post::<serde_json::Value>(
+            if let Err(e) = crate::corgi_client::push_cert_install(
                 &state.corgi_client_pool,
                 node,
-                &format!("/flock/{}/install", urlencoded(&assignment.cert_name)),
-                &json!({
-                    "certPem":      issued.cert_pem,
-                    "chainPem":     issued.chain_pem,
-                    "fullchainPem": issued.fullchain_pem,
-                }),
+                &assignment.cert_name,
+                &issued,
             )
             .await
             {

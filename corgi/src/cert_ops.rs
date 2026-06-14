@@ -355,11 +355,33 @@ pub fn install_certificate(
     let changed =
         previous_fingerprint.as_deref().map(&normalize) != Some(normalize(&next_fingerprint));
 
+    // Synthesize fullchain from cert + chain if the caller omitted fullchainPem.
+    // Log clearly so missing chain data surfaces rather than silently producing a
+    // leaf-only fullchain.pem.
+    let synthesized: Option<String>;
+    let fullchain_pem = if req.fullchain_pem.is_some() {
+        req.fullchain_pem.as_deref()
+    } else if let Some(chain) = req.chain_pem.as_deref() {
+        tracing::warn!(
+            cert_name = %entry.name,
+            "fullchainPem missing from install request; synthesizing from certPem + chainPem"
+        );
+        synthesized = Some(format!("{}{}", cert_pem, chain));
+        synthesized.as_deref()
+    } else {
+        tracing::error!(
+            cert_name = %entry.name,
+            "fullchainPem and chainPem both missing from install request; \
+             fullchain.pem will contain leaf cert only — mTLS will break"
+        );
+        None
+    };
+
     install_to_archive(
         entry,
         cert_store_dir,
         cert_pem,
-        req.fullchain_pem.as_deref(),
+        fullchain_pem,
         req.chain_pem.as_deref(),
         req.key_pem.as_deref(),
     )?;
