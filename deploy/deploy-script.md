@@ -10,6 +10,7 @@
 ./scripts/deploy corgi                  # deploy all corgis
 ./scripts/deploy corgi:corgi-01         # deploy one corgi
 ./scripts/deploy --dry-run all          # preview without transferring
+./scripts/deploy --print-build-cmd shepherd  # print the resolved Rust build command
 ./scripts/deploy --parallel all         # deploy all targets concurrently
 ./scripts/deploy --config .deploy-local.json shepherd   # use an alternate config
 ```
@@ -51,6 +52,7 @@ The script reads `.deploy.json` by default (override with `--config`). The repo 
 | `sshOpts` | string | `""` | Extra flags passed to `ssh` and `rsync -e`, e.g. `"-o StrictHostKeyChecking=no"` |
 | `rustTarget` | string | — | Rust cross-compile target, e.g. `"aarch64-unknown-linux-musl"`. Required for Rust services. |
 | `rustProfile` | string | `"release"` | `"debug"` or `"release"` |
+| `buildOverrides` | object | `{}` | Optional build-only overrides for Rust targets. Supports `env` (string map applied only to the build subprocess) and `args` (string array appended to `cargo zigbuild`). |
 | `owner` | string | — | `"user:group"` — `sudo chown -R` applied after sync. Auto-set to `remoteUser:remoteGroup` when those fields are present and `owner` is omitted. |
 | `dirMode` | string | — | Octal mode string — `sudo chmod` applied to `remoteDir` after chown, e.g. `"750"` |
 | `rsyncOpts` | string | — | Extra rsync flags, e.g. `"-O"` for OpenWRT targets |
@@ -78,7 +80,13 @@ Set `sudoRsync`, `remoteUser`, and `remoteGroup` to resolve this:
     "serviceName": "credo-shepherd",
     "sudoRsync": true,
     "remoteUser": "shepherd",
-    "remoteGroup": "shepherd"
+    "remoteGroup": "shepherd",
+    "buildOverrides": {
+      "env": {
+        "RUSTFLAGS": "-C target-cpu=goldmont"
+      },
+      "args": ["--locked"]
+    }
   }
 }
 ```
@@ -131,9 +139,21 @@ If you need something more complex (a custom init system, chained commands), use
 
 | Condition | Build step |
 |---|---|
-| `rustTarget` is set | `cargo zigbuild --target <target> --release` (requires [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild)) |
+| `rustTarget` is set | `cargo zigbuild --target <target> --release` plus any `buildOverrides.args`; any `buildOverrides.env` entries are applied only to the build subprocess (requires [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild)) |
 | `package.json` present in service directory | `npm install && npm run build`; `npm install --omit=dev` on remote after sync |
 | Neither | Files are copied directly with no build step |
+
+### Build command printing
+
+Use `--print-build-cmd` to print the resolved Rust build command before it runs. The printed line includes the effective working directory, any `buildOverrides.env` entries used for the build, and the final `cargo zigbuild` arguments. This is intended for troubleshooting and reproducing the exact command locally.
+
+Example output:
+
+```text
+[deploy][corgi/corgi-02] BUILD_CMD: cd /repo/corgi && RUSTFLAGS=-C\ target-cpu=goldmont cargo zigbuild --target x86_64-unknown-linux-musl --release --locked
+```
+
+`--print-build-cmd` does not change the deployed artifact; it only surfaces the exact Rust build invocation. When combined with `--dry-run`, the script still prints the command while keeping the remote sync and restart steps non-destructive.
 
 ## Parallel deploys
 

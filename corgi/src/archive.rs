@@ -120,28 +120,33 @@ pub fn install_to_archive(
 
     // Update live/cert.pem symlink
     let live_cert = live.join("cert.pem");
+    let live_fc = live.join("fullchain.pem");
     let rel_cert = pathdiff(&cert_archive_path, &live_cert);
     replace_symlink(&rel_cert, &live_cert)?;
-    // Also update the canonical cert path from config (always use relative path)
-    if entry.path != live_cert {
+    // Update the canonical cert path only when it is not also the fullchain path.
+    // When entry.path == live_fc, the fullchain section below manages that symlink;
+    // creating it here (pointing at cert-NNN.pem) would leave it wrong if
+    // fullchain_pem is None.
+    if entry.path != live_cert && entry.path != live_fc {
         ensure_parent(&entry.path)?;
         replace_symlink(&pathdiff(&cert_archive_path, &entry.path), &entry.path)?;
     }
 
     // Write fullchain
-    let fullchain_archive_path = fullchain_pem.map(|fc| {
+    let fullchain_archive_path: Option<PathBuf> = if let Some(fc) = fullchain_pem {
         let p = archive.join(format!("fullchain-{}.pem", sfx));
-        write_file(&p, fc.as_bytes(), entry.cert_mode.unwrap_or(0o644)).ok();
+        write_file(&p, fc.as_bytes(), entry.cert_mode.unwrap_or(0o644))?;
         if entry.cert_owner.is_some() || entry.cert_group.is_some() {
             if let Err(e) = set_owner(&p, entry.cert_owner.as_deref(), entry.cert_group.as_deref()) {
                 tracing::warn!(path = %p.display(), error = %e, "Failed to apply fullchain ownership");
             }
         }
-        p
-    });
+        Some(p)
+    } else {
+        None
+    };
 
     if let Some(ref fc_path) = fullchain_archive_path {
-        let live_fc = live.join("fullchain.pem");
         let rel = pathdiff(fc_path, &live_fc);
         replace_symlink(&rel, &live_fc)?;
         if let Some(ref configured) = entry.fullchain_path {
@@ -153,11 +158,13 @@ pub fn install_to_archive(
     }
 
     // Write chain
-    let chain_archive_path = chain_pem.map(|ch| {
+    let chain_archive_path: Option<PathBuf> = if let Some(ch) = chain_pem {
         let p = archive.join(format!("chain-{}.pem", sfx));
-        write_file(&p, ch.as_bytes(), entry.cert_mode.unwrap_or(0o644)).ok();
-        p
-    });
+        write_file(&p, ch.as_bytes(), entry.cert_mode.unwrap_or(0o644))?;
+        Some(p)
+    } else {
+        None
+    };
 
     if let Some(ref ch_path) = chain_archive_path {
         let live_ch = live.join("chain.pem");

@@ -748,7 +748,11 @@ async fn admin_provision_or_renew(
                         &state2.corgi_client_pool,
                         &node2,
                         &format!("/flock/{}/install", urlencoded(&cert_name2)),
-                        &json!({ "certPem": result.cert_pem }),
+                        &json!({
+                            "certPem":      result.cert_pem,
+                            "chainPem":     result.chain_pem,
+                            "fullchainPem": result.fullchain_pem,
+                        }),
                     )
                     .await
                     {
