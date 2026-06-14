@@ -9,7 +9,7 @@
 /// TODO(resilience): orders/authzs/challenges/nonces are in-memory only.
 /// See docs/vigil-rs-port-plan.md for the SQLite persistence plan.
 use axum::{
-    extract::{Path, State},
+    extract::{OriginalUri, Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -240,7 +240,7 @@ fn verify_rsa_jws(
 
 async fn validate_jws(
     state: &AppState,
-    _headers: &HeaderMap, // TODO: needed for RFC 8555 §6.4 url validation
+    request_url: &str,
     body: &Value,
     require_kid: bool,
     require_jwk: bool,
@@ -291,9 +291,18 @@ async fn validate_jws(
         }
     }
 
-    // TODO: validate JWS url matches request URL (RFC 8555 §6.4)
-    // The protected.url field must exactly match the request URL being processed.
-    // This requires plumbing the actual request URI through to validate_jws().
+    // RFC 8555 §6.4: protected.url must exactly match the request URL.
+    let jws_url = protected_json
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if jws_url != request_url {
+        return Err(acme_error(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            &format!("jws url mismatch: expected {request_url}, got {jws_url}"),
+        ));
+    }
 
     let alg = protected_json
         .get("alg")
@@ -563,11 +572,23 @@ pub async fn new_account(
     State(state): State<AppState>,
     axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
     headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     Json(body): Json<Value>,
 ) -> Response {
     let mut resp_headers = HeaderMap::new();
+    let (scheme, host) = extract_host_scheme(&headers);
+    let request_url = absolute(&host, scheme, uri.path());
 
-    let jws = match validate_jws(&state, &headers, &body, false, true, Some(&auth_user.id)).await {
+    let jws = match validate_jws(
+        &state,
+        &request_url,
+        &body,
+        false,
+        true,
+        Some(&auth_user.id),
+    )
+    .await
+    {
         Ok(j) => j,
         Err(e) => return e,
     };
@@ -584,8 +605,6 @@ pub async fn new_account(
             .find(|a| a.jwk_thumbprint == thumbprint)
             .cloned()
     };
-
-    let (scheme, host) = extract_host_scheme(&headers);
 
     if let Some(mut existing) = existing {
         if existing.vigil_user_id.is_empty() {
@@ -680,10 +699,22 @@ pub async fn get_account(
     State(state): State<AppState>,
     axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
     headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
-    let jws = match validate_jws(&state, &headers, &body, true, false, Some(&auth_user.id)).await {
+    let (scheme, host) = extract_host_scheme(&headers);
+    let request_url = absolute(&host, scheme, uri.path());
+    let jws = match validate_jws(
+        &state,
+        &request_url,
+        &body,
+        true,
+        false,
+        Some(&auth_user.id),
+    )
+    .await
+    {
         Ok(j) => j,
         Err(e) => return e,
     };
@@ -707,7 +738,6 @@ pub async fn get_account(
             )
         }
     };
-    let (scheme, host) = extract_host_scheme(&headers);
     let loc = absolute(&host, scheme, &format!("/acme/account/{}", account.id));
     resp_headers.insert("Location", loc.parse().unwrap());
     (
@@ -725,9 +755,21 @@ pub async fn new_order(
     State(state): State<AppState>,
     axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
     headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     Json(body): Json<Value>,
 ) -> Response {
-    let jws = match validate_jws(&state, &headers, &body, true, false, Some(&auth_user.id)).await {
+    let (scheme, host) = extract_host_scheme(&headers);
+    let request_url = absolute(&host, scheme, uri.path());
+    let jws = match validate_jws(
+        &state,
+        &request_url,
+        &body,
+        true,
+        false,
+        Some(&auth_user.id),
+    )
+    .await
+    {
         Ok(j) => j,
         Err(e) => return e,
     };
@@ -823,8 +865,6 @@ pub async fn new_order(
         *counter += 1;
         format!("order-{}", base36(*counter))
     };
-
-    let (scheme, host) = extract_host_scheme(&headers);
 
     let mut authz_ids = Vec::new();
     for identifier in &identifiers {
@@ -934,10 +974,22 @@ pub async fn get_order(
     State(state): State<AppState>,
     axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
     headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
-    let jws = match validate_jws(&state, &headers, &body, true, false, Some(&auth_user.id)).await {
+    let (scheme, host) = extract_host_scheme(&headers);
+    let request_url = absolute(&host, scheme, uri.path());
+    let jws = match validate_jws(
+        &state,
+        &request_url,
+        &body,
+        true,
+        false,
+        Some(&auth_user.id),
+    )
+    .await
+    {
         Ok(j) => j,
         Err(e) => return e,
     };
@@ -955,7 +1007,6 @@ pub async fn get_order(
             "order does not belong to account",
         );
     }
-    let (scheme, host) = extract_host_scheme(&headers);
     let loc = absolute(&host, scheme, &format!("/acme/order/{}", id));
     resp_headers.insert("Location", loc.parse().unwrap());
     (resp_headers, Json(order_response(order, &host, scheme))).into_response()
@@ -965,10 +1016,22 @@ pub async fn get_authz(
     State(state): State<AppState>,
     axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
     headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
-    let jws = match validate_jws(&state, &headers, &body, true, false, Some(&auth_user.id)).await {
+    let (scheme, host) = extract_host_scheme(&headers);
+    let request_url = absolute(&host, scheme, uri.path());
+    let jws = match validate_jws(
+        &state,
+        &request_url,
+        &body,
+        true,
+        false,
+        Some(&auth_user.id),
+    )
+    .await
+    {
         Ok(j) => j,
         Err(e) => return e,
     };
@@ -998,8 +1061,6 @@ pub async fn get_authz(
         );
     }
     drop(orders);
-
-    let (scheme, host) = extract_host_scheme(&headers);
     let challenges = state.inner.acme_challenges.read().await;
     let chall_list: Vec<Value> = authz
         .challenge_ids
@@ -1182,10 +1243,22 @@ pub async fn respond_challenge(
     State(state): State<AppState>,
     axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
     headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
-    let jws = match validate_jws(&state, &headers, &body, true, false, Some(&auth_user.id)).await {
+    let (scheme, host) = extract_host_scheme(&headers);
+    let request_url = absolute(&host, scheme, uri.path());
+    let jws = match validate_jws(
+        &state,
+        &request_url,
+        &body,
+        true,
+        false,
+        Some(&auth_user.id),
+    )
+    .await
+    {
         Ok(j) => j,
         Err(e) => return e,
     };
@@ -1228,7 +1301,6 @@ pub async fn respond_challenge(
             .unwrap_or_default()
     };
 
-    let (scheme, host) = extract_host_scheme(&headers);
     let challenge_url = absolute(
         &host,
         scheme,
@@ -1316,10 +1388,22 @@ pub async fn finalize_order(
     State(state): State<AppState>,
     axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
     headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
-    let jws = match validate_jws(&state, &headers, &body, true, false, Some(&auth_user.id)).await {
+    let (scheme, host) = extract_host_scheme(&headers);
+    let request_url = absolute(&host, scheme, uri.path());
+    let jws = match validate_jws(
+        &state,
+        &request_url,
+        &body,
+        true,
+        false,
+        Some(&auth_user.id),
+    )
+    .await
+    {
         Ok(j) => j,
         Err(e) => return e,
     };
@@ -1445,7 +1529,6 @@ pub async fn finalize_order(
         }
     }
 
-    let (scheme, host) = extract_host_scheme(&headers);
     let loc = absolute(&host, scheme, &format!("/acme/order/{}", id));
     resp_headers.insert("Location", loc.parse().unwrap());
     let orders = state.inner.acme_orders.read().await;
@@ -1457,10 +1540,22 @@ pub async fn download_cert(
     State(state): State<AppState>,
     axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
     headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
-    let jws = match validate_jws(&state, &headers, &body, true, false, Some(&auth_user.id)).await {
+    let (scheme, host) = extract_host_scheme(&headers);
+    let request_url = absolute(&host, scheme, uri.path());
+    let jws = match validate_jws(
+        &state,
+        &request_url,
+        &body,
+        true,
+        false,
+        Some(&auth_user.id),
+    )
+    .await
+    {
         Ok(j) => j,
         Err(e) => return e,
     };
@@ -1519,9 +1614,12 @@ pub async fn revoke_cert(
     State(state): State<AppState>,
     axum::Extension(AuthUser(_auth_user)): axum::Extension<AuthUser>,
     headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     Json(body): Json<Value>,
 ) -> Response {
-    let jws = match validate_jws(&state, &headers, &body, false, false, None).await {
+    let (scheme, host) = extract_host_scheme(&headers);
+    let request_url = absolute(&host, scheme, uri.path());
+    let jws = match validate_jws(&state, &request_url, &body, false, false, None).await {
         Ok(j) => j,
         Err(e) => return e,
     };
@@ -1639,9 +1737,20 @@ pub async fn key_change(
     State(state): State<AppState>,
     axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
     headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
     Json(body): Json<Value>,
 ) -> Response {
-    let _ = validate_jws(&state, &headers, &body, true, false, Some(&auth_user.id)).await;
+    let (scheme, host) = extract_host_scheme(&headers);
+    let request_url = absolute(&host, scheme, uri.path());
+    let _ = validate_jws(
+        &state,
+        &request_url,
+        &body,
+        true,
+        false,
+        Some(&auth_user.id),
+    )
+    .await;
     let mut resp_headers = HeaderMap::new();
     inject_nonce(&state, &mut resp_headers).await;
     (resp_headers, Json(json!({ "status": "not-implemented" }))).into_response()
