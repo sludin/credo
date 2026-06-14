@@ -3,38 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::config::FlockEntry;
-
-// ---------------------------------------------------------------------------
-// Ordinal helpers
-// ---------------------------------------------------------------------------
-
-pub fn ordinal_string(n: u32) -> String {
-    format!("{:03}", n)
-}
-
-/// Finds the next ordinal number to use in the archive directory for a cert name.
-/// Scans for files matching `*-NNN.pem` and returns max+1 (minimum 1).
-pub fn next_archive_ordinal(archive_cert_dir: &Path) -> Result<u32> {
-    if !archive_cert_dir.exists() {
-        return Ok(1);
-    }
-    let mut max = 0u32;
-    for entry in fs::read_dir(archive_cert_dir).context("Reading archive dir")? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        if let Some(n) = extract_ordinal(&name) {
-            if n > max {
-                max = n;
-            }
-        }
-    }
-    Ok(max + 1)
-}
-
-fn extract_ordinal(filename: &str) -> Option<u32> {
-    let without_ext = filename.strip_suffix(".pem")?;
-    without_ext.rsplit('-').next()?.parse().ok()
-}
+pub use credo_lib::archive::{next_archive_ordinal, ordinal_string, replace_symlink};
 
 // ---------------------------------------------------------------------------
 // Directory layout helpers
@@ -61,28 +30,6 @@ pub fn ensure_parent(path: &Path) -> Result<()> {
         fs::create_dir_all(parent)
             .with_context(|| format!("Creating directory {}", parent.display()))?;
     }
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Atomic symlink replacement
-// ---------------------------------------------------------------------------
-
-/// Atomically replace (or create) a symlink at `link_path` pointing to `target`.
-/// Uses a rename of a temp symlink to make the operation atomic.
-pub fn replace_symlink(link_path: &Path, target: &Path) -> Result<()> {
-    ensure_parent(link_path)?;
-
-    let tmp = link_path.with_extension("tmp-symlink");
-    // Remove any existing tmp
-    let _ = fs::remove_file(&tmp);
-
-    std::os::unix::fs::symlink(target, &tmp)
-        .with_context(|| format!("Creating temp symlink {}", tmp.display()))?;
-
-    fs::rename(&tmp, link_path)
-        .with_context(|| format!("Renaming symlink to {}", link_path.display()))?;
-
     Ok(())
 }
 
@@ -137,14 +84,6 @@ pub fn set_owner(path: &Path, owner: Option<&str>, group: Option<&str>) -> Resul
 // Archive install: write versioned files + update live symlinks
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
-pub struct ArchiveInstallPaths {
-    pub cert_archive: PathBuf,
-    pub fullchain_archive: Option<PathBuf>,
-    pub chain_archive: Option<PathBuf>,
-    pub key_archive: Option<PathBuf>,
-}
-
 pub fn install_to_archive(
     entry: &FlockEntry,
     cert_store_dir: &Path,
@@ -152,7 +91,7 @@ pub fn install_to_archive(
     fullchain_pem: Option<&str>,
     chain_pem: Option<&str>,
     key_pem: Option<&str>,
-) -> Result<ArchiveInstallPaths> {
+) -> Result<()> {
     let archive = archive_dir(cert_store_dir, &entry.name);
     let live = live_dir(cert_store_dir, &entry.name);
 
@@ -182,11 +121,11 @@ pub fn install_to_archive(
     // Update live/cert.pem symlink
     let live_cert = live.join("cert.pem");
     let rel_cert = pathdiff(&cert_archive_path, &live_cert);
-    replace_symlink(&live_cert, &rel_cert)?;
+    replace_symlink(&rel_cert, &live_cert)?;
     // Also update the canonical cert path from config (always use relative path)
     if entry.path != live_cert {
         ensure_parent(&entry.path)?;
-        replace_symlink(&entry.path, &pathdiff(&cert_archive_path, &entry.path))?;
+        replace_symlink(&pathdiff(&cert_archive_path, &entry.path), &entry.path)?;
     }
 
     // Write fullchain
@@ -204,11 +143,11 @@ pub fn install_to_archive(
     if let Some(ref fc_path) = fullchain_archive_path {
         let live_fc = live.join("fullchain.pem");
         let rel = pathdiff(fc_path, &live_fc);
-        replace_symlink(&live_fc, &rel)?;
+        replace_symlink(&rel, &live_fc)?;
         if let Some(ref configured) = entry.fullchain_path {
             if configured != &live_fc {
                 ensure_parent(configured)?;
-                replace_symlink(configured, &pathdiff(fc_path, configured))?;
+                replace_symlink(&pathdiff(fc_path, configured), configured)?;
             }
         }
     }
@@ -223,11 +162,11 @@ pub fn install_to_archive(
     if let Some(ref ch_path) = chain_archive_path {
         let live_ch = live.join("chain.pem");
         let rel = pathdiff(ch_path, &live_ch);
-        replace_symlink(&live_ch, &rel)?;
+        replace_symlink(&rel, &live_ch)?;
         if let Some(ref configured) = entry.chain_path {
             if configured != &live_ch {
                 ensure_parent(configured)?;
-                replace_symlink(configured, &pathdiff(ch_path, configured))?;
+                replace_symlink(&pathdiff(ch_path, configured), configured)?;
             }
         }
     }
@@ -268,10 +207,10 @@ pub fn install_to_archive(
     if let Some(ref key_path) = key_archive_path {
         let live_key = live.join("privkey.pem");
         let rel = pathdiff(key_path, &live_key);
-        replace_symlink(&live_key, &rel)?;
+        replace_symlink(&rel, &live_key)?;
         if entry.key_path != live_key {
             ensure_parent(&entry.key_path)?;
-            replace_symlink(&entry.key_path, &pathdiff(key_path, &entry.key_path))?;
+            replace_symlink(&pathdiff(key_path, &entry.key_path), &entry.key_path)?;
         }
         // Key permissions
         set_permissions(&entry.key_path, entry.key_mode.unwrap_or(0o640))?;
@@ -286,12 +225,7 @@ pub fn install_to_archive(
         }
     }
 
-    Ok(ArchiveInstallPaths {
-        cert_archive: cert_archive_path,
-        fullchain_archive: fullchain_archive_path,
-        chain_archive: chain_archive_path,
-        key_archive: key_archive_path,
-    })
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -309,7 +243,6 @@ fn write_file(path: &Path, data: &[u8], mode: u32) -> Result<()> {
 /// Falls back to absolute `target` if diff can't be computed.
 fn pathdiff(target: &Path, link_path: &Path) -> PathBuf {
     let link_dir = link_path.parent().unwrap_or(Path::new("."));
-    // Simple implementation: count common prefix
     let target_comps: Vec<_> = target.components().collect();
     let link_comps: Vec<_> = link_dir.components().collect();
 

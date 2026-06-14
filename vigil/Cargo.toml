@@ -50,7 +50,7 @@ hex    = { workspace = true }
 base64 = { workspace = true }
 
 # Timing-safe comparison
-subtle = "2"
+subtle = { workspace = true }
 
 # Serialization
 serde      = { workspace = true }

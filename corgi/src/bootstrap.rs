@@ -38,20 +38,13 @@ struct BsState {
 // ---------------------------------------------------------------------------
 
 fn check_token(headers: &HeaderMap, expected_token: &str) -> bool {
+    use subtle::ConstantTimeEq;
     let auth = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     let expected = format!("Bearer {}", expected_token);
-
-    if auth.len() != expected.len() {
-        return false;
-    }
-    auth.as_bytes()
-        .iter()
-        .zip(expected.as_bytes().iter())
-        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-        == 0
+    auth.as_bytes().ct_eq(expected.as_bytes()).into()
 }
 
 fn unauthorized() -> (StatusCode, Json<Value>) {

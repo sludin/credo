@@ -53,7 +53,7 @@ pub fn ordinal_string(n: u32) -> String {
     format!("{:03}", n)
 }
 
-/// Scan `archive_dir` for `fullchain-NNN.pem` files and return the next ordinal.
+/// Scan `archive_dir` for `*-NNN.pem` files and return the next ordinal.
 pub fn next_archive_ordinal(archive_dir: &Path) -> Result<u32> {
     if !archive_dir.exists() {
         return Ok(1);
@@ -64,11 +64,9 @@ pub fn next_archive_ordinal(archive_dir: &Path) -> Result<u32> {
     {
         let name = entry?.file_name();
         let name = name.to_string_lossy();
-        if let Some(rest) = name.strip_prefix("fullchain-") {
-            if let Some(num_str) = rest.strip_suffix(".pem") {
-                if let Ok(n) = num_str.parse::<u32>() {
-                    max = max.max(n);
-                }
+        if let Some(stem) = name.strip_suffix(".pem") {
+            if let Some(n) = stem.rsplit('-').next().and_then(|s| s.parse::<u32>().ok()) {
+                max = max.max(n);
             }
         }
     }
@@ -79,18 +77,13 @@ pub fn next_archive_ordinal(archive_dir: &Path) -> Result<u32> {
 // Atomic symlink replacement
 // ---------------------------------------------------------------------------
 
-/// Delete any existing file or symlink at `link_path` and create a new
-/// symlink pointing to `target_path`.
+/// Atomically replace (or create) a symlink at `link_path` pointing to `target_path`.
+/// Uses a rename of a temp symlink so the replacement is atomic.
 pub fn replace_symlink(target_path: &Path, link_path: &Path) -> Result<()> {
-    if link_path.exists() || link_path.symlink_metadata().is_ok() {
-        std::fs::remove_file(link_path)
-            .with_context(|| format!("Removing old symlink: {}", link_path.display()))?;
-    }
-    std::os::unix::fs::symlink(target_path, link_path).with_context(|| {
-        format!(
-            "Creating symlink {} → {}",
-            link_path.display(),
-            target_path.display()
-        )
-    })
+    let tmp = link_path.with_extension("tmp-symlink");
+    let _ = std::fs::remove_file(&tmp);
+    std::os::unix::fs::symlink(target_path, &tmp)
+        .with_context(|| format!("Creating temp symlink {}", tmp.display()))?;
+    std::fs::rename(&tmp, link_path)
+        .with_context(|| format!("Renaming symlink to {}", link_path.display()))
 }
