@@ -27,17 +27,38 @@ Each item carries a theme tag: **[Setup]**, **[Security]**, **[Docs]**, **[Infra
 
 ## Tier 1 — Any Operator, Any Skill Level
 
-### [Setup] Collapse the bootstrap sequence
+### [Setup] curl-pipe install script
 
-The current 6-phase, multi-machine bootstrap has too many "go to this machine, run this, come back" coordination steps. Goal: a single `credo init` command that scaffolds all config files with safe defaults, runs the PKI ceremony in-process for single-machine deployments, and produces a running system. Multi-machine topology becomes an explicit flag, not the assumed path. Time-to-running system: under 15 minutes.
+A single `install.sh` downloaded via `curl | bash` that installs the service binaries for the target platform, creates the expected directory structure, and installs systemd (Linux) or launchd (macOS) service files. Thin and mechanical — no ceremony, no config, no decisions beyond which services to install. Leaves the operator at a known starting state ready for the wizard.
 
-### [Setup] Config scaffolding with required-vs-optional clarity
+### [Setup] Consolidated bash wizard
 
-Too many JSON files with undocumented required fields. `credo init` should generate starter configs where optional fields are visually distinct (grouped, commented, or separated). The minimum viable config for each service should be 5–10 fields, not 30.
+A single interactive bash script that replaces the current multi-step, multi-document bootstrap flow. The wizard:
 
-### [Setup] Single-binary CA option (`credo ca init`)
+1. **Collects ceremony variables** interactively with reasonable defaults, then calls the existing ceremony scripts (`generate-openssl-cnf.sh`, `bootstrap-roots.sh`, `issue-intermediary.sh`) as subprocesses. For air-gapped deployments, the operator can skip this step and point the wizard at an already-completed ceremony output. The ceremony variables collected:
 
-The PKI ceremony is the biggest single coordination cost. Provide a `credo ca init` subcommand that runs the ceremony in-process — no shell scripts, no OpenSSL dependency — for non-air-gap deployments. The offline ceremony remains available for operators who need it, but is no longer the only path.
+   | Question | Default |
+   |---|---|
+   | Organization name | *(required)* |
+   | Country code | `US` |
+   | Root CA common name | `{ORG} Root X1` (derived) |
+   | Intermediate CA common name | `E1` |
+   | PKI base URL | `http://pki.example.com` (note: does not need to be served) |
+   | Root cert validity | `3650` days (10 yr) |
+   | Intermediate cert validity | `730` days (2 yr) |
+   | Root CA passphrase | prompted securely |
+
+   CRL validity days use ceremony script defaults silently.
+
+2. **Collects service config values** with safe defaults and generates all JSON config files. Optional fields are either omitted (using service defaults) or shown with a clear `[optional, press Enter to skip]` prompt. Target minimum viable config per service: 5–10 fields.
+
+3. **Runs the bootstrap sequence** (the current phases 2–6) in order, with clear progress output and actionable error messages.
+
+4. **Verifies** that all configured services are healthy before declaring success.
+
+Multi-machine topology is supported as an explicit flag (`--multi-host`); the default path assumes all services on one machine. Time-to-running: under 15 minutes for the single-host path.
+
+**No logic is duplicated between the wizard and the ceremony scripts.** The wizard collects inputs and orchestrates; the ceremony scripts perform the CA operations. The wizard calls the ceremony scripts — it does not reimplement them.
 
 ### [Security] Vigil deny-all default
 
@@ -164,5 +185,5 @@ A comprehensive, dated security audit of credo after Tier 1 and Tier 2 work is c
 | `docs/security-critique.md` | Superseded by Tier 3 fresh security audit |
 | `docs/security.md` | Updated incrementally as each tier completes |
 | `docs/operator-hardening.md` | Updated at Tier 2 completion |
-| `docs/bootstrap-guide.md` | Superseded by Tier 1 `credo init` flow |
+| `docs/bootstrap-guide.md` | Superseded by Tier 1 install script + bash wizard |
 | `docs/rust-audit.md` | Ongoing; items complete as refactoring continues |
