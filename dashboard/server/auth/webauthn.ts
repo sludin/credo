@@ -25,6 +25,7 @@ export async function beginRegistration(
   const options = await generateRegistrationOptions({
     rpName: auth.rpName,
     rpID: auth.rpId,
+    userID: Buffer.from(user.id),
     userName: user.shepherdAccount,
     userDisplayName: user.displayName,
     excludeCredentials: user.passkeys.map((pk) => ({
