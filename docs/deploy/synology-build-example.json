@@ -1,0 +1,44 @@
+{
+  "shepherd": {
+    "host": "home",
+    "remoteDir": "/var/apps/credo/shepherd",
+    "serviceName": "credo-shepherd",
+    "rustTarget": "x86_64-unknown-linux-musl",
+    "rustProfile": "release",
+    "buildOverrides": {
+      "env": {
+        "RUSTFLAGS": "-C target-cpu=goldmont"
+      },
+      "args": ["--locked"]
+    }
+  },
+  "vigil": {
+    "host": "home",
+    "remoteDir": "/var/apps/credo/vigil",
+    "serviceName": "credo-vigil",
+    "rustTarget": "x86_64-unknown-linux-musl",
+    "rustProfile": "release",
+    "buildOverrides": {
+      "env": {
+        "RUSTFLAGS": "-C target-cpu=goldmont"
+      },
+      "args": ["--locked"]
+    }
+  },
+  "corgis": [
+    {
+      "name": "corgi-synology",
+      "host": "njord",
+      "remoteDir": "/var/apps/credo/corgi",
+      "serviceName": "credo-corgi",
+      "rustTarget": "x86_64-unknown-linux-musl",
+      "rustProfile": "release",
+      "buildOverrides": {
+        "env": {
+          "RUSTFLAGS": "-C target-cpu=goldmont"
+        },
+        "args": ["--locked"]
+      }
+    }
+  ]
+}
