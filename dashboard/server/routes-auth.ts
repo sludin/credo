@@ -351,15 +351,30 @@ export function createAuthRouter(
       }
     }
 
-    // After the refresh attempt, verify credentials exist. If not, the user's
-    // Shepherd tokens were never obtained or were lost (e.g. old Shepherd restart
-    // with in-memory token store). Block login with a clear message rather than
-    // creating a session that immediately fails all API calls.
+    // After the refresh attempt, verify credentials are present AND the access token
+    // is not already expired. A present-but-expired token means the refresh failed
+    // (refresh token invalid or Shepherd unavailable) — creating a session in that
+    // state would cause every API call to return 401 immediately.
     const { users: credCheck } = loadUsers();
     const credUser = credCheck.find((u) => u.id === user.id);
     if (!credUser?.shepherdAccessToken) {
       res.status(403).json({
         error: 'Your Shepherd credentials are missing or have expired. Contact your administrator for a re-enrollment link.',
+      });
+      return;
+    }
+    try {
+      const [, bodyB64] = credUser.shepherdAccessToken.split('.');
+      const claims = JSON.parse(Buffer.from(bodyB64, 'base64url').toString()) as { exp: number };
+      if (claims.exp * 1000 <= Date.now()) {
+        res.status(403).json({
+          error: 'Your Shepherd credentials have expired and could not be refreshed. Contact your administrator for a re-enrollment link.',
+        });
+        return;
+      }
+    } catch {
+      res.status(403).json({
+        error: 'Your Shepherd credentials are invalid and could not be refreshed. Contact your administrator for a re-enrollment link.',
       });
       return;
     }

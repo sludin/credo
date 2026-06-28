@@ -261,9 +261,10 @@ pub async fn refresh_token(
     )
     .map_err(AppError::Internal)?;
 
-    // Revoke old, issue new
+    // Revoke old, issue new — preserve the original cert-based expiry so the
+    // refresh token lives for the lifetime of the enrollment cert, not just 24h.
     state.refresh_tokens.revoke_token(token).await;
-    let expires_at = chrono::Utc::now().timestamp() + 86400;
+    let expires_at = entry.expires_at;
     let new_refresh = state
         .refresh_tokens
         .issue_token(
@@ -274,9 +275,14 @@ pub async fn refresh_token(
         )
         .await;
 
+    let expires_at_str = chrono::DateTime::from_timestamp(expires_at, 0)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_default();
+
     Ok(Json(json!({
         "accessToken": access,
         "refreshToken": new_refresh,
+        "expiresAt": expires_at_str,
     })))
 }
 

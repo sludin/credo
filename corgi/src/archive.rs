@@ -137,7 +137,8 @@ pub fn install_to_archive(
         let p = archive.join(format!("fullchain-{}.pem", sfx));
         write_file(&p, fc.as_bytes(), entry.cert_mode.unwrap_or(0o644))?;
         if entry.cert_owner.is_some() || entry.cert_group.is_some() {
-            if let Err(e) = set_owner(&p, entry.cert_owner.as_deref(), entry.cert_group.as_deref()) {
+            if let Err(e) = set_owner(&p, entry.cert_owner.as_deref(), entry.cert_group.as_deref())
+            {
                 tracing::warn!(path = %p.display(), error = %e, "Failed to apply fullchain ownership");
             }
         }
