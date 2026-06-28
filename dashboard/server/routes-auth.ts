@@ -1,4 +1,5 @@
 import express, { Request, Response } from 'express';
+import { isAxiosError } from 'axios';
 import type { AxiosInstance } from 'axios';
 import type { DashboardConfig } from './config';
 import type { SessionUser } from './auth/session';
@@ -182,9 +183,19 @@ export function createAuthRouter(
       shepherdRefreshToken = tokenResp.data.refreshToken;
       shepherdTokenExpiresAt = tokenResp.data.expiresAt;
     } catch (err) {
-      res.status(400).json({
-        error: `Could not obtain Shepherd token: ${err instanceof Error ? err.message : String(err)}`,
-      });
+      // Surface the actual Shepherd error body rather than the generic Axios message
+      // (err.message is often "Request failed with status code 4XX" or empty).
+      let detail: string;
+      if (isAxiosError(err)) {
+        const body = err.response?.data;
+        const bodyError = typeof body === 'object' && body !== null && 'error' in body
+          ? String((body as { error?: unknown }).error)
+          : undefined;
+        detail = bodyError || `HTTP ${err.response?.status ?? 'no-response'}: ${err.message || err.code || 'unknown'}`;
+      } else {
+        detail = err instanceof Error ? err.message : String(err);
+      }
+      res.status(400).json({ error: `Could not obtain Shepherd token: ${detail}` });
       return;
     }
 

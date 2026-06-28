@@ -186,12 +186,16 @@ pub async fn token(
         ));
     }
 
-    // Look up the account
+    // Look up the account by identity URI.
     let accounts = state.accounts.read().await;
     let account = accounts
         .iter()
         .find(|a| a.active && a.identities.contains(&identity_uri.to_string()))
-        .ok_or_else(|| AppError::Unauthorized("Identity not found in accounts".to_string()))?
+        .ok_or_else(|| AppError::Unauthorized(format!(
+            "Identity '{}' not found in any active Shepherd account. \
+             Add this URI to the identities[] array of the matching account in shepherd.accounts.json.",
+            identity_uri
+        )))?
         .clone();
     drop(accounts);
 
