@@ -210,7 +210,7 @@ Operator flow, end to end:
 
 ## [Security] Vigil deny-all default
 
-- [ ] Flip `issuancePolicy.allowedDnsSuffixes: []` semantics from allow-all to deny-all. Explicit
+- [x] Flip `issuancePolicy.allowedDnsSuffixes: []` semantics from allow-all to deny-all. Explicit
   `"*"` opts into unrestricted issuance. A misconfigured first deployment should fail loudly, not
   silently sign anything. Secure-by-default: the safe configuration requires no action, the unsafe
   one requires explicit action.
@@ -219,7 +219,7 @@ Operator flow, end to end:
 
 ## [Security] Dashboard session secret startup assertion
 
-- [ ] Shepherd/Dashboard refuses to start if the session secret matches the example/placeholder
+- [x] Shepherd/Dashboard refuses to start if the session secret matches the example/placeholder
   value or falls below a minimum entropy threshold. Currently `docs/security.md` describes this as
   an operator responsibility but the code does not enforce it — close that gap.
 
@@ -227,10 +227,10 @@ Operator flow, end to end:
 
 ## [Docs] "What you get out of the box" security narrative
 
-- [ ] Write a short, honest doc: what credo protects by default, what requires explicit operator
+- [x] Write a short, honest doc: what credo protects by default, what requires explicit operator
   action, what it will never protect (hardware key binding, network-level isolation). Replaces the
   scattered "operator's responsibility" footnotes currently in `docs/security.md` and elsewhere.
-  Written for an operator evaluating credo before installing it.
+  Written for an operator evaluating credo before installing it. → `docs/security-defaults.md`
 
 ---
 

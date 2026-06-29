@@ -189,6 +189,23 @@ export function loadConfig(): DashboardConfig {
     optionalString(rawAuth.usersPath) ?? 'dashboard.users.json'
   );
   const authSessionSecret = requiredString(rawAuth.sessionSecret, 'auth.sessionSecret');
+  const KNOWN_PLACEHOLDER_SECRETS = [
+    'replace-with-a-long-random-secret',
+    'change-me',
+    'changeme',
+    'secret',
+    'your-secret-here',
+    'your_secret_here',
+  ];
+  if (
+    KNOWN_PLACEHOLDER_SECRETS.includes(authSessionSecret.toLowerCase()) ||
+    authSessionSecret.length < 32
+  ) {
+    throw new Error(
+      'auth.sessionSecret is insecure: must be a random string of at least 32 characters and not a placeholder value. ' +
+      'Generate one with: openssl rand -base64 32'
+    );
+  }
   const authSessionDurationHours = typeof rawAuth.sessionDurationHours === 'number' && rawAuth.sessionDurationHours > 0
     ? rawAuth.sessionDurationHours : 24;
   const authEnrollmentTokenTTLHours = typeof rawAuth.enrollmentTokenTTLHours === 'number' && rawAuth.enrollmentTokenTTLHours > 0

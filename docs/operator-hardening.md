@@ -155,7 +155,7 @@ Config file: `vigil.config.json`
 | Risk | **Medium** |
 | Set to | The DNS suffixes your deployment owns |
 
-An empty list disables DNS name filtering entirely — Vigil will issue certificates for any domain name a client requests. This is the largest policy gap in a default Vigil deployment.
+An empty list denies all DNS certificate issuance — Vigil will reject any CSR containing a DNS SAN. This is secure by default. To enable issuance, set the suffixes your deployment owns. To permit any domain (not recommended), use `["*"]`.
 
 ```json
 "issuancePolicy": {
@@ -222,12 +222,12 @@ Config file: `dashboard.config.json`
 | Risk | **High** |
 | Action | Generate a strong random secret before first start |
 
-The example file ships with the literal placeholder `"replace-with-a-long-random-secret"`. The service starts with this value — there is no startup check that the placeholder was replaced. A deployment that copies the example verbatim uses a publicly known session secret, making all sessions forgeable.
+The Dashboard BFF enforces this at startup: it refuses to start if the value matches a known placeholder or is shorter than 32 characters. A deployment with a weak or placeholder secret fails loudly at boot rather than silently at runtime.
 
 Generate a secret before deployment:
 
 ```bash
-openssl rand -hex 32
+openssl rand -base64 32
 ```
 
 Store the result outside version control. Do not commit it.
@@ -264,8 +264,8 @@ This controls whether the dashboard verifies Shepherd's server certificate when 
 
 | # | Service | Field | Default | Action |
 |---|---------|-------|---------|--------|
-| 1 | Dashboard | `auth.sessionSecret` | placeholder | Replace with `openssl rand -hex 32` output |
-| 2 | Vigil | `issuancePolicy.allowedDnsSuffixes` | `[]` | Set to your domain(s) |
+| 1 | Dashboard | `auth.sessionSecret` | *(enforced at startup — placeholder or short value refuses to start)* | Generate with `openssl rand -base64 32` |
+| 2 | Vigil | `issuancePolicy.allowedDnsSuffixes` | `[]` (deny-all) | Set to your domain(s); `["*"]` to allow any |
 | 3 | Vigil | `issuancePolicy.allowedIdentityUriPrefixes` | `[]` | Set to your identity URI prefix |
 | 4 | Any | `bind` | `127.0.0.1` | If changed to expose a port externally, confirm firewall rules restrict access |
 | 5 | Corgi | `auth.mode` | `"mtls"` | Do not set to `"proxy-headers"` without a verified TLS-terminating proxy |

@@ -28,8 +28,12 @@ fn is_allowed_dns(
     allow_subdomains: bool,
     allow_bare_suffix: bool,
 ) -> bool {
-    if suffixes.is_empty() {
+    // "*" opts into unrestricted issuance; empty list = deny-all
+    if suffixes.iter().any(|s| s == "*") {
         return true;
+    }
+    if suffixes.is_empty() {
+        return false;
     }
     let normalized = normalize_dns(name);
     suffixes.iter().any(|suffix| {
@@ -184,28 +188,32 @@ pub fn validate_issuance_policy(
         );
     }
 
-    if !policy.allowed_dns_suffixes.is_empty() {
-        let disallowed: Vec<&String> = dns_names
-            .iter()
-            .filter(|name| {
-                !is_allowed_dns(
-                    name,
-                    &policy.allowed_dns_suffixes,
-                    policy.allow_subdomains,
-                    policy.allow_bare_suffix,
-                )
-            })
-            .collect();
-        if !disallowed.is_empty() {
+    let disallowed: Vec<&String> = dns_names
+        .iter()
+        .filter(|name| {
+            !is_allowed_dns(
+                name,
+                &policy.allowed_dns_suffixes,
+                policy.allow_subdomains,
+                policy.allow_bare_suffix,
+            )
+        })
+        .collect();
+    if !disallowed.is_empty() {
+        if policy.allowed_dns_suffixes.is_empty() {
             bail!(
-                "DNS names are outside allowed issuance policy suffixes: {}",
-                disallowed
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                "DNS issuance is disabled: allowedDnsSuffixes is empty. \
+                 Add domain suffixes to allow, or use [\"*\"] to permit any name."
             );
         }
+        bail!(
+            "DNS names are outside allowed issuance policy suffixes: {}",
+            disallowed
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
 
     if !policy.allowed_identity_uri_prefixes.is_empty() {

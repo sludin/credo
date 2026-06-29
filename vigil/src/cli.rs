@@ -343,7 +343,7 @@ pub fn run_check_config() -> Result<()> {
         ));
     } else {
         println!(
-            "  ✗ issuancePolicy.allowedDnsSuffixes is empty — no domain names will be allowed"
+            "  ✗ issuancePolicy.allowedDnsSuffixes is empty — DNS issuance is disabled (use [\"*\"] to allow any name)"
         );
         errors += 1;
     }

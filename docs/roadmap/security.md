@@ -196,10 +196,10 @@ The following settings have security implications beyond the defaults. Each is c
 | Service | Setting | Default | Production requirement |
 |---------|---------|---------|------------------------|
 | All | `bind` | `0.0.0.0` | Restrict to specific interface |
-| Vigil | `issuancePolicy.allowedDnsSuffixes` | `[]` (no restriction) | Set to your domain(s) |
+| Vigil | `issuancePolicy.allowedDnsSuffixes` | `[]` (deny-all) | Set to your domain(s), or `["*"]` to allow any |
 | Vigil | `issuancePolicy.allowedIdentityUriPrefixes` | `[]` (no restriction) | Set to your identity namespace |
 | Vigil | intermediate CA key path | relative to CWD | Use absolute path, mode `0600` |
 | Shepherd | `auth.jwtSigningKeyPath` | `./shepherd.jwt.key.pem` | Use absolute path |
 | Shepherd | `alerts[].secure` | `false` | Set `true` for SMTP over TLS |
-| Dashboard | `auth.sessionSecret` | placeholder string | Replace before first start |
+| Dashboard | `auth.sessionSecret` | *(enforced at startup — placeholder or short value refuses to start)* | Generate with `openssl rand -base64 32` |
 | Corgi | `filePolicy.keyMode` | `0640` | Set `0600` |
