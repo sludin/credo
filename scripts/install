@@ -714,91 +714,72 @@ build_service_json() {
   local svc_user="$svc"
   local svc_name="credo-${svc}"
 
-  local args=(
-    --arg host "$host"
-    --arg remote_dir "$remote_dir"
-    --argjson port "$port"
-    --arg ssh_opts "$ssh_opts"
-    --arg rust_target "$rust_target"
-    --arg remote_user "$svc_user"
-    --arg remote_group "$svc_user"
-    --arg service_name "$svc_name"
-    --argjson sudo_rsync "$sudo_rsync"
-  )
-  jq -cn "${args[@]}" '{
-    host: $host,
-    remoteDir: $remote_dir,
-    sshPort: $port,
-    ($ssh_opts | if . == "" then empty else . end): $ssh_opts,
-    rustTarget: $rust_target,
-    rustProfile: "release",
-    sudoRsync: $sudo_rsync,
-    remoteUser: $remote_user,
-    remoteGroup: $remote_group,
-    serviceName: $service_name
-  }' 2>/dev/null || jq -cn "${args[@]}" '{
-    host: $host,
-    remoteDir: $remote_dir,
-    sshPort: $port,
-    rustTarget: $rust_target,
-    rustProfile: "release",
-    sudoRsync: $sudo_rsync,
-    remoteUser: $remote_user,
-    remoteGroup: $remote_group,
-    serviceName: $service_name
-  }'
+  local json
+  json=$(jq -cn \
+    --arg host "$host" \
+    --arg remote_dir "$remote_dir" \
+    --argjson port "$port" \
+    --arg rust_target "$rust_target" \
+    --arg remote_user "$svc_user" \
+    --arg remote_group "$svc_user" \
+    --arg service_name "$svc_name" \
+    --argjson sudo_rsync "$sudo_rsync" \
+    '{host: $host, remoteDir: $remote_dir, sshPort: $port,
+      rustTarget: $rust_target, rustProfile: "release",
+      sudoRsync: $sudo_rsync, remoteUser: $remote_user,
+      remoteGroup: $remote_group, serviceName: $service_name}')
+  if [[ -n "$ssh_opts" ]]; then
+    json=$(jq -c --arg v "$ssh_opts" '. + {sshOpts: $v}' <<< "$json")
+  fi
+  printf '%s' "$json"
 }
 
 build_dashboard_json() {
   local host="$1" port="$2" ssh_opts="$3" base_dir="$4" sudo_rsync="$5"
   local remote_dir="${base_dir}/dashboard"
-  local args=(
-    --arg host "$host"
-    --arg remote_dir "$remote_dir"
-    --argjson port "$port"
-    --arg remote_user "dashboard"
-    --arg remote_group "dashboard"
-    --arg service_name "credo-dashboard"
-    --argjson sudo_rsync "$sudo_rsync"
-  )
-  jq -cn "${args[@]}" '{
-    host: $host,
-    remoteDir: $remote_dir,
-    sshPort: $port,
-    rustProfile: "release",
-    sudoRsync: $sudo_rsync,
-    remoteUser: $remote_user,
-    remoteGroup: $remote_group,
-    serviceName: $service_name
-  }'
+
+  local json
+  json=$(jq -cn \
+    --arg host "$host" \
+    --arg remote_dir "$remote_dir" \
+    --argjson port "$port" \
+    --arg remote_user "dashboard" \
+    --arg remote_group "dashboard" \
+    --arg service_name "credo-dashboard" \
+    --argjson sudo_rsync "$sudo_rsync" \
+    '{host: $host, remoteDir: $remote_dir, sshPort: $port,
+      rustProfile: "release", sudoRsync: $sudo_rsync,
+      remoteUser: $remote_user, remoteGroup: $remote_group,
+      serviceName: $service_name}')
+  if [[ -n "$ssh_opts" ]]; then
+    json=$(jq -c --arg v "$ssh_opts" '. + {sshOpts: $v}' <<< "$json")
+  fi
+  printf '%s' "$json"
 }
 
 build_corgi_entry_json() {
   local name="$1" host="$2" port="$3" ssh_opts="$4" base_dir="$5" rust_target="$6" sudo_rsync="$7"
   local remote_dir="${base_dir}/corgi"
-  local args=(
-    --arg name "$name"
-    --arg host "$host"
-    --arg remote_dir "$remote_dir"
-    --argjson port "$port"
-    --arg rust_target "$rust_target"
-    --arg remote_user "corgi"
-    --arg remote_group "corgi"
-    --arg service_name "credo-corgi"
-    --argjson sudo_rsync "$sudo_rsync"
-  )
-  jq -cn "${args[@]}" '{
-    name: $name,
-    host: $host,
-    remoteDir: $remote_dir,
-    sshPort: $port,
-    rustTarget: $rust_target,
-    rustProfile: "release",
-    sudoRsync: $sudo_rsync,
-    remoteUser: $remote_user,
-    remoteGroup: $remote_group,
-    serviceName: $service_name
-  }'
+
+  local json
+  json=$(jq -cn \
+    --arg name "$name" \
+    --arg host "$host" \
+    --arg remote_dir "$remote_dir" \
+    --argjson port "$port" \
+    --arg rust_target "$rust_target" \
+    --arg remote_user "corgi" \
+    --arg remote_group "corgi" \
+    --arg service_name "credo-corgi" \
+    --argjson sudo_rsync "$sudo_rsync" \
+    '{name: $name, host: $host, remoteDir: $remote_dir, sshPort: $port,
+      rustTarget: $rust_target, rustProfile: "release",
+      sudoRsync: $sudo_rsync, remoteUser: $remote_user,
+      remoteGroup: $remote_group, serviceName: $service_name}')
+  if [[ -n "$ssh_opts" ]]; then
+    json=$(jq -c --arg v "$ssh_opts" '. + {sshOpts: $v}' <<< "$json")
+  fi
+  printf '%s' "$json"
 }
 
 run_init() {
