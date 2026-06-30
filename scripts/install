@@ -628,6 +628,39 @@ execute_jobs() {
 }
 
 # ---------------------------------------------------------------------------
+# Scripts deployment
+# Rsyncs the repo's scripts/ directory to $base_dir/scripts/ on the remote.
+# Called after service deploys so operators can run scripts/bootstrap there.
+# ---------------------------------------------------------------------------
+
+deploy_scripts() {
+  local config_path="$CONFIG_PATH"
+  [[ ! -f "$config_path" ]] && return 0
+
+  local host port ssh_opts sudo_rsync first_remote_dir base_dir scripts_dir
+  host="$(jq -r '(.shepherd // .vigil // .dashboard // .corgis[0]) | .host // empty' "$config_path")"
+  port="$(jq -r '(.shepherd // .vigil // .dashboard // .corgis[0]) | .sshPort // 22' "$config_path")"
+  ssh_opts="$(jq -r '(.shepherd // .vigil // .dashboard // .corgis[0]) | .sshOpts // ""' "$config_path")"
+  sudo_rsync="$(jq -r '(.shepherd // .vigil // .dashboard // .corgis[0]) | .sudoRsync // false' "$config_path")"
+  first_remote_dir="$(jq -r '(.shepherd // .vigil // .dashboard // .corgis[0]) | .remoteDir // empty' "$config_path")"
+  base_dir="${first_remote_dir%/*}"
+  [[ -z "$base_dir" ]] && base_dir="/var/apps/credo"
+  scripts_dir="${base_dir}/scripts"
+
+  [[ -z "$host" ]] && return 0
+
+  echo "[install] scripts → $(format_dest "$host" "$scripts_dir")"
+  ensure_dir "$host" "$port" "$ssh_opts" "$scripts_dir" "$sudo_rsync" || return 1
+
+  local d
+  d=$(mktemp -d "/tmp/credo-deploy-scripts-XXXXXX")
+  STAGING_DIRS+=("$d")
+  cp -r "$REPO_DIR/scripts/." "$d/"
+
+  rsync_deploy "$d" "$host" "$scripts_dir" "$port" "$ssh_opts" "" "$sudo_rsync"
+}
+
+# ---------------------------------------------------------------------------
 # Target expansion
 # ---------------------------------------------------------------------------
 
@@ -1266,6 +1299,7 @@ main() {
   fi
 
   execute_jobs
+  deploy_scripts
 }
 
 main "$@"
