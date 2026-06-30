@@ -75,7 +75,7 @@ PHASE_ONLY=""
 
 die() { printf '[bootstrap] Error: %s\n' "$*" >&2; exit 1; }
 
-phase() { printf '\n[bootstrap] ── Phase %s ─────────────────────────────\n' "$*"; }
+phase() { printf '\n[bootstrap] === Phase %s ===\n' "$*"; }
 
 banner() {
   printf '\n[bootstrap] %s\n' "========================================"
@@ -406,7 +406,7 @@ collect_admin_answers() {
 # ---------------------------------------------------------------------------
 
 phase_ceremony() {
-  phase "1 — Ceremony"
+  phase "\1 - Ceremony"
 
   local ceremony_dir="$SCRIPT_DIR/ceremony"
   local ca_dir="$LOCAL_CA_DIR"
@@ -463,7 +463,7 @@ phase_ceremony() {
 # ---------------------------------------------------------------------------
 
 phase_config() {
-  phase "2 — Config generation and file push"
+  phase "\1 - Config generation and file push"
 
   local ca_dir="$LOCAL_CA_DIR"
   local root_cert="$ca_dir/root-ecdsa/certs/root-ecdsa.cert.pem"
@@ -472,7 +472,7 @@ phase_config() {
   local int_chain="$ca_dir/int-ecdsa/certs/int-ecdsa.chain.pem"
 
   for f in "$root_cert" "$int_cert" "$int_key" "$int_chain"; do
-    [[ -f "$f" ]] || die "Missing CA file: $f — run ceremony first"
+    [[ -f "$f" ]] || die "Missing CA file: $f (run ceremony first)"
   done
 
   # Generate all service config files to a local temp dir
@@ -508,7 +508,7 @@ phase_config() {
   CREDO_ROOT="$saved_credo_root"
 
   if $DRY_RUN; then
-    echo "[bootstrap] Dry run — skipping file push."
+    echo "[bootstrap] Dry run - skipping file push."
     return
   fi
 
@@ -547,10 +547,10 @@ phase_config() {
 # ---------------------------------------------------------------------------
 
 phase_bootstrap() {
-  phase "3 — Remote bootstrap sequence"
+  phase "\1 - Remote bootstrap sequence"
 
   if $DRY_RUN; then
-    echo "[bootstrap] Dry run — skipping remote bootstrap."
+    echo "[bootstrap] Dry run - skipping remote bootstrap."
     return
   fi
 
@@ -740,10 +740,10 @@ REMOTE_SCRIPT_EOF
 # ---------------------------------------------------------------------------
 
 phase_verify() {
-  phase "4 — Health verification"
+  phase "\1 - Health verification"
 
   if $DRY_RUN; then
-    echo "[bootstrap] Dry run — skipping health checks."
+    echo "[bootstrap] Dry run - skipping health checks."
     return
   fi
 
@@ -758,9 +758,9 @@ phase_verify() {
     local code
     code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${ca_arg[@]}" "$url" 2>/dev/null || echo "000")
     if [[ "$code" == "200" ]]; then
-      printf '[bootstrap]   ✓ %s (%s)\n' "$label" "$url"
+      printf '[bootstrap]   OK  %s (%s)\n' "$label" "$url"
     else
-      printf '[bootstrap]   ✗ %s (%s) — HTTP %s\n' "$label" "$url" "$code"
+      printf '[bootstrap]   FAIL %s (%s) - HTTP %s\n' "$label" "$url" "$code"
       all_ok=false
     fi
   }
@@ -845,7 +845,7 @@ main() {
   load_install_config
 
   if [[ -z "$PHASE_ONLY" || "$PHASE_ONLY" == "0" ]]; then
-    phase "0 — Answer collection"
+    phase "\1 - Answer collection"
     collect_answers
   fi
 
