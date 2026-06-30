@@ -241,9 +241,9 @@ save_bootstrap() {
 
 load_install_config() {
   if [[ ! -f "$INSTALL_CONFIG" ]]; then
-    echo "[bootstrap] .install.json not found: $INSTALL_CONFIG"
-    echo "[bootstrap] Run: scripts/install init  — to create it"
-    exit 1
+    # Running on the target host itself — no SSH needed.
+    REMOTE_HOST="local"
+    return 0
   fi
   REMOTE_HOST="$(jq -r '(.shepherd // .vigil // .corgis[0]) | .host // empty' "$INSTALL_CONFIG")"
   REMOTE_PORT="$(jq -r '(.shepherd // .vigil // .corgis[0]) | .sshPort // 22' "$INSTALL_CONFIG")"
@@ -271,8 +271,10 @@ collect_answers() {
 
   printf '\n=== Base ===\n'
   local _def_root
-  _def_root="$(jq -r '(.shepherd // .vigil // .corgis[0]) | .remoteDir // empty' "$INSTALL_CONFIG" | sed 's|/[^/]*$||')"
-  [[ -z "$_def_root" ]] && _def_root="/var/apps/credo"
+  if [[ -f "$INSTALL_CONFIG" ]]; then
+    _def_root="$(jq -r '(.shepherd // .vigil // .corgis[0]) | .remoteDir // empty' "$INSTALL_CONFIG" | sed 's|/[^/]*$||')"
+  fi
+  [[ -z "${_def_root:-}" ]] && _def_root="$REPO_DIR"
 
   if $AUTO; then
     CREDO_ROOT=$(_require_df 'credoRoot' '.credoRoot' "$_def_root")
@@ -725,8 +727,12 @@ echo "Use 'systemctl start credo-vigil credo-shepherd credo-corgi' to bring them
 REMOTE_SCRIPT_EOF
 
   echo "[bootstrap] Uploaded remote bootstrap script, executing on $REMOTE_HOST..."
-  # shellcheck disable=SC2086
-  ssh -p "$REMOTE_PORT" $REMOTE_SSH_OPTS -t "$REMOTE_HOST" "bash '$remote_script'; rm -f '$remote_script'"
+  if [[ "$REMOTE_HOST" == "local" || "$REMOTE_HOST" == "localhost" || "$REMOTE_HOST" == "127.0.0.1" ]]; then
+    bash "$remote_script"; rm -f "$remote_script"
+  else
+    # shellcheck disable=SC2086
+    ssh -p "$REMOTE_PORT" $REMOTE_SSH_OPTS -t "$REMOTE_HOST" "bash '$remote_script'; rm -f '$remote_script'"
+  fi
 }
 
 # ---------------------------------------------------------------------------
