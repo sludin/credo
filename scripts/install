@@ -82,12 +82,21 @@ run_cmd() {
 
 ensure_dir() {
   local host="$1" port="$2" ssh_opts="$3" dir="$4" sudo_rsync="${5:-false}" remote_user="${6:-}"
-  if [[ "$sudo_rsync" == "true" && -n "$remote_user" ]]; then
-    run_cmd "$host" "$port" "$ssh_opts" "sudo -u '$remote_user' mkdir -p '$dir' && sudo -u '$remote_user' chmod 755 '$dir'"
-  elif [[ "$sudo_rsync" == "true" ]]; then
-    run_cmd "$host" "$port" "$ssh_opts" "sudo mkdir -p '$dir' && sudo chmod 755 '$dir'"
+  if [[ "$sudo_rsync" == "true" ]]; then
+    # Create with root sudo, then hand ownership to remote_user so rsync can write.
+    # Using sudo -u <user> mkdir would fail: the service user can't create /var/apps/credo.
+    if [[ -n "$remote_user" ]]; then
+      run_cmd "$host" "$port" "$ssh_opts" \
+        "sudo mkdir -p '$dir' && sudo chown '$remote_user' '$dir'" || {
+        echo "[install] ERROR: could not create $dir on $host." >&2
+        echo "[install] If service users don't exist yet, run: scripts/install setup" >&2
+        return 1
+      }
+    else
+      run_cmd "$host" "$port" "$ssh_opts" "sudo mkdir -p '$dir'" || return 1
+    fi
   else
-    run_cmd "$host" "$port" "$ssh_opts" "mkdir -p '$dir' && chmod 755 '$dir'"
+    run_cmd "$host" "$port" "$ssh_opts" "mkdir -p '$dir'" || return 1
   fi
 }
 
