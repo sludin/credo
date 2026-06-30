@@ -46,6 +46,7 @@ privkey.pem
 node_modules
 
 ceremony/ca/
+scripts/ceremony/ca/
 .scratch/
 target/
 lib/credo-lib-0.1.0.tgz

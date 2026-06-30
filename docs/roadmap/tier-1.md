@@ -24,27 +24,26 @@ Operator flow, end to end:
 
 ### Sub-tasks
 
-- [ ] **Move ceremony scripts**: `ceremony/scripts/` → `scripts/ceremony/` (the four scripts +
+- [x] **Move ceremony scripts**: `ceremony/scripts/` → `scripts/ceremony/` (the four scripts +
   `ca-vars.env.example`). `ceremony/ca/` does **not** move — existing CA material stays where it is
   as operator data, not source. Update any internal relative-path references inside the moved
   scripts. Update `docs/bootstrap-guide.md` paths.
-- [ ] **Rename `scripts/deploy` → `scripts/install`**. All existing functionality preserved
+- [x] **Rename `scripts/deploy` → `scripts/install`**. All existing functionality preserved
   (remote rsync, parallel deploy, `cargo zigbuild`, `buildOverrides.env`/`buildOverrides.args`,
   `--dry-run`, `--print-build-cmd`). Rename configs: `.deploy.json` → `.install.json`,
   `.deploy-local.json` → `.install-local.json`, `.deploy-remote.json` → `.install-remote.json`.
   Update the script's default config path.
-- [ ] **Add `scripts/install init` subcommand** — interactively generates `.install.json`. Asks:
+- [x] **Add `scripts/install init` subcommand** — interactively generates `.install.json`. Asks:
   - Target directory (default `/var/apps/credo`)
   - Which services to install (shepherd, vigil, corgi; dashboard optional)
-  - Rust target (auto-detected via `rustup show active-toolchain` / `uname -m`, offered as default,
-    overridable — needed for cases like the Synology `-C target-cpu=goldmont` requirement)
+  - Rust target (auto-detected via SSH `uname -m`, offered as default, overridable)
   - Whether to create service users/groups and generate systemd unit files
-- [ ] **User and group model** — dedicated `vigil:vigil`, `shepherd:shepherd`, `corgi:corgi`
+- [x] **User and group model** — dedicated `vigil:vigil`, `shepherd:shepherd`, `corgi:corgi`
   users+groups, standard `useradd -r -U <name>` pattern. No shared `credo` group for internal
   secrets — that would defeat the per-service isolation (a corgi compromise must not grant group
   access to vigil's CA key or shepherd's JWT signing key). Each service's own private key material
   stays owned by that service's own user, mode `600`, no group access.
-- [ ] **`credo-cert` group + setgid cert store** — needed any time a non-corgi process reads cert
+- [x] **`credo-cert` group + setgid cert store** — needed any time a non-corgi process reads cert
   material that corgi manages. On a single-host deployment this includes Shepherd and Vigil (corgi
   renews their TLS identity certs), plus external services like Caddy and nginx. Chose a dedicated
   `credo-cert` group over Debian's `ssl-cert` (portability — not Debian/Ubuntu-specific, and not
@@ -56,7 +55,7 @@ Operator flow, end to end:
   `credo-cert` group. In Tier 2, this path becomes the tmpfs mount — the store and the delivery
   point are the same thing; only the backing storage changes.
 
-  - `scripts/install` creates `$TARGET_DIR/corgi/certs/` owned `corgi:credo-cert`, mode `2750`
+  - `scripts/install setup` creates `$TARGET_DIR/corgi/certs/` owned `corgi:credo-cert`, mode `2750`
     (leading `2` = setgid bit).
   - Corgi owns the directory, so it writes into it regardless of its own group membership.
   - The setgid bit makes the kernel auto-assign the `credo-cert` group to any file corgi creates
@@ -65,7 +64,7 @@ Operator flow, end to end:
   - Shepherd, Vigil, and external webserver users (`caddy`, `www-data`) are added to `credo-cert`
     by `scripts/install` (for credo services) or by the operator (for external services). Files in
     the cert store are mode `640`.
-- [ ] **Systemd unit file generation** — generated at `/etc/systemd/system/credo-<service>.service`
+- [x] **Systemd unit file generation** — generated at `/etc/systemd/system/credo-<service>.service`
   after binaries are copied (triggered by `scripts/install init` answer or a `--systemd` flag).
   Services are **not** auto-started; operator runs `systemctl enable --now credo-vigil` etc.
   Template:
@@ -134,11 +133,9 @@ Operator flow, end to end:
 
   No `ExecStop` on any unit — systemd's default `KillSignal=SIGTERM` is sufficient; the binaries
   don't have a `server stop` subcommand.
-- [ ] **Minimal sudo footprint** — stage and copy binaries as the current user (no `sudo` for `cp`).
-  `sudo` only for: `groupadd`/`useradd`, `chmod` then `chown` (chmod happens *before* chown, while
-  the file is still current-user-owned, so the chmod step itself needs no `sudo`), writing unit
+- [x] **Minimal sudo footprint** — `sudo` only for: `groupadd`/`useradd`, `chown`, writing unit
   files to `/etc/systemd/system/`, and `systemctl daemon-reload`.
-- [ ] **Write `scripts/bootstrap`** (run from the git source dir, after install). Phases:
+- [x] **Write `scripts/bootstrap`** (run from the git source dir, after install). Phases:
   - **Phase 0** — read `.install.json` for `$TARGET_DIR`; prompt if missing.
   - **Phase 1 — Ceremony**: ask if ceremony already ran.
     - No → collect ceremony variables (table below), call `scripts/ceremony/generate-openssl-cnf.sh`
@@ -193,8 +190,8 @@ Operator flow, end to end:
   | Root CA passphrase | *(secure prompt)* | *(required)* |
 
   CRL validity uses ceremony script defaults silently (`ROOT_CRL_DAYS=90`, `INT_CRL_DAYS=7`).
-- [ ] Confirm `ceremony/ca/` (or wherever ceremony output lands) is `.gitignore`d.
-- [ ] Update `docs/bootstrap-guide.md` to describe the new flow end to end (supersede the old
+- [x] Confirm `ceremony/ca/` and `scripts/ceremony/ca/` are `.gitignore`d.
+- [x] Update `docs/bootstrap-guide.md` to describe the new flow end to end (supersede the old
   multi-doc bootstrap description — see "Relationship to existing docs" below).
 - [ ] Verification pass once implemented:
   - `scripts/install --help` shows `init` subcommand
