@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if (( BASH_VERSINFO[0] < 4 )); then
-  echo "[deploy] Requires bash 4+. macOS users: brew install bash" >&2
+  echo "[install] Requires bash 4+. macOS users: brew install bash" >&2
   exit 1
 fi
 
@@ -14,17 +14,23 @@ REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
 CORGI_DIR="$REPO_DIR/corgi"
 VIGIL_DIR="$REPO_DIR/vigil"
 SHEPHERD_DIR="$REPO_DIR/shepherd"
-CONFIG_PATH="$REPO_DIR/.deploy.json"
+CONFIG_PATH="$REPO_DIR/.install.json"
 DRY_RUN=false
 PARALLEL=false
 PRINT_BUILD_CMD=false
 TARGETS=()
 
 # Default file lists per service (space-separated, used when config omits "files")
+# All referenced via indirect expansion: ${!default_var:-}
+# shellcheck disable=SC2034
 DEFAULT_FILES_shepherd="shepherd examples"
+# shellcheck disable=SC2034
 DEFAULT_FILES_vigil="vigil examples"
+# shellcheck disable=SC2034
 DEFAULT_FILES_dashboard="dist package.json package-lock.json scripts dashboard"
+# shellcheck disable=SC2034
 DEFAULT_FILES_enroll="dist package.json"
+# shellcheck disable=SC2034
 DEFAULT_FILES_wizard="examples lib bootstrap-wizard"
 DEFAULT_FILES_corgi="examples corgi"
 
@@ -88,9 +94,9 @@ ensure_dir() {
 npm_install_remote() {
   local host="$1" port="$2" ssh_opts="$3" dir="$4" remote_user="${5:-}"
   if is_local "$host"; then
-    echo "[deploy] npm install --omit=dev (local)..."
+    echo "[install] npm install --omit=dev (local)..."
   else
-    echo "[deploy] npm install --omit=dev on $host..."
+    echo "[install] npm install --omit=dev on $host..."
   fi
   if [[ -n "$remote_user" ]]; then
     run_cmd "$host" "$port" "$ssh_opts" "sudo -u '$remote_user' sh -c \"cd '$dir' && npm install --omit=dev\""
@@ -101,19 +107,19 @@ npm_install_remote() {
 
 chown_dir() {
   local host="$1" port="$2" ssh_opts="$3" dir="$4" owner="$5"
-  echo "[deploy] chown -R $owner $dir"
+  echo "[install] chown -R $owner $dir"
   run_cmd "$host" "$port" "$ssh_opts" "sudo chown -R '$owner' '$dir'"
 }
 
 chmod_dir() {
   local host="$1" port="$2" ssh_opts="$3" dir="$4" mode="$5"
-  echo "[deploy] chmod $mode $dir"
+  echo "[install] chmod $mode $dir"
   run_cmd "$host" "$port" "$ssh_opts" "sudo chmod '$mode' '$dir'"
 }
 
 run_post_deploy() {
   local host="$1" port="$2" ssh_opts="$3" dir="$4" cmd="$5"
-  echo "[deploy] postDeploy: $cmd"
+  echo "[install] postDeploy: $cmd"
   run_cmd "$host" "$port" "$ssh_opts" "cd '$dir' && $cmd"
 }
 
@@ -141,7 +147,7 @@ validate_build_overrides() {
     and (($bo.args // []) | type == "array")
     and (($bo.args // []) | all(.[]?; type == "string"))
   ' <<< "$svc_json" >/dev/null; then
-    echo "[deploy] Invalid buildOverrides for $label: expected env object of strings and args array of strings" >&2
+    echo "[install] Invalid buildOverrides for $label: expected env object of strings and args array of strings" >&2
     return 1
   fi
 }
@@ -173,18 +179,18 @@ rsync_deploy() {
     # Trailing slash: sync contents of staging_dir, not the dir itself
     args+=("$staging_dir/" "$remote_dir/")
     if $DRY_RUN; then
-      echo "[deploy] DRY RUN rsync → $remote_dir (local)"
+      echo "[install] DRY RUN rsync → $remote_dir (local)"
     else
-      echo "[deploy] rsync → $remote_dir (local)"
+      echo "[install] rsync → $remote_dir (local)"
     fi
   else
     # shellcheck disable=SC2086
     local ssh_cmd="ssh -p $port $ssh_opts"
     args+=(-e "$ssh_cmd" "$staging_dir/" "$host:$remote_dir/")
     if $DRY_RUN; then
-      echo "[deploy] DRY RUN rsync → $host:$remote_dir"
+      echo "[install] DRY RUN rsync → $host:$remote_dir"
     else
-      echo "[deploy] rsync → $host:$remote_dir"
+      echo "[install] rsync → $host:$remote_dir"
     fi
   fi
 
@@ -211,24 +217,24 @@ build_ts_staging() {
   printf 'export const VERSION = "%s-%s";\n' "$version" "$sha" \
     > "$service_dir/src/version.ts"
 
-  echo "[deploy] Installing dependencies for $service_name..."
+  echo "[install] Installing dependencies for $service_name..."
   (cd "$service_dir" && npm install) || return 1
 
-  echo "[deploy] Building $service_name ($version-$sha)..."
+  echo "[install] Building $service_name ($version-$sha)..."
   (cd "$service_dir" && npm run build) || return 1
 
   local entry src
   for entry in $files_str; do
     src="$service_dir/$entry"
     if [[ ! -e "$src" ]]; then
-      echo "[deploy] Warning: declared file not found, skipping: $entry"
+      echo "[install] Warning: declared file not found, skipping: $entry"
       continue
     fi
     mkdir -p "$d/$(dirname "$entry")"
     cp -r "$src" "$d/$entry"
   done
 
-  echo "[deploy] Staging ready: $d"
+  echo "[install] Staging ready: $d"
 }
 
 # ---------------------------------------------------------------------------
@@ -248,14 +254,14 @@ build_shell_staging() {
   for entry in $files_str; do
     src="$service_dir/$entry"
     if [[ ! -e "$src" ]]; then
-      echo "[deploy] Warning: declared file not found, skipping: $entry"
+      echo "[install] Warning: declared file not found, skipping: $entry"
       continue
     fi
     mkdir -p "$d/$(dirname "$entry")"
     cp -r "$src" "$d/$entry"
   done
 
-  echo "[deploy] Staging ready: $d"
+  echo "[install] Staging ready: $d"
 }
 
 # ---------------------------------------------------------------------------
@@ -265,7 +271,8 @@ build_shell_staging() {
 # ---------------------------------------------------------------------------
 
 build_rust_binary_staging() {
-  local crate_dir="$1" binary_name="$2" arch="$3" profile="$4" files_str="${5:-}" svc_json="${6:-}" label="${7:-$binary_name}"
+  local crate_dir="$1" binary_name="$2" arch="$3" profile="$4"
+  local files_str="${5:-}" svc_json="${6:-}" label="${7:-$binary_name}"
   local d
   d=$(mktemp -d "/tmp/credo-deploy-${binary_name}-XXXXXX")
   chmod 755 "$d"
@@ -294,26 +301,27 @@ build_rust_binary_staging() {
     build_cmd+=("${build_extra_args[@]}")
   fi
 
-  local printed_cmd="cd $(shell_escape_word "$crate_dir") &&"
+  local printed_cmd
+  printed_cmd="cd $(shell_escape_word "$crate_dir") &&"
   if [[ ${#build_env_assignments[@]} -gt 0 ]]; then
     printed_cmd+=" $(join_shell_words env "${build_env_assignments[@]}" "${build_cmd[@]}")"
   else
     printed_cmd+=" $(join_shell_words "${build_cmd[@]}")"
   fi
 
-  echo "[deploy] Building $binary_name for $arch ($profile)..."
+  echo "[install] Building $binary_name for $arch ($profile)..."
   if $PRINT_BUILD_CMD; then
-    echo "[deploy][$label] BUILD_CMD: $printed_cmd"
+    echo "[install][$label] BUILD_CMD: $printed_cmd"
   fi
 
   if [[ ${#build_env_assignments[@]} -gt 0 ]]; then
     (cd "$crate_dir" && env "${build_env_assignments[@]}" "${build_cmd[@]}") || {
-      echo "[deploy][$label] BUILD_CMD (failed): $printed_cmd" >&2
+      echo "[install][$label] BUILD_CMD (failed): $printed_cmd" >&2
       return 1
     }
   else
     (cd "$crate_dir" && "${build_cmd[@]}") || {
-      echo "[deploy][$label] BUILD_CMD (failed): $printed_cmd" >&2
+      echo "[install][$label] BUILD_CMD (failed): $printed_cmd" >&2
       return 1
     }
   fi
@@ -325,14 +333,14 @@ build_rust_binary_staging() {
     [[ "$entry" == "$binary_name" ]] && continue
     src="$crate_dir/$entry"
     if [[ ! -e "$src" ]]; then
-      echo "[deploy] Warning: declared file not found, skipping: $entry"
+      echo "[install] Warning: declared file not found, skipping: $entry"
       continue
     fi
     mkdir -p "$d/$(dirname "$entry")"
     cp -r "$src" "$d/$entry"
   done
 
-  echo "[deploy] Staging ready: $d"
+  echo "[install] Staging ready: $d"
 }
 
 # ---------------------------------------------------------------------------
@@ -358,9 +366,9 @@ _deploy_rust() {
   fi
 
   if $DRY_RUN; then
-    echo "[deploy] DRY RUN complete: $label → $(format_dest "$host" "$remote_dir")"
+    echo "[install] DRY RUN complete: $label → $(format_dest "$host" "$remote_dir")"
   else
-    echo "[deploy] Done: $label → $(format_dest "$host" "$remote_dir")"
+    echo "[install] Done: $label → $(format_dest "$host" "$remote_dir")"
   fi
 }
 
@@ -389,9 +397,9 @@ _deploy_ts() {
   fi
 
   if $DRY_RUN; then
-    echo "[deploy] DRY RUN complete: $label → $(format_dest "$host" "$remote_dir")"
+    echo "[install] DRY RUN complete: $label → $(format_dest "$host" "$remote_dir")"
   else
-    echo "[deploy] Done: $label → $(format_dest "$host" "$remote_dir")"
+    echo "[install] Done: $label → $(format_dest "$host" "$remote_dir")"
   fi
 }
 
@@ -419,9 +427,9 @@ _deploy_shell() {
   fi
 
   if $DRY_RUN; then
-    echo "[deploy] DRY RUN complete: $label → $(format_dest "$host" "$remote_dir")"
+    echo "[install] DRY RUN complete: $label → $(format_dest "$host" "$remote_dir")"
   else
-    echo "[deploy] Done: $label → $(format_dest "$host" "$remote_dir")"
+    echo "[install] Done: $label → $(format_dest "$host" "$remote_dir")"
   fi
 }
 
@@ -467,7 +475,7 @@ deploy_service() {
       shepherd) crate_dir="$SHEPHERD_DIR"; binary="shepherd" ;;
       vigil)    crate_dir="$VIGIL_DIR";    binary="vigil" ;;
       *)
-        echo "[deploy] Rust build not supported for service: $service_key" >&2
+        echo "[install] Rust build not supported for service: $service_key" >&2
         return 1 ;;
     esac
     if [[ -z "${files_str// /}" ]]; then
@@ -509,7 +517,7 @@ deploy_corgi_by_name() {
   if [[ -z "$exists" ]]; then
     local available
     available=$(jq -r '.corgis[]?.name' "$CONFIG_PATH" | tr '\n' ' ')
-    echo "[deploy] Corgi '$name' not found. Available: ${available:-(none configured)}" >&2
+    echo "[install] Corgi '$name' not found. Available: ${available:-(none configured)}" >&2
     return 1
   fi
 
@@ -560,7 +568,7 @@ deploy_corgi_by_name() {
 add_job() {
   local label="$1" type="$2" key="$3"
   if [[ -n "${SEEN_LABELS[$label]+set}" ]]; then
-    echo "[deploy] Skipping duplicate target: $label" >&2
+    echo "[install] Skipping duplicate target: $label" >&2
     return
   fi
   SEEN_LABELS["$label"]=1
@@ -596,14 +604,14 @@ execute_jobs() {
     local i
     for i in "${!JOB_LABELS[@]}"; do
       if ! run_job "$i"; then
-        echo "[deploy] ERROR (${JOB_LABELS[$i]}): deploy failed" >&2
+        echo "[install] ERROR (${JOB_LABELS[$i]}): deploy failed" >&2
         failures+=("${JOB_LABELS[$i]}")
       fi
     done
   fi
 
   if [[ ${#failures[@]} -gt 0 ]]; then
-    printf '\n[deploy] Completed with %d failure(s):\n' "${#failures[@]}"
+    printf '\n[install] Completed with %d failure(s):\n' "${#failures[@]}"
     local f
     for f in "${failures[@]}"; do printf '  ✗ %s\n' "$f"; done
     exit 1
@@ -630,7 +638,7 @@ expand_targets() {
         ;;
       shepherd|vigil|dashboard|enroll|wizard)
         if ! jq -e ".$token" "$CONFIG_PATH" >/dev/null 2>&1; then
-          echo "[deploy] No '$token' section in .deploy.json" >&2
+          echo "[install] No '$token' section in .install.json" >&2
           exit 1
         fi
         add_job "$token" "service" "$token"
@@ -655,12 +663,12 @@ expand_targets() {
 print_usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/deploy [options] [target ...]
+  ./scripts/install [options] [target ...]
 
 Targets (default: all):
   all            Deploy shepherd, vigil, dashboard, enroll, wizard, and all corgis
   shepherd       Deploy shepherd
-  vigil          Deploy vigil (TypeScript or Rust binary per vigil.rustTarget in .deploy.json)
+  vigil          Deploy vigil (TypeScript or Rust binary per vigil.rustTarget in .install.json)
   dashboard      Deploy dashboard
   enroll         Deploy enroll
   wizard         Deploy wizard
@@ -668,17 +676,17 @@ Targets (default: all):
   corgi:<name>   Deploy a specific corgi, e.g. corgi:corgi-01
 
   Multiple targets may be combined:
-    ./scripts/deploy vigil shepherd corgi:corgi-01
+    ./scripts/install vigil shepherd corgi:corgi-01
 
 Options:
   --dry-run        Build + preview rsync without transferring files
   --print-build-cmd Print the exact Rust build command before executing it
   --parallel       Deploy all selected targets in parallel
-  --config <path>  Path to deploy config (default: .deploy.json)
+  --config <path>  Path to deploy config (default: .install.json)
   --help           Show this help
 
 Config:
-  Copy examples/.deploy.json.example to .deploy.json and fill in your hosts.
+  Copy examples/.install.json.example to .install.json and fill in your hosts.
 
   Per-service fields:
     host           "user@hostname" or "local"/"localhost"/"127.0.0.1" for local deploy  (required)
@@ -708,14 +716,14 @@ parse_args() {
       --print-build-cmd) PRINT_BUILD_CMD=true ;;
       --parallel)  PARALLEL=true ;;
       --config)
-        [[ -z "${2:-}" ]] && { echo "[deploy] --config requires a path argument" >&2; exit 1; }
+        [[ -z "${2:-}" ]] && { echo "[install] --config requires a path argument" >&2; exit 1; }
         CONFIG_PATH=$(realpath "$2"); shift ;;
       --config=*)  CONFIG_PATH=$(realpath "${1#--config=}") ;;
       -h|--help)   print_usage; exit 0 ;;
       corgi:*)     TARGETS+=("$1") ;;
       all|shepherd|vigil|dashboard|enroll|wizard|corgi) TARGETS+=("$1") ;;
       *)
-        echo "[deploy] Unknown target: '$1'. Use --help for usage." >&2
+        echo "[install] Unknown target: '$1'. Use --help for usage." >&2
         exit 1 ;;
     esac
     shift
@@ -730,16 +738,22 @@ parse_args() {
 main() {
   parse_args "$@"
 
+  if [[ ! -f "$CONFIG_PATH" ]] && [[ -f "$REPO_DIR/.deploy.json" ]]; then
+    echo "[install] Warning: .install.json not found but .deploy.json exists — using it. Rename it to .install.json." >&2
+    CONFIG_PATH="$REPO_DIR/.deploy.json"
+  fi
+
   if [[ ! -f "$CONFIG_PATH" ]]; then
-    echo "[deploy] Config not found: $CONFIG_PATH" >&2
-    echo "[deploy] Copy examples/.deploy.json.example to .deploy.json and fill in your hosts." >&2
+    echo "[install] Config not found: $CONFIG_PATH" >&2
+    echo "[install] Run: scripts/install init   — to generate .install.json interactively" >&2
+    echo "[install] Or copy examples/.install.json.example to .install.json and fill in manually." >&2
     exit 1
   fi
 
   expand_targets
 
   if [[ ${#JOB_LABELS[@]} -eq 0 ]]; then
-    echo "[deploy] No targets to deploy." >&2
+    echo "[install] No targets to deploy." >&2
     exit 0
   fi
 
