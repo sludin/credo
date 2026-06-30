@@ -928,6 +928,215 @@ run_init() {
 }
 
 # ---------------------------------------------------------------------------
+# Setup subcommand — create service users/groups and systemd unit files
+# Runs on the REMOTE host via SSH (or locally when host == "local").
+# ---------------------------------------------------------------------------
+
+SETUP_DRY_RUN=false
+
+setup_run() {
+  local cmd="$1" host="$2" port="${3:-22}" ssh_opts="${4:-}"
+  if $SETUP_DRY_RUN; then
+    printf '[setup] DRY RUN: %s\n' "$cmd"
+    return 0
+  fi
+  if is_local "$host"; then
+    eval "$cmd"
+  else
+    # shellcheck disable=SC2086
+    ssh -p "$port" $ssh_opts "$host" "$cmd"
+  fi
+}
+
+setup_users_groups() {
+  local host="$1" port="$2" ssh_opts="$3" services=("${@:4}")
+
+  echo "[setup] Creating system users and groups..."
+
+  # credo-cert group for cert consumers
+  setup_run "getent group credo-cert >/dev/null 2>&1 || sudo groupadd --system credo-cert" \
+    "$host" "$port" "$ssh_opts"
+  echo "[setup]   group: credo-cert"
+
+  local svc
+  for svc in "${services[@]}"; do
+    # Create user + matching primary group
+    setup_run "id '$svc' >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin --user-group '$svc'" \
+      "$host" "$port" "$ssh_opts"
+    echo "[setup]   user/group: $svc"
+  done
+
+  # shepherd and vigil need credo-cert supplementary group to read the cert store
+  for svc in shepherd vigil; do
+    local found=false
+    local s
+    for s in "${services[@]}"; do [[ "$s" == "$svc" ]] && found=true && break; done
+    if $found; then
+      setup_run "sudo usermod -aG credo-cert '$svc'" "$host" "$port" "$ssh_opts"
+      echo "[setup]   $svc added to credo-cert"
+    fi
+  done
+}
+
+setup_cert_store() {
+  local host="$1" port="$2" ssh_opts="$3" base_dir="$4"
+  local cert_dir="${base_dir}/corgi/certs"
+  echo "[setup] Creating setgid cert store at $cert_dir..."
+  setup_run "sudo mkdir -p '$cert_dir' && sudo chown corgi:credo-cert '$cert_dir' && sudo chmod 2750 '$cert_dir'" \
+    "$host" "$port" "$ssh_opts"
+  echo "[setup]   $cert_dir: owner=corgi:credo-cert mode=2750 (setgid)"
+}
+
+write_systemd_unit() {
+  local host="$1" port="$2" ssh_opts="$3" svc="$4" exec_path="$5" working_dir="$6"
+  local unit_name="credo-${svc}"
+  local unit_path="/etc/systemd/system/${unit_name}.service"
+
+  local supp_groups=""
+  if [[ "$svc" == "shepherd" || "$svc" == "vigil" ]]; then
+    supp_groups="SupplementaryGroups=credo-cert"
+  fi
+
+  local unit
+  unit="$(cat <<EOF
+[Unit]
+Description=credo ${svc}
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=${svc}
+Group=${svc}
+${supp_groups}
+WorkingDirectory=${working_dir}
+ExecStart=${exec_path}
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+ProtectHome=yes
+ReadWritePaths=${working_dir}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+)"
+
+  if $SETUP_DRY_RUN; then
+    printf '[setup] DRY RUN: write %s\n' "$unit_path"
+    printf '%s\n' "$unit" | sed 's/^/  /'
+    return 0
+  fi
+
+  if is_local "$host"; then
+    printf '%s\n' "$unit" | sudo tee "$unit_path" >/dev/null
+  else
+    # shellcheck disable=SC2086
+    printf '%s\n' "$unit" | ssh -p "$port" $ssh_opts "$host" "sudo tee '$unit_path' >/dev/null"
+  fi
+  echo "[setup]   wrote $unit_path"
+}
+
+run_setup() {
+  local config_path="$CONFIG_PATH"
+
+  if [[ ! -f "$config_path" ]]; then
+    echo "[setup] Config not found: $config_path" >&2
+    echo "[setup] Run: scripts/install init   — to generate it" >&2
+    exit 1
+  fi
+
+  # Read connection info from first configured service
+  local host port ssh_opts base_dir
+  host="$(jq -r '(.shepherd // .vigil // .dashboard // .corgis[0]) | .host // empty' "$config_path")"
+  port="$(jq -r '(.shepherd // .vigil // .dashboard // .corgis[0]) | .sshPort // 22' "$config_path")"
+  ssh_opts="$(jq -r '(.shepherd // .vigil // .dashboard // .corgis[0]) | .sshOpts // ""' "$config_path")"
+
+  if [[ -z "$host" ]]; then
+    echo "[setup] Cannot determine host from $config_path" >&2
+    exit 1
+  fi
+
+  # Derive base_dir from the first service's remoteDir by stripping last component
+  local first_remote_dir
+  first_remote_dir="$(jq -r '(.shepherd // .vigil // .dashboard // .corgis[0]) | .remoteDir // empty' "$config_path")"
+  base_dir="${first_remote_dir%/*}"
+  if [[ -z "$base_dir" ]]; then
+    base_dir="/var/apps/credo"
+  fi
+
+  # Collect active services
+  local services=()
+  for svc in shepherd vigil dashboard; do
+    if jq -e ".$svc" "$config_path" >/dev/null 2>&1; then
+      services+=("$svc")
+    fi
+  done
+  if jq -e '.corgis | length > 0' "$config_path" >/dev/null 2>&1; then
+    services+=("corgi")
+  fi
+
+  if [[ ${#services[@]} -eq 0 ]]; then
+    echo "[setup] No services configured in $config_path" >&2
+    exit 1
+  fi
+
+  echo ""
+  echo "================================================================"
+  echo "  credo install setup"
+  echo "  Host     : $host"
+  echo "  Base dir : $base_dir"
+  echo "  Services : ${services[*]}"
+  if $SETUP_DRY_RUN; then
+    echo "  Mode     : DRY RUN"
+  fi
+  echo "================================================================"
+  echo ""
+
+  setup_users_groups "$host" "$port" "$ssh_opts" "${services[@]}"
+  echo ""
+
+  local has_corgi=false
+  local svc
+  for svc in "${services[@]}"; do [[ "$svc" == "corgi" ]] && has_corgi=true && break; done
+  if $has_corgi; then
+    setup_cert_store "$host" "$port" "$ssh_opts" "$base_dir"
+    echo ""
+  fi
+
+  echo "[setup] Writing systemd unit files..."
+  for svc in "${services[@]}"; do
+    local remote_dir exec_start
+    if [[ "$svc" == "corgi" ]]; then
+      remote_dir="$(jq -r '.corgis[0].remoteDir // empty' "$config_path")"
+    else
+      remote_dir="$(jq -r --arg k "$svc" '.[$k].remoteDir // empty' "$config_path")"
+    fi
+    [[ -z "$remote_dir" ]] && continue
+    exec_start="${remote_dir}/${svc}"
+    write_systemd_unit "$host" "$port" "$ssh_opts" "$svc" "$exec_start" "$remote_dir"
+  done
+
+  echo ""
+  echo "[setup] Running systemctl daemon-reload..."
+  setup_run "sudo systemctl daemon-reload" "$host" "$port" "$ssh_opts"
+
+  echo ""
+  echo "================================================================"
+  echo "  Setup complete."
+  echo "  Units are NOT yet enabled or started."
+  echo "  After deploying binaries, run:"
+  for svc in "${services[@]}"; do
+    echo "    sudo systemctl enable --now credo-${svc}"
+  done
+  echo "================================================================"
+  echo ""
+}
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -935,6 +1144,7 @@ print_usage() {
   cat <<'EOF'
 Usage:
   ./scripts/install init            Generate .install.json interactively
+  ./scripts/install setup           Create service users/groups and systemd units on remote
   ./scripts/install [options] [target ...]
 
 Targets (default: all):
@@ -1010,6 +1220,23 @@ parse_args() {
 main() {
   if [[ "${1:-}" == "init" ]]; then
     run_init
+    exit 0
+  fi
+
+  if [[ "${1:-}" == "setup" ]]; then
+    shift
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --dry-run) SETUP_DRY_RUN=true ;;
+        --config)
+          [[ -z "${2:-}" ]] && { echo "[setup] --config requires a path" >&2; exit 1; }
+          CONFIG_PATH=$(realpath "$2"); shift ;;
+        --config=*) CONFIG_PATH=$(realpath "${1#--config=}") ;;
+        *) echo "[setup] Unknown option: $1" >&2; exit 1 ;;
+      esac
+      shift
+    done
+    run_setup
     exit 0
   fi
 
