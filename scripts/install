@@ -992,6 +992,9 @@ write_systemd_unit() {
     supp_groups="SupplementaryGroups=credo-cert"
   fi
 
+  local supp_line=""
+  [[ -n "$supp_groups" ]] && supp_line=$'\n'"${supp_groups}"
+
   local unit
   unit="$(cat <<EOF
 [Unit]
@@ -1002,10 +1005,11 @@ Wants=network.target
 [Service]
 Type=simple
 User=${svc}
-Group=${svc}
-${supp_groups}
+Group=${svc}${supp_line}
 WorkingDirectory=${working_dir}
-ExecStart=${exec_path}
+ExecStart=${exec_path} server start
+ExecStop=${exec_path} server stop
+ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5
 
