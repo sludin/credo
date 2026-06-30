@@ -406,7 +406,7 @@ collect_admin_answers() {
 # ---------------------------------------------------------------------------
 
 phase_ceremony() {
-  phase "\1 - Ceremony"
+  phase "1 - Ceremony"
 
   local ceremony_dir="$SCRIPT_DIR/ceremony"
   local ca_dir="$LOCAL_CA_DIR"
@@ -463,7 +463,7 @@ phase_ceremony() {
 # ---------------------------------------------------------------------------
 
 phase_config() {
-  phase "\1 - Config generation and file push"
+  phase "2 - Config generation and file push"
 
   local ca_dir="$LOCAL_CA_DIR"
   local root_cert="$ca_dir/root-ecdsa/certs/root-ecdsa.cert.pem"
@@ -547,7 +547,7 @@ phase_config() {
 # ---------------------------------------------------------------------------
 
 phase_bootstrap() {
-  phase "\1 - Remote bootstrap sequence"
+  phase "3 - Remote bootstrap sequence"
 
   if $DRY_RUN; then
     echo "[bootstrap] Dry run - skipping remote bootstrap."
@@ -740,7 +740,7 @@ REMOTE_SCRIPT_EOF
 # ---------------------------------------------------------------------------
 
 phase_verify() {
-  phase "\1 - Health verification"
+  phase "4 - Health verification"
 
   if $DRY_RUN; then
     echo "[bootstrap] Dry run - skipping health checks."
@@ -842,10 +842,12 @@ main() {
   if $DRY_RUN; then echo "[bootstrap] DRY RUN mode"; fi
   if $AUTO;    then echo "[bootstrap] AUTO mode (non-interactive)"; fi
 
+  echo "[bootstrap] config: $INSTALL_CONFIG" >&2
   load_install_config
+  echo "[bootstrap] host: $REMOTE_HOST" >&2
 
   if [[ -z "$PHASE_ONLY" || "$PHASE_ONLY" == "0" ]]; then
-    phase "\1 - Answer collection"
+    phase "0 - Answer collection"
     collect_answers
   fi
 
