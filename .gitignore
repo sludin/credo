@@ -23,9 +23,15 @@ ca-vars.env
 # Git worktrees
 .worktrees/
 
-# Top-level deploy config (contains hostnames — use examples/.deploy.json.example as template)
+# Top-level install/deploy configs (contain hostnames — use examples/.install.json.example as template)
 .deploy.json
 .deploy*
+.install.json
+.install-local.json
+.install-remote.json
+
+# Bootstrap answers (operator-specific, never committed)
+bootstrap.json
 
 # TLS certificates (managed outside git)
 cert.pem
