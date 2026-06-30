@@ -657,12 +657,284 @@ expand_targets() {
 }
 
 # ---------------------------------------------------------------------------
+# Init subcommand — generate .install.json interactively
+# ---------------------------------------------------------------------------
+
+ask_init() {
+  local prompt="$1" default="${2:-}"
+  local reply
+  if [[ -n "$default" ]]; then
+    printf '%s [%s]: ' "$prompt" "$default"
+  else
+    printf '%s: ' "$prompt"
+  fi
+  read -r reply
+  printf '%s' "${reply:-$default}"
+}
+
+ask_init_yn() {
+  local prompt="$1" default="${2:-y}"
+  local reply
+  while true; do
+    if [[ "$default" == "y" ]]; then
+      printf '%s [Y/n]: ' "$prompt"
+    else
+      printf '%s [y/N]: ' "$prompt"
+    fi
+    read -r reply
+    reply="${reply:-$default}"
+    case "${reply,,}" in
+      y|yes) printf 'y'; return ;;
+      n|no)  printf 'n'; return ;;
+      *) echo "  Please answer y or n." ;;
+    esac
+  done
+}
+
+detect_rust_target() {
+  local host="$1" port="${2:-22}" ssh_opts="${3:-}"
+  local arch
+  if is_local "$host"; then
+    arch="$(uname -m 2>/dev/null || echo "")"
+  else
+    # shellcheck disable=SC2086
+    arch="$(ssh -p "$port" $ssh_opts -o ConnectTimeout=5 -o BatchMode=yes "$host" 'uname -m' 2>/dev/null || echo "")"
+  fi
+  case "$arch" in
+    x86_64)  printf 'x86_64-unknown-linux-musl' ;;
+    aarch64) printf 'aarch64-unknown-linux-musl' ;;
+    armv7l)  printf 'armv7-unknown-linux-musleabihf' ;;
+    *)       printf '' ;;
+  esac
+}
+
+build_service_json() {
+  local host="$1" port="$2" ssh_opts="$3" base_dir="$4" svc="$5" rust_target="$6" sudo_rsync="$7"
+  local remote_dir="${base_dir}/${svc}"
+  local svc_user="$svc"
+  local svc_name="credo-${svc}"
+
+  local args=(
+    --arg host "$host"
+    --arg remote_dir "$remote_dir"
+    --argjson port "$port"
+    --arg ssh_opts "$ssh_opts"
+    --arg rust_target "$rust_target"
+    --arg remote_user "$svc_user"
+    --arg remote_group "$svc_user"
+    --arg service_name "$svc_name"
+    --argjson sudo_rsync "$sudo_rsync"
+  )
+  jq -cn "${args[@]}" '{
+    host: $host,
+    remoteDir: $remote_dir,
+    sshPort: $port,
+    ($ssh_opts | if . == "" then empty else . end): $ssh_opts,
+    rustTarget: $rust_target,
+    rustProfile: "release",
+    sudoRsync: $sudo_rsync,
+    remoteUser: $remote_user,
+    remoteGroup: $remote_group,
+    serviceName: $service_name
+  }' 2>/dev/null || jq -cn "${args[@]}" '{
+    host: $host,
+    remoteDir: $remote_dir,
+    sshPort: $port,
+    rustTarget: $rust_target,
+    rustProfile: "release",
+    sudoRsync: $sudo_rsync,
+    remoteUser: $remote_user,
+    remoteGroup: $remote_group,
+    serviceName: $service_name
+  }'
+}
+
+build_dashboard_json() {
+  local host="$1" port="$2" ssh_opts="$3" base_dir="$4" sudo_rsync="$5"
+  local remote_dir="${base_dir}/dashboard"
+  local args=(
+    --arg host "$host"
+    --arg remote_dir "$remote_dir"
+    --argjson port "$port"
+    --arg remote_user "dashboard"
+    --arg remote_group "dashboard"
+    --arg service_name "credo-dashboard"
+    --argjson sudo_rsync "$sudo_rsync"
+  )
+  jq -cn "${args[@]}" '{
+    host: $host,
+    remoteDir: $remote_dir,
+    sshPort: $port,
+    rustProfile: "release",
+    sudoRsync: $sudo_rsync,
+    remoteUser: $remote_user,
+    remoteGroup: $remote_group,
+    serviceName: $service_name
+  }'
+}
+
+build_corgi_entry_json() {
+  local name="$1" host="$2" port="$3" ssh_opts="$4" base_dir="$5" rust_target="$6" sudo_rsync="$7"
+  local remote_dir="${base_dir}/corgi"
+  local args=(
+    --arg name "$name"
+    --arg host "$host"
+    --arg remote_dir "$remote_dir"
+    --argjson port "$port"
+    --arg rust_target "$rust_target"
+    --arg remote_user "corgi"
+    --arg remote_group "corgi"
+    --arg service_name "credo-corgi"
+    --argjson sudo_rsync "$sudo_rsync"
+  )
+  jq -cn "${args[@]}" '{
+    name: $name,
+    host: $host,
+    remoteDir: $remote_dir,
+    sshPort: $port,
+    rustTarget: $rust_target,
+    rustProfile: "release",
+    sudoRsync: $sudo_rsync,
+    remoteUser: $remote_user,
+    remoteGroup: $remote_group,
+    serviceName: $service_name
+  }'
+}
+
+run_init() {
+  local out_path="$CONFIG_PATH"
+
+  echo ""
+  echo "================================================================"
+  echo "  credo install — interactive config generator"
+  echo "  Writes: $out_path"
+  echo "================================================================"
+  echo ""
+  echo "Press Enter to accept the default shown in [brackets]."
+  echo ""
+
+  # -- Host --
+  local host
+  host="$(ask_init "Remote host (user@hostname, or 'local')" "local")"
+  echo ""
+
+  # -- SSH port --
+  local port_str
+  port_str="$(ask_init "SSH port" "22")"
+  local port
+  if [[ "$port_str" =~ ^[0-9]+$ ]]; then port="$port_str"; else port=22; fi
+  echo ""
+
+  # -- SSH opts --
+  local ssh_opts
+  ssh_opts="$(ask_init "Extra SSH options (or leave blank)" "")"
+  echo ""
+
+  # -- Rust target --
+  echo "  Detecting remote architecture..."
+  local detected_target
+  detected_target="$(detect_rust_target "$host" "$port" "$ssh_opts")"
+  if [[ -n "$detected_target" ]]; then
+    echo "  Detected: $detected_target"
+  else
+    echo "  Could not detect (SSH may not be available yet)."
+    detected_target="x86_64-unknown-linux-musl"
+  fi
+  local rust_target
+  rust_target="$(ask_init "Rust target triple" "$detected_target")"
+  echo ""
+
+  # -- Base install dir --
+  local base_dir
+  base_dir="$(ask_init "Base install directory on remote" "/var/apps/credo")"
+  echo ""
+
+  # -- Services --
+  echo "Which services to include?"
+  local want_shepherd want_vigil want_corgi want_dashboard
+  # shellcheck disable=SC2034
+  want_shepherd="$(ask_init_yn "  shepherd" "y")"
+  # shellcheck disable=SC2034
+  want_vigil="$(ask_init_yn "  vigil" "y")"
+  want_corgi="$(ask_init_yn "  corgi" "y")"
+  want_dashboard="$(ask_init_yn "  dashboard (TypeScript BFF)" "n")"
+  echo ""
+
+  # -- Sudo for rsync --
+  local sudo_rsync_yn sudo_rsync
+  sudo_rsync_yn="$(ask_init_yn "Use sudo for rsync + mkdir on remote (needed when target dirs are owned by service users)" "y")"
+  if [[ "$sudo_rsync_yn" == "y" ]]; then sudo_rsync="true"; else sudo_rsync="false"; fi
+  echo ""
+
+  # -- Corgi instances --
+  local corgi_names=()
+  if [[ "$want_corgi" == "y" ]]; then
+    echo "Corgi instances (one per managed node). Enter names one at a time."
+    echo "Each corgi entry names a specific host where corgi is installed."
+    echo "If all services are on the same host, you likely have one corgi."
+    local cname
+    while true; do
+      cname="$(ask_init "  Corgi instance name (blank to stop)" "")"
+      [[ -z "$cname" ]] && break
+      corgi_names+=("$cname")
+      echo "  Added: $cname"
+    done
+    if [[ ${#corgi_names[@]} -eq 0 ]]; then
+      echo "  No corgis added. Using default name 'corgi-01'."
+      corgi_names=("corgi-01")
+    fi
+    echo ""
+  fi
+
+  # -- Build JSON --
+  local config_json="{}"
+  local svc
+
+  for svc in shepherd vigil; do
+    local want_var="want_${svc}"
+    if [[ "${!want_var}" == "y" ]]; then
+      local svc_json
+      svc_json="$(build_service_json "$host" "$port" "$ssh_opts" "$base_dir" "$svc" "$rust_target" "$sudo_rsync")"
+      config_json="$(jq -c --arg k "$svc" --argjson v "$svc_json" '. + {($k): $v}' <<< "$config_json")"
+    fi
+  done
+
+  if [[ "$want_dashboard" == "y" ]]; then
+    local dash_json
+    dash_json="$(build_dashboard_json "$host" "$port" "$ssh_opts" "$base_dir" "$sudo_rsync")"
+    config_json="$(jq -c --argjson v "$dash_json" '. + {dashboard: $v}' <<< "$config_json")"
+  fi
+
+  if [[ "$want_corgi" == "y" && ${#corgi_names[@]} -gt 0 ]]; then
+    local corgis_arr="[]"
+    local cname
+    for cname in "${corgi_names[@]}"; do
+      local entry
+      entry="$(build_corgi_entry_json "$cname" "$host" "$port" "$ssh_opts" "$base_dir" "$rust_target" "$sudo_rsync")"
+      corgis_arr="$(jq -c --argjson e "$entry" '. + [$e]' <<< "$corgis_arr")"
+    done
+    config_json="$(jq -c --argjson corgis "$corgis_arr" '. + {corgis: $corgis}' <<< "$config_json")"
+  fi
+
+  # -- Write --
+  printf '%s\n' "$config_json" | jq '.' > "$out_path"
+  echo "================================================================"
+  echo "  Written: $out_path"
+  echo ""
+  echo "  Review it and run:  ./scripts/install"
+  echo "  To re-run:          ./scripts/install init"
+  echo "================================================================"
+  echo ""
+}
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
 print_usage() {
   cat <<'EOF'
 Usage:
+  ./scripts/install init            Generate .install.json interactively
   ./scripts/install [options] [target ...]
 
 Targets (default: all):
@@ -736,6 +1008,11 @@ parse_args() {
 # ---------------------------------------------------------------------------
 
 main() {
+  if [[ "${1:-}" == "init" ]]; then
+    run_init
+    exit 0
+  fi
+
   parse_args "$@"
 
   if [[ ! -f "$CONFIG_PATH" ]] && [[ -f "$REPO_DIR/.deploy.json" ]]; then

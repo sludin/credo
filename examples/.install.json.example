@@ -1,0 +1,47 @@
+{
+  "shepherd": {
+    "host": "deploy@10.4.1.10",
+    "remoteDir": "/var/apps/credo/shepherd",
+    "sshPort": 22,
+    "rustTarget": "x86_64-unknown-linux-musl",
+    "rustProfile": "release",
+    "sudoRsync": true,
+    "remoteUser": "shepherd",
+    "remoteGroup": "shepherd",
+    "serviceName": "credo-shepherd"
+  },
+  "vigil": {
+    "host": "deploy@10.4.1.10",
+    "remoteDir": "/var/apps/credo/vigil",
+    "sshPort": 22,
+    "rustTarget": "x86_64-unknown-linux-musl",
+    "rustProfile": "release",
+    "sudoRsync": true,
+    "remoteUser": "vigil",
+    "remoteGroup": "vigil",
+    "serviceName": "credo-vigil"
+  },
+  "dashboard": {
+    "host": "deploy@10.4.1.10",
+    "remoteDir": "/var/apps/credo/dashboard",
+    "sshPort": 22,
+    "sudoRsync": true,
+    "remoteUser": "dashboard",
+    "remoteGroup": "dashboard",
+    "serviceName": "credo-dashboard"
+  },
+  "corgis": [
+    {
+      "name": "corgi-01",
+      "host": "deploy@10.4.1.10",
+      "remoteDir": "/var/apps/credo/corgi",
+      "sshPort": 22,
+      "rustTarget": "x86_64-unknown-linux-musl",
+      "rustProfile": "release",
+      "sudoRsync": true,
+      "remoteUser": "corgi",
+      "remoteGroup": "corgi",
+      "serviceName": "credo-corgi"
+    }
+  ]
+}
