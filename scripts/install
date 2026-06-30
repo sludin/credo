@@ -592,6 +592,7 @@ run_job() {
   case "$type" in
     service) deploy_service "$key" "${JOB_LABELS[$i]}" ;;
     corgi)   deploy_corgi_by_name "$key" ;;
+    scripts) deploy_scripts ;;
   esac
 }
 
@@ -693,6 +694,9 @@ expand_targets() {
       corgi:*)
         name="${token#corgi:}"
         add_job "corgi/$name" "corgi" "$name"
+        ;;
+      scripts)
+        add_job "scripts" "scripts" "scripts"
         ;;
     esac
   done
@@ -1193,6 +1197,7 @@ Targets (default: all):
   wizard         Deploy wizard
   corgi          Deploy all corgis
   corgi:<name>   Deploy a specific corgi, e.g. corgi:corgi-01
+  scripts        Deploy scripts/ (bootstrap, ceremony, lib) to $base_dir/scripts/ on the remote
 
   Multiple targets may be combined:
     ./scripts/install vigil shepherd corgi:corgi-01
@@ -1240,7 +1245,7 @@ parse_args() {
       --config=*)  CONFIG_PATH=$(realpath "${1#--config=}") ;;
       -h|--help)   print_usage; exit 0 ;;
       corgi:*)     TARGETS+=("$1") ;;
-      all|shepherd|vigil|dashboard|enroll|wizard|corgi) TARGETS+=("$1") ;;
+      all|shepherd|vigil|dashboard|enroll|wizard|corgi|scripts) TARGETS+=("$1") ;;
       *)
         echo "[install] Unknown target: '$1'. Use --help for usage." >&2
         exit 1 ;;
@@ -1299,7 +1304,6 @@ main() {
   fi
 
   execute_jobs
-  deploy_scripts
 }
 
 main "$@"
