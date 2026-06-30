@@ -955,8 +955,12 @@ setup_users_groups() {
 
   local svc
   for svc in "${services[@]}"; do
-    # Create user + matching primary group
-    setup_run "id '$svc' >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin --user-group '$svc'" \
+    # Always ensure the primary group exists first — create user only if absent.
+    # Doing these separately handles the case where a prior partial setup created
+    # the user but not its primary group (e.g. useradd was run without --user-group).
+    setup_run "getent group '$svc' >/dev/null 2>&1 || sudo groupadd --system '$svc'" \
+      "$host" "$port" "$ssh_opts"
+    setup_run "id '$svc' >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin -g '$svc' '$svc'" \
       "$host" "$port" "$ssh_opts"
     echo "[setup]   user/group: $svc"
   done
@@ -998,7 +1002,7 @@ write_systemd_unit() {
   local unit
   unit="$(cat <<EOF
 [Unit]
-Description=credo ${svc}
+Description=Credo ${svc^}
 After=network.target
 Wants=network.target
 
@@ -1021,6 +1025,7 @@ ReadWritePaths=${working_dir}
 
 [Install]
 WantedBy=multi-user.target
+Alias=${svc}.service
 EOF
 )"
 
