@@ -664,11 +664,11 @@ ask_init() {
   local prompt="$1" default="${2:-}"
   local reply
   if [[ -n "$default" ]]; then
-    printf '%s [%s]: ' "$prompt" "$default"
+    printf '%s [%s]: ' "$prompt" "$default" >/dev/tty
   else
-    printf '%s: ' "$prompt"
+    printf '%s: ' "$prompt" >/dev/tty
   fi
-  read -r reply
+  read -r reply </dev/tty
   printf '%s' "${reply:-$default}"
 }
 
@@ -677,16 +677,16 @@ ask_init_yn() {
   local reply
   while true; do
     if [[ "$default" == "y" ]]; then
-      printf '%s [Y/n]: ' "$prompt"
+      printf '%s [Y/n]: ' "$prompt" >/dev/tty
     else
-      printf '%s [y/N]: ' "$prompt"
+      printf '%s [y/N]: ' "$prompt" >/dev/tty
     fi
-    read -r reply
+    read -r reply </dev/tty
     reply="${reply:-$default}"
     case "${reply,,}" in
       y|yes) printf 'y'; return ;;
       n|no)  printf 'n'; return ;;
-      *) echo "  Please answer y or n." ;;
+      *) echo "  Please answer y or n." >/dev/tty ;;
     esac
   done
 }
