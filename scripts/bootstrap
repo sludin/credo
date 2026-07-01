@@ -47,6 +47,15 @@ ADMIN_IDENTITY_URI=""
 ADMIN_OUT_CERT=""
 ADMIN_OUT_KEY=""
 
+# Ceremony variables (collected in Phase 0, used in Phase 1)
+ORG=""
+COUNTRY="US"
+ROOT_ECDSA_CN=""
+INT_ECDSA_CN=""
+PKI_BASE_URL="http://pki.example.com"
+ROOT_DAYS="3650"
+INT_DAYS="730"
+
 DNS_OVERRIDE_JSON=""
 
 # ---------------------------------------------------------------------------
@@ -88,8 +97,9 @@ remote_run() {
   if [[ "$REMOTE_HOST" == "local" || "$REMOTE_HOST" == "localhost" || "$REMOTE_HOST" == "127.0.0.1" ]]; then
     bash -c "$cmd"
   else
+    # </dev/null prevents sudo from hanging waiting for a password on the SSH stdin pipe
     # shellcheck disable=SC2086
-    ssh -p "$REMOTE_PORT" $REMOTE_SSH_OPTS "$REMOTE_HOST" "$cmd"
+    ssh -p "$REMOTE_PORT" $REMOTE_SSH_OPTS "$REMOTE_HOST" "$cmd" </dev/null
   fi
 }
 
@@ -106,14 +116,14 @@ remote_copy() {
     fi
   else
     local ssh_e="ssh -p ${REMOTE_PORT}${REMOTE_SSH_OPTS:+ }${REMOTE_SSH_OPTS}"
+    local tmp="/tmp/bootstrap-upload-$$-$(basename "$src")"
+    # -L dereferences symlinks so absolute symlinks (ceremony CA live/ layout) copy as real files
+    # shellcheck disable=SC2086
+    rsync -aLz -e "$ssh_e" "$src" "${REMOTE_HOST}:${tmp}"
     if [[ -n "$dest_user" ]]; then
-      local tmp="/tmp/bootstrap-upload-$$"
-      # shellcheck disable=SC2086
-      rsync -az -e "$ssh_e" "$src" "${REMOTE_HOST}:${tmp}"
-      remote_run "sudo -u '$dest_user' mkdir -p '$dest_dir' && sudo mv '$tmp' '${dest_dir}/$(basename "$src")' && sudo chown '${dest_user}' '${dest_dir}/$(basename "$src")'"
+      remote_run "sudo mkdir -p '$dest_dir' && sudo mv '$tmp' '${dest_dir}/$(basename "$src")' && sudo chown '${dest_user}' '${dest_dir}/$(basename "$src")'"
     else
-      # shellcheck disable=SC2086
-      rsync -az -e "$ssh_e" "$src" "${REMOTE_HOST}:${dest_dir}/"
+      remote_run "sudo mkdir -p '$dest_dir' && sudo mv '$tmp' '${dest_dir}/$(basename "$src")'"
     fi
   fi
 }
@@ -131,15 +141,15 @@ remote_copy_dir() {
     fi
   else
     local ssh_e="ssh -p ${REMOTE_PORT}${REMOTE_SSH_OPTS:+ }${REMOTE_SSH_OPTS}"
+    local tmp="/tmp/bootstrap-upload-dir-$$"
+    remote_run "mkdir -p '$tmp'"
+    # -L dereferences symlinks so absolute symlinks copy as real files
+    # shellcheck disable=SC2086
+    rsync -aLz -e "$ssh_e" "${src_dir}/" "${REMOTE_HOST}:${tmp}/"
     if [[ -n "$dest_user" ]]; then
-      local tmp="/tmp/bootstrap-upload-dir-$$"
-      remote_run "mkdir -p '$tmp'"
-      # shellcheck disable=SC2086
-      rsync -az -e "$ssh_e" "${src_dir}/" "${REMOTE_HOST}:${tmp}/"
-      remote_run "sudo -u '$dest_user' mkdir -p '$dest_dir' && sudo rsync -a '${tmp}/' '${dest_dir}/' && sudo chown -R '${dest_user}' '$dest_dir' && rm -rf '$tmp'"
+      remote_run "sudo mkdir -p '$dest_dir' && sudo rsync -a '${tmp}/' '${dest_dir}/' && sudo chown -R '${dest_user}' '$dest_dir' && rm -rf '$tmp'"
     else
-      # shellcheck disable=SC2086
-      rsync -az -e "$ssh_e" "${src_dir}/" "${REMOTE_HOST}:${dest_dir}/"
+      remote_run "sudo mkdir -p '$dest_dir' && sudo rsync -a '${tmp}/' '${dest_dir}/' && rm -rf '$tmp'"
     fi
   fi
 }
@@ -171,10 +181,20 @@ _require_df() {
 
 save_bootstrap() {
   local dns_arg="${DNS_OVERRIDE_JSON:-null}"
+  local skip_ceremony_json
+  $SKIP_CEREMONY && skip_ceremony_json="true" || skip_ceremony_json="false"
   jq -n \
     --arg  credoRoot              "$CREDO_ROOT" \
     --arg  caTrustPath            "$CA_TRUST_PATH" \
     --arg  domain                 "$DOMAIN" \
+    --arg  org                    "$ORG" \
+    --arg  country                "$COUNTRY" \
+    --arg  rootEcdsaCn            "$ROOT_ECDSA_CN" \
+    --arg  intEcdsaCn             "$INT_ECDSA_CN" \
+    --arg  pkiBaseUrl             "$PKI_BASE_URL" \
+    --argjson rootDays            "${ROOT_DAYS:-3650}" \
+    --argjson intDays             "${INT_DAYS:-730}" \
+    --argjson ceremonyAlreadyRan  "$skip_ceremony_json" \
     --arg  vigilHostname          "$VIGIL_HOSTNAME" \
     --argjson vigilPort           "${VIGIL_PORT:-0}" \
     --arg  vigilIntCaKeyPath      "$VIGIL_INT_CA_KEY_PATH" \
@@ -201,6 +221,16 @@ save_bootstrap() {
       credoRoot:   $credoRoot,
       caTrustPath: $caTrustPath,
       domain:      $domain,
+      ceremony: {
+        alreadyRan:  $ceremonyAlreadyRan,
+        org:         $org,
+        country:     $country,
+        rootEcdsaCn: $rootEcdsaCn,
+        intEcdsaCn:  $intEcdsaCn,
+        pkiBaseUrl:  $pkiBaseUrl,
+        rootDays:    $rootDays,
+        intDays:     $intDays
+      },
       vigil: {
         hostname:      $vigilHostname,
         port:          $vigilPort,
@@ -245,10 +275,17 @@ load_install_config() {
     REMOTE_HOST="local"
     return 0
   fi
-  REMOTE_HOST="$(jq -r '(.shepherd // .vigil // .corgis[0]) | .host // empty' "$INSTALL_CONFIG")"
-  REMOTE_PORT="$(jq -r '(.shepherd // .vigil // .corgis[0]) | .sshPort // 22' "$INSTALL_CONFIG")"
-  REMOTE_SSH_OPTS="$(jq -r '(.shepherd // .vigil // .corgis[0]) | .sshOpts // ""' "$INSTALL_CONFIG")"
-  [[ -z "$REMOTE_HOST" ]] && die "Cannot determine host from $INSTALL_CONFIG"
+  local jq_err
+  jq_err="$(jq -r '(.shepherd // .vigil // .corgis[0]) | .host // empty' "$INSTALL_CONFIG" 2>&1)" && REMOTE_HOST="$jq_err" || {
+    echo "[bootstrap] jq error reading host from $INSTALL_CONFIG: $jq_err" >&2
+    REMOTE_HOST=""
+  }
+  REMOTE_PORT="$(jq -r '(.shepherd // .vigil // .corgis[0]) | .sshPort // 22' "$INSTALL_CONFIG" 2>/dev/null || true)"
+  REMOTE_SSH_OPTS="$(jq -r '(.shepherd // .vigil // .corgis[0]) | .sshOpts // ""' "$INSTALL_CONFIG" 2>/dev/null || true)"
+  if [[ -z "$REMOTE_HOST" ]]; then
+    echo "[bootstrap] Note: could not determine host from $INSTALL_CONFIG, defaulting to local" >&2
+    REMOTE_HOST="local"
+  fi
 }
 
 load_defaults() {
@@ -287,6 +324,47 @@ collect_answers() {
     DOMAIN="$REPLY_VAL"
     ask_required 'CA trust bundle path (remote)' "$(_df '.caTrustPath' "$CREDO_ROOT/ca/root-ecdsa.cert.pem")"
     CA_TRUST_PATH="$REPLY_VAL"
+  fi
+  save_bootstrap
+
+  printf '\n=== Ceremony ===\n'
+  local _def_ca_ran="n"
+  if [[ -f "$LOCAL_CA_DIR/int-ecdsa/certs/int-ecdsa.chain.pem" ]]; then
+    _def_ca_ran="y"
+  fi
+  if $AUTO; then
+    local _auto_ran
+    _auto_ran=$(_df '.ceremony.alreadyRan' 'false')
+    [[ "$_auto_ran" == "true" ]] && SKIP_CEREMONY=true || SKIP_CEREMONY=false
+  else
+    ask 'Has the PKI ceremony already run? (y/n)' "$_def_ca_ran"
+    [[ "${REPLY_VAL,,}" == y* ]] && SKIP_CEREMONY=true || SKIP_CEREMONY=false
+  fi
+  if ! $SKIP_CEREMONY; then
+    if $AUTO; then
+      ORG=$(_require_df 'ceremony.org' '.ceremony.org')
+      COUNTRY=$(_require_df 'ceremony.country' '.ceremony.country' 'US')
+      ROOT_ECDSA_CN=$(_require_df 'ceremony.rootEcdsaCn' '.ceremony.rootEcdsaCn' "$ORG Root")
+      INT_ECDSA_CN=$(_require_df 'ceremony.intEcdsaCn' '.ceremony.intEcdsaCn' "$ORG Intermediary")
+      PKI_BASE_URL=$(_require_df 'ceremony.pkiBaseUrl' '.ceremony.pkiBaseUrl' 'http://pki.example.com')
+      ROOT_DAYS=$(_require_df 'ceremony.rootDays' '.ceremony.rootDays' '3650')
+      INT_DAYS=$(_require_df 'ceremony.intDays' '.ceremony.intDays' '730')
+    else
+      ask_required 'Organization name (for CA DN)' "$(_df '.ceremony.org')"
+      ORG="$REPLY_VAL"
+      ask 'Country code' "$(_df '.ceremony.country' 'US')"
+      COUNTRY="${REPLY_VAL:-US}"
+      ask_required 'Root CA common name' "$(_df '.ceremony.rootEcdsaCn' "$ORG Root")"
+      ROOT_ECDSA_CN="$REPLY_VAL"
+      ask_required 'Intermediate CA common name' "$(_df '.ceremony.intEcdsaCn' "$ORG Intermediary")"
+      INT_ECDSA_CN="$REPLY_VAL"
+      ask 'PKI base URL (for AIA/CDP extensions)' "$(_df '.ceremony.pkiBaseUrl' 'http://pki.example.com')"
+      PKI_BASE_URL="${REPLY_VAL:-http://pki.example.com}"
+      ask 'Root cert validity days' "$(_df '.ceremony.rootDays' '3650')"
+      ROOT_DAYS="${REPLY_VAL:-3650}"
+      ask 'Intermediate cert validity days' "$(_df '.ceremony.intDays' '730')"
+      INT_DAYS="${REPLY_VAL:-730}"
+    fi
   fi
   save_bootstrap
 
@@ -435,13 +513,23 @@ phase_ceremony() {
   fi
 
   # Generate openssl.cnf files
-  local cnf_opts=(--ca-dir "$ca_dir" --domain "$DOMAIN")
-  if $AUTO; then cnf_opts+=(--non-interactive); fi
-
+  local cnf_opts=(
+    --ca-dir "$ca_dir"
+    --org "$ORG"
+    --country "$COUNTRY"
+    --root-ecdsa-cn "$ROOT_ECDSA_CN"
+    --int-ecdsa-cn "$INT_ECDSA_CN"
+    --pki-base-url "$PKI_BASE_URL"
+    --root-days "$ROOT_DAYS"
+    --int-days "$INT_DAYS"
+    --force
+  )
+  if $DRY_RUN; then cnf_opts+=(--dry-run); fi
   "$ceremony_dir/generate-openssl-cnf.sh" "${cnf_opts[@]}"
 
   # Bootstrap root CA
-  local root_opts=(--ca-dir "$ca_dir")
+  local root_opts=(--ca-dir "$ca_dir" --force)
+  if $DRY_RUN; then root_opts+=(--dry-run); fi
   if $AUTO; then
     root_opts+=(--non-interactive)
     if [[ -z "${CREDO_ROOT_CA_PASSPHRASE:-}" ]]; then
@@ -451,7 +539,8 @@ phase_ceremony() {
   "$ceremony_dir/bootstrap-roots.sh" "${root_opts[@]}"
 
   # Issue intermediate
-  local int_opts=(--root-dir "$ca_dir/root-ecdsa" --int-dir "$ca_dir/int-ecdsa")
+  local int_opts=(--root-dir "$ca_dir/root-ecdsa" --int-dir "$ca_dir/int-ecdsa" --force)
+  if $DRY_RUN; then int_opts+=(--dry-run); fi
   if $AUTO; then int_opts+=(--non-interactive); fi
   "$ceremony_dir/issue-intermediary.sh" "${int_opts[@]}"
 
@@ -478,7 +567,7 @@ phase_config() {
   # Generate all service config files to a local temp dir
   local tmp_config_dir
   tmp_config_dir=$(mktemp -d "/tmp/credo-bootstrap-config-XXXXXX")
-  trap 'rm -rf "$tmp_config_dir"' EXIT
+  trap '[[ -n "${tmp_config_dir:-}" ]] && rm -rf "$tmp_config_dir"' EXIT
 
   # Set derived directories for config-gen.sh
   # These are REMOTE paths; config-gen.sh uses them to produce JSON
@@ -507,6 +596,20 @@ phase_config() {
   CORGI_DIR="$saved_corgi_dir"
   CREDO_ROOT="$saved_credo_root"
 
+  # config-gen uses VIGIL_DIR/SHEPHERD_DIR/CORGI_DIR/CREDO_ROOT for both the output paths
+  # AND the content embedded in each config (cert paths, includes, etc.).  Since we set
+  # all four to temp dirs, every generated JSON has temp paths baked in.  Replace them all
+  # with the real remote paths before pushing.
+  while IFS= read -r -d '' cfg; do
+    local patched="$cfg.patched"
+    sed \
+      -e "s|${vigil_dir_local}|${VIGIL_DIR}|g" \
+      -e "s|${shepherd_dir_local}|${SHEPHERD_DIR}|g" \
+      -e "s|${corgi_dir_local}|${CORGI_DIR}|g" \
+      -e "s|${tmp_config_dir}|${CREDO_ROOT}|g" \
+      "$cfg" > "$patched" && mv "$patched" "$cfg"
+  done < <(find "$tmp_config_dir" -name "*.json" -print0)
+
   if $DRY_RUN; then
     echo "[bootstrap] Dry run - skipping file push."
     return
@@ -515,29 +618,38 @@ phase_config() {
   echo ""
   echo "[bootstrap] Pushing CA files to remote..."
 
-  # Push root cert as trust anchor (all services need it)
   local ca_remote_dir="$CREDO_ROOT/ca"
-  for svc_remote_dir in "$VIGIL_DIR" "$SHEPHERD_DIR" "$CORGI_DIR"; do
-    local svc_user
-    svc_user=$(basename "$svc_remote_dir")  # vigil, shepherd, corgi
-    remote_run "sudo -u '$svc_user' mkdir -p '$svc_remote_dir' 2>/dev/null || sudo mkdir -p '$svc_remote_dir'"
-  done
+
+  echo "[bootstrap]   mkdir CA dirs..."
   remote_run "sudo mkdir -p '$ca_remote_dir/root-ecdsa/certs' '$ca_remote_dir/int-ecdsa/certs' '$ca_remote_dir/int-ecdsa/private'"
+
+  echo "[bootstrap]   copy root cert..."
   remote_copy "$root_cert"  "$ca_remote_dir/root-ecdsa/certs"
+  echo "[bootstrap]   copy int cert..."
   remote_copy "$int_cert"   "$ca_remote_dir/int-ecdsa/certs"
+  echo "[bootstrap]   copy int chain..."
   remote_copy "$int_chain"  "$ca_remote_dir/int-ecdsa/certs"
-  # Key is owned by vigil only
+  echo "[bootstrap]   copy int key..."
   remote_copy "$int_key"    "$ca_remote_dir/int-ecdsa/private"
+
+  echo "[bootstrap]   chown int key..."
   remote_run "sudo chown vigil:vigil '$ca_remote_dir/int-ecdsa/private/int-ecdsa.key.pem' && sudo chmod 600 '$ca_remote_dir/int-ecdsa/private/int-ecdsa.key.pem'"
   remote_run "sudo cp '$ca_remote_dir/root-ecdsa/certs/root-ecdsa.cert.pem' '$CREDO_ROOT/ca/root-ecdsa.cert.pem' 2>/dev/null || true"
+  # corgi's POST /bootstrap/ca writes the Shepherd CA cert to this path; it must be corgi-writable.
+  remote_run "sudo chown corgi:corgi '$CA_TRUST_PATH' && sudo chmod 644 '$CA_TRUST_PATH'"
 
   echo "[bootstrap] Pushing service config files..."
+  echo "[bootstrap]   vigil config..."
   remote_copy_dir "$vigil_dir_local"    "$VIGIL_DIR"    "vigil"
+  echo "[bootstrap]   shepherd config..."
   remote_copy_dir "$shepherd_dir_local" "$SHEPHERD_DIR" "shepherd"
+  echo "[bootstrap]   corgi config..."
   remote_copy_dir "$corgi_dir_local"    "$CORGI_DIR"    "corgi"
 
-  # Push vars.json to CREDO_ROOT
-  [[ -f "$tmp_config_dir/vars.json" ]] && remote_copy "$tmp_config_dir/vars.json" "$CREDO_ROOT"
+  if [[ -f "$tmp_config_dir/vars.json" ]]; then
+    echo "[bootstrap]   vars.json..."
+    remote_copy "$tmp_config_dir/vars.json" "$CREDO_ROOT"
+  fi
 
   echo "[bootstrap] Files pushed."
 }
@@ -560,12 +672,13 @@ phase_bootstrap() {
   local shepherd_exec="$SHEPHERD_DIR/shepherd"
   local corgi_exec="$CORGI_DIR/corgi"
 
-  # Upload and execute the remote bootstrap script via SSH
-  # The script is self-contained: all logic runs on the remote host
+  # Write the bootstrap script locally, then upload via rsync (avoids </dev/null stdin issue)
+  local local_script
+  local_script=$(mktemp "/tmp/credo-bootstrap-local-$$.XXXXXX.sh")
   local remote_script="/tmp/credo-bootstrap-remote-$$.sh"
 
   # shellcheck disable=SC2087
-  remote_run "cat > '$remote_script'" << REMOTE_SCRIPT_EOF
+  cat > "$local_script" << REMOTE_SCRIPT_EOF
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -578,12 +691,15 @@ CORGI_DIR="$CORGI_DIR"
 VIGIL_CONFIG_PATH="$VIGIL_DIR/vigil.config.json"
 SHEPHERD_CONFIG_PATH="$SHEPHERD_DIR/shepherd.config.json"
 CORGI_CONFIG_PATH="$CORGI_DIR/corgi.config.json"
-VIGIL_LOG="$VIGIL_DIR/vigil-bootstrap.log"
-SHEPHERD_LOG="$SHEPHERD_DIR/shepherd-bootstrap.log"
-CORGI_BOOT_LOG="$CORGI_DIR/corgi-bootstrap.log"
-CORGI_LOG="$CORGI_DIR/corgi.log"
+# Bootstrap logs go to /tmp so the SSH user (not the service user) can open them for writing.
+# The redirect ">>" is opened by the invoking shell, not by the sudo-u process.
+VIGIL_LOG="/tmp/credo-vigil-bootstrap-$$.log"
+SHEPHERD_LOG="/tmp/credo-shepherd-bootstrap-$$.log"
+CORGI_BOOT_LOG="/tmp/credo-corgi-boot-$$.log"
+CORGI_LOG="/tmp/credo-corgi-svc-$$.log"
 CORGI_NAME="$CORGI_NAME"
 CORGI_HOSTNAME="$CORGI_HOSTNAME"
+CORGI_PORT="$CORGI_PORT"
 CORGI_BOOTSTRAP_PORT="$CORGI_BOOTSTRAP_PORT"
 CORGI_IDENTITY_URI="$CORGI_IDENTITY_URI"
 VIGIL_HOSTNAME="$VIGIL_HOSTNAME"
@@ -595,6 +711,24 @@ ADMIN_OUT_KEY="$ADMIN_OUT_KEY"
 
 TRACKED_PIDS=()
 trap 'for p in "\${TRACKED_PIDS[@]:-}"; do kill "\$p" 2>/dev/null || true; done' EXIT INT TERM
+trap '
+  echo "[REMOTE ERR] command failed at line \$LINENO: \$BASH_COMMAND" >&2
+  echo "[REMOTE ERR] --- vigil log (last 20 lines) ---" >&2
+  tail -20 "\$VIGIL_LOG" 2>/dev/null | sed "s/^/  [V] /" >&2
+  echo "[REMOTE ERR] --- shepherd log (last 20 lines) ---" >&2
+  tail -20 "\$SHEPHERD_LOG" 2>/dev/null | sed "s/^/  [S] /" >&2
+  echo "[REMOTE ERR] --- corgi boot log (full) ---" >&2
+  cat "\$CORGI_BOOT_LOG" 2>/dev/null | sed "s/^/  [CB] /" >&2
+  echo "[REMOTE ERR] --- corgi server log (full) ---" >&2
+  cat "\$CORGI_LOG" 2>/dev/null | sed "s/^/  [CS] /" >&2
+  echo "[REMOTE ERR] --- shepherd log (full) ---" >&2
+  cat "\$SHEPHERD_LOG" 2>/dev/null | sed "s/^/  [S] /" >&2
+  echo "[REMOTE ERR] --- corgi store contents ---" >&2
+  find "\$CORGI_DIR/store" -type f 2>/dev/null | sed "s/^/  [C] /" >&2
+  ls -la "\$CORGI_DIR/store/live" 2>&1 | sed "s/^/  [C] /" >&2
+  echo "[REMOTE ERR] --- running processes ---" >&2
+  ps aux 2>/dev/null | grep -E "vigil|shepherd|corgi" | grep -v grep | sed "s/^/  [P] /" >&2
+' ERR
 
 capture_from_log() {
   local log_file="\$1" timeout_sec="\${2:-90}"
@@ -623,7 +757,7 @@ capture_from_log() {
       done
     done < "\$log_file"
     _printed=\$_lineno
-    (( _found < _total )) && sleep 0.5
+    if (( _found < _total )); then sleep 0.5; fi
   done
 }
 
@@ -633,26 +767,56 @@ wait_for_certs() {
   declare -A _pending=()
   for _arg in "\$@"; do _pending["\${_arg#*:}"]="\${_arg%%:*}"; done
   local _deadline=\$(( \$(date +%s) + timeout_sec ))
+  local _last_diag=0
   while (( \${#_pending[@]} > 0 )); do
     if (( \$(date +%s) > _deadline )); then
-      echo "ERROR: timed out waiting for certs" >&2; exit 1
+      echo "ERROR: timed out waiting for certs" >&2
+      echo "--- shepherd log (last 40 lines) ---" >&2
+      tail -40 "\$SHEPHERD_LOG" 2>/dev/null | sed "s/^/  [S] /" >&2
+      echo "--- corgi server log (full) ---" >&2
+      cat "\$CORGI_LOG" 2>/dev/null | sed "s/^/  [CS] /" >&2
+      echo "--- cert store contents ---" >&2
+      find "\$CORGI_DIR/store" -type f 2>/dev/null | sed "s/^/  [C] /" >&2
+      echo "--- running credo processes ---" >&2
+      ps aux 2>/dev/null | grep -E "vigil|shepherd|corgi" | grep -v grep | sed "s/^/  [P] /" >&2
+      false  # trigger ERR trap for extra context
+    fi
+    # Periodic heartbeat every 30s so output shows progress
+    local _now=\$(date +%s)
+    if (( _now - _last_diag >= 30 )); then
+      echo "  [wait] still waiting for: \${!_pending[*]}" >&2
+      _last_diag=\$_now
     fi
     for _cert_path in "\${!_pending[@]}"; do
-      if [[ -f "\$_cert_path" ]]; then
+      if sudo -u corgi test -f "\$_cert_path" 2>/dev/null; then
         echo "  Certificate: \${_pending[\$_cert_path]}"
         unset '_pending[\$_cert_path]'
       fi
     done
-    (( \${#_pending[@]} > 0 )) && sleep 3
+    if (( \${#_pending[@]} > 0 )); then sleep 3; fi
   done
 }
 
-mkdir -p "\$VIGIL_DIR" "\$SHEPHERD_DIR" "\$CORGI_DIR"
-: > "\$VIGIL_LOG"; : > "\$SHEPHERD_LOG"; : > "\$CORGI_BOOT_LOG"; : > "\$CORGI_LOG"
+# Stop any running instances (services may be enabled and crash-looping from a prior attempt)
+if command -v systemctl >/dev/null 2>&1; then
+  echo "Stopping any running credo services..."
+  sudo systemctl stop credo-vigil credo-shepherd credo-corgi 2>/dev/null || true
+  # Also disable auto-restart during bootstrap so systemd doesn't interfere
+  sudo systemctl mask --runtime credo-vigil credo-shepherd credo-corgi 2>/dev/null || true
+fi
+
+# Ensure corgi cert store dirs exist with correct ownership (install creates certs/ not store/).
+sudo mkdir -p "\$CORGI_DIR/store/live"
+sudo chown corgi:corgi "\$CORGI_DIR/store"
+sudo chown corgi:credo-cert "\$CORGI_DIR/store/live"
+sudo chmod 2750 "\$CORGI_DIR/store/live"
+
+touch "\$VIGIL_LOG" "\$SHEPHERD_LOG" "\$CORGI_BOOT_LOG" "\$CORGI_LOG"
 
 echo ""
 echo "=== Step 1/5: Starting vigil in bootstrap mode..."
-VIGIL_CONFIG_PATH="\$VIGIL_CONFIG_PATH" "\$VIGIL_EXEC" bootstrap >> "\$VIGIL_LOG" 2>&1 &
+# Use bash -c so the service user cds into its own dir (PID file is written relative to cwd)
+sudo -u vigil bash -c "cd \$VIGIL_DIR && VIGIL_CONFIG_PATH=\$VIGIL_CONFIG_PATH \$VIGIL_EXEC bootstrap" >> "\$VIGIL_LOG" 2>&1 &
 VPID=\$!; TRACKED_PIDS+=(\$VPID)
 VIGIL_SECRET=""
 capture_from_log "\$VIGIL_LOG" 90 VIGIL_SECRET 'Vigil bootstrap secret: ([a-f0-9]{64})'
@@ -660,7 +824,7 @@ echo "  Vigil secret captured."
 
 echo ""
 echo "=== Step 2/5: Starting shepherd in bootstrap mode..."
-SHEPHERD_CONFIG_PATH="\$SHEPHERD_CONFIG_PATH" "\$SHEPHERD_EXEC" bootstrap server --vigil-secret "\$VIGIL_SECRET" >> "\$SHEPHERD_LOG" 2>&1 &
+sudo -u shepherd bash -c "cd \$SHEPHERD_DIR && SHEPHERD_CONFIG_PATH=\$SHEPHERD_CONFIG_PATH \$SHEPHERD_EXEC bootstrap server --vigil-secret \$VIGIL_SECRET" >> "\$SHEPHERD_LOG" 2>&1 &
 SPID=\$!; TRACKED_PIDS+=(\$SPID)
 ADMIN_TOKEN=""
 capture_from_log "\$SHEPHERD_LOG" 90 ADMIN_TOKEN 'Shepherd bootstrap admin token: ([a-f0-9]{64})'
@@ -668,7 +832,7 @@ echo "  Admin token captured."
 
 echo ""
 echo "=== Step 3/5: Starting corgi in bootstrap mode..."
-CORGI_CONFIG_PATH="\$CORGI_CONFIG_PATH" "\$CORGI_EXEC" bootstrap >> "\$CORGI_BOOT_LOG" 2>&1 &
+sudo -u corgi bash -c "cd \$CORGI_DIR && CORGI_CONFIG_PATH=\$CORGI_CONFIG_PATH \$CORGI_EXEC bootstrap" >> "\$CORGI_BOOT_LOG" 2>&1 &
 CPID=\$!; TRACKED_PIDS+=(\$CPID)
 CORGI_TOKEN="" CORGI_FINGERPRINT="" CORGI_READY=""
 capture_from_log "\$CORGI_BOOT_LOG" 90 \
@@ -679,26 +843,18 @@ echo "  Corgi token and fingerprint captured."
 
 echo ""
 echo "=== Step 4/5: Registering admin + enrolling corgi..."
-SHEPHERD_CONFIG_PATH="\$SHEPHERD_CONFIG_PATH" "\$SHEPHERD_EXEC" bootstrap admin \
-  --admin-token    "\$ADMIN_TOKEN" \
-  --identity-uri   "\$ADMIN_IDENTITY_URI" \
-  --out-cert       "\$ADMIN_OUT_CERT" \
-  --out-key        "\$ADMIN_OUT_KEY" \
-  --domain         "\$DOMAIN"
+# Admin cert+key go to temp paths on the remote; the local bootstrap script rsyncs them back.
+REMOTE_ADMIN_CERT="/tmp/credo-admin-cert-\$\$.pem"
+REMOTE_ADMIN_KEY="/tmp/credo-admin-key-\$\$.pem"
+sudo -u shepherd bash -c "cd \$SHEPHERD_DIR && SHEPHERD_CONFIG_PATH=\$SHEPHERD_CONFIG_PATH \$SHEPHERD_EXEC bootstrap admin --admin-token \$ADMIN_TOKEN --identity-uri \$ADMIN_IDENTITY_URI --out-cert \$REMOTE_ADMIN_CERT --out-key \$REMOTE_ADMIN_KEY --domain \$DOMAIN"
 
-SHEPHERD_CONFIG_PATH="\$SHEPHERD_CONFIG_PATH" "\$SHEPHERD_EXEC" bootstrap corgi \
-  --admin-token    "\$ADMIN_TOKEN" \
-  --name           "\$CORGI_NAME" \
-  --token          "\$CORGI_TOKEN" \
-  --fingerprint    "\$CORGI_FINGERPRINT" \
-  --identity-uri   "\$CORGI_IDENTITY_URI" \
-  --corgi-url      "https://\${CORGI_HOSTNAME}:\${CORGI_BOOTSTRAP_PORT}"
+sudo -u shepherd bash -c "cd \$SHEPHERD_DIR && SHEPHERD_CONFIG_PATH=\$SHEPHERD_CONFIG_PATH \$SHEPHERD_EXEC bootstrap corgi --admin-token \$ADMIN_TOKEN --name \$CORGI_NAME --token \$CORGI_TOKEN --fingerprint \$CORGI_FINGERPRINT --identity-uri \$CORGI_IDENTITY_URI --corgi-url https://127.0.0.1:\${CORGI_PORT}"
 
 echo ""
 echo "=== Step 5/5: Restarting in server mode, waiting for certs..."
 kill "\$CPID" 2>/dev/null || true
 sleep 0.3
-CORGI_CONFIG_PATH="\$CORGI_CONFIG_PATH" "\$CORGI_EXEC" server start >> "\$CORGI_LOG" 2>&1 &
+sudo -u corgi bash -c "cd \$CORGI_DIR && CORGI_CONFIG_PATH=\$CORGI_CONFIG_PATH \$CORGI_EXEC server start" >> "\$CORGI_LOG" 2>&1 &
 CPID2=\$!; TRACKED_PIDS+=(\$CPID2)
 local_corgi_live="\$CORGI_DIR/store/live"
 _t=\$(date +%s)
@@ -708,30 +864,77 @@ wait_for_certs "\$_t" \
   "\$CORGI_HOSTNAME:\${local_corgi_live}/\${CORGI_HOSTNAME}/fullchain.pem"
 
 kill "\$VPID" "\$SPID" 2>/dev/null || true; sleep 0.3
-VIGIL_CONFIG_PATH="\$VIGIL_CONFIG_PATH" "\$VIGIL_EXEC" server start >> "\$VIGIL_LOG" 2>&1 &
-VPID2=\$!; TRACKED_PIDS+=(\$VPID2)
-SHEPHERD_CONFIG_PATH="\$SHEPHERD_CONFIG_PATH" "\$SHEPHERD_EXEC" server start >> "\$SHEPHERD_LOG" 2>&1 &
-SPID2=\$!; TRACKED_PIDS+=(\$SPID2)
-sleep 2
 
 echo ""
-echo "=== Bootstrap complete! All three services started."
+echo "=== Bootstrap complete!"
 echo "  vigil    log: \$VIGIL_LOG"
 echo "  shepherd log: \$SHEPHERD_LOG"
 echo "  corgi    log: \$CORGI_LOG"
-echo "  admin cert: \$ADMIN_OUT_CERT"
-echo "  admin key : \$ADMIN_OUT_KEY"
+echo "CREDO_REMOTE_ADMIN_CERT=\$REMOTE_ADMIN_CERT"
+echo "CREDO_REMOTE_ADMIN_KEY=\$REMOTE_ADMIN_KEY"
 echo ""
-echo "Services will be stopped after this script exits."
-echo "Use 'systemctl start credo-vigil credo-shepherd credo-corgi' to bring them up."
+
+# Hand off to systemctl if available; otherwise detach background processes.
+if command -v systemctl >/dev/null 2>&1 && sudo systemctl is-enabled credo-vigil >/dev/null 2>&1; then
+  echo "Starting services via systemctl..."
+  sudo systemctl unmask credo-vigil credo-shepherd credo-corgi 2>/dev/null || true
+  sudo systemctl start credo-vigil credo-shepherd credo-corgi
+  echo "Services started. They will persist across reboots."
+else
+  echo "systemctl unit files not found — starting as detached background processes."
+  sudo -u vigil    bash -c "cd \$VIGIL_DIR    && nohup VIGIL_CONFIG_PATH=\$VIGIL_CONFIG_PATH       \$VIGIL_EXEC    server start >> \$VIGIL_LOG    2>&1 &"
+  VPID2=\$!
+  sudo -u shepherd bash -c "cd \$SHEPHERD_DIR && nohup SHEPHERD_CONFIG_PATH=\$SHEPHERD_CONFIG_PATH \$SHEPHERD_EXEC server start >> \$SHEPHERD_LOG 2>&1 &"
+  SPID2=\$!
+  disown "\$VPID2" "\$SPID2" "\$CPID2" 2>/dev/null || true
+  echo "  vigil PID:    \$VPID2"
+  echo "  shepherd PID: \$SPID2"
+  echo "  corgi PID:    \$CPID2"
+  echo "Run 'sudo systemctl start credo-vigil credo-shepherd credo-corgi' to manage via systemd instead."
+fi
 REMOTE_SCRIPT_EOF
 
-  echo "[bootstrap] Uploaded remote bootstrap script, executing on $REMOTE_HOST..."
+  # Upload the local script to the remote via rsync, then execute it
+  local ssh_e="ssh -p ${REMOTE_PORT}${REMOTE_SSH_OPTS:+ }${REMOTE_SSH_OPTS}"
+  echo "[bootstrap] Uploading remote bootstrap script to $REMOTE_HOST..."
   if [[ "$REMOTE_HOST" == "local" || "$REMOTE_HOST" == "localhost" || "$REMOTE_HOST" == "127.0.0.1" ]]; then
-    bash "$remote_script"; rm -f "$remote_script"
+    cp "$local_script" "$remote_script"
   else
     # shellcheck disable=SC2086
-    ssh -p "$REMOTE_PORT" $REMOTE_SSH_OPTS -t "$REMOTE_HOST" "bash '$remote_script'; rm -f '$remote_script'"
+    rsync -az -e "$ssh_e" "$local_script" "${REMOTE_HOST}:${remote_script}"
+  fi
+  rm -f "$local_script"
+
+  echo "[bootstrap] Executing bootstrap script on $REMOTE_HOST..."
+  local tee_out
+  tee_out=$(mktemp /tmp/credo-bootstrap-tee-XXXXXX)
+  if [[ "$REMOTE_HOST" == "local" || "$REMOTE_HOST" == "localhost" || "$REMOTE_HOST" == "127.0.0.1" ]]; then
+    bash "$remote_script" 2>&1 | tee "$tee_out" || true; rm -f "$remote_script"
+  else
+    # Stream output in real-time via tee so progress is visible, and capture for parsing.
+    # || true allows Phase 4 health checks to run even when the bootstrap script fails.
+    # shellcheck disable=SC2086
+    ssh -p "$REMOTE_PORT" $REMOTE_SSH_OPTS "$REMOTE_HOST" "bash '$remote_script'; rm -f '$remote_script'" 2>&1 | tee "$tee_out" || true
+  fi
+  # Extract remote paths for admin cert/key, then rsync them to local.
+  local remote_admin_cert remote_admin_key
+  remote_admin_cert=$(grep '^CREDO_REMOTE_ADMIN_CERT=' "$tee_out" | tail -1 | cut -d= -f2-)
+  remote_admin_key=$(grep  '^CREDO_REMOTE_ADMIN_KEY='  "$tee_out" | tail -1 | cut -d= -f2-)
+  rm -f "$tee_out"
+  if [[ -n "$remote_admin_cert" && -n "$remote_admin_key" ]]; then
+    echo "[bootstrap] Fetching admin credentials from remote..."
+    mkdir -p "$(dirname "$ADMIN_OUT_CERT")" "$(dirname "$ADMIN_OUT_KEY")"
+    # shellcheck disable=SC2086
+    rsync -az -e "$ssh_e" "${REMOTE_HOST}:${remote_admin_cert}" "$ADMIN_OUT_CERT"
+    # shellcheck disable=SC2086
+    rsync -az -e "$ssh_e" "${REMOTE_HOST}:${remote_admin_key}"  "$ADMIN_OUT_KEY"
+    chmod 600 "$ADMIN_OUT_KEY"
+    echo "[bootstrap] Admin cert: $ADMIN_OUT_CERT"
+    echo "[bootstrap] Admin key:  $ADMIN_OUT_KEY"
+    # shellcheck disable=SC2086
+    ssh -p "$REMOTE_PORT" $REMOTE_SSH_OPTS "$REMOTE_HOST" "rm -f '$remote_admin_cert' '$remote_admin_key'" 2>/dev/null || true
+  else
+    echo "[bootstrap] WARNING: admin credentials not found in remote output." >&2
   fi
 }
 
@@ -752,29 +955,44 @@ phase_verify() {
   [[ -f "$trust_pem" ]] && ca_arg=(--cacert "$trust_pem")
 
   local all_ok=true
+  local is_remote=false
+  [[ "$REMOTE_HOST" != "local" && "$REMOTE_HOST" != "localhost" && "$REMOTE_HOST" != "127.0.0.1" ]] && is_remote=true
 
   check_health() {
-    local label="$1" url="$2"
+    local label="$1" unit="$2" url="$3" attempts="${4:-1}" ok_codes="${5:-200}"
     local code
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${ca_arg[@]}" "$url" 2>/dev/null || echo "000")
-    if [[ "$code" == "200" ]]; then
-      printf '[bootstrap]   OK  %s (%s)\n' "$label" "$url"
+    for (( i=1; i<=attempts; i++ )); do
+      if $is_remote; then
+        code=$(remote_run "curl -s -o /dev/null -w '%{http_code}' --max-time 10 --cacert '$CA_TRUST_PATH' '$url' 2>/dev/null || echo 000" 2>/dev/null | tail -1 || echo "000")
+      else
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${ca_arg[@]}" "$url" 2>/dev/null || echo "000")
+      fi
+      [[ " $ok_codes " == *" $code "* ]] && break
+      (( i < attempts )) && sleep 5
+    done
+    if [[ " $ok_codes " == *" $code "* ]]; then
+      printf '[bootstrap]   OK  %s (%s) HTTP %s\n' "$label" "$url" "$code"
     else
       printf '[bootstrap]   FAIL %s (%s) - HTTP %s\n' "$label" "$url" "$code"
       all_ok=false
+      if $is_remote; then
+        printf '[bootstrap]   --- journal: %s ---\n' "$unit"
+        remote_run "journalctl -u '$unit' -n 20 --no-pager 2>/dev/null || true" \
+          | sed 's/^/[bootstrap]   | /'
+      fi
     fi
   }
 
-  echo "[bootstrap] Checking health endpoints (services may need a moment to start)..."
+  echo "[bootstrap] Checking health endpoints (retrying up to 6x over 30s)..."
   sleep 5
 
-  check_health "vigil"    "https://$VIGIL_HOSTNAME:$VIGIL_PORT/health"
-  check_health "shepherd" "https://$SHEPHERD_HOSTNAME:$SHEPHERD_DASHBOARD_PORT/health"
+  check_health "vigil"    "credo-vigil"    "https://$VIGIL_HOSTNAME:$VIGIL_PORT/health"               6 "200 401"
+  check_health "shepherd" "credo-shepherd" "https://$SHEPHERD_HOSTNAME:$SHEPHERD_DASHBOARD_PORT/health" 6 "200"
 
   if $all_ok; then
     echo "[bootstrap] All health checks passed."
   else
-    echo "[bootstrap] Some checks failed. Check logs on $REMOTE_HOST."
+    echo "[bootstrap] Some checks failed (see journal output above)."
     exit 1
   fi
 }
