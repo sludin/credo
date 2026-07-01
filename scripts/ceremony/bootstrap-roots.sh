@@ -228,12 +228,14 @@ if [[ "$NON_INTERACTIVE" != "true" ]]; then
     echo ""
   fi
 
-  printf "  [1/3] Type 'GENERATE ROOT CA' to proceed (or Ctrl-C to abort): "
-  read -r CONFIRM
-  if [[ "$CONFIRM" != "GENERATE ROOT CA" ]]; then
-    echo "Aborted." >&2
-    exit 1
-  fi
+  while true; do
+    printf "  [1/3] Type 'GENERATE ROOT CA' to proceed (or Ctrl-C to abort): "
+    read -r CONFIRM
+    if [[ "$CONFIRM" == "GENERATE ROOT CA" ]]; then
+      break
+    fi
+    echo "  Input did not match. Try again (or press Ctrl-C to abort)." >&2
+  done
   echo ""
   echo "  [2/3] Generating root CA key and certificate..."
   if [[ "$PASSPHRASE" == "true" ]]; then

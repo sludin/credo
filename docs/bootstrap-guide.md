@@ -14,11 +14,12 @@ Both paths share the same prerequisite: a completed PKI ceremony (Phase 1).
 ## Operator flow summary
 
 ```
-git pull && cargo build --release
-scripts/install init          # generate .install.json (interactive)
-scripts/install setup         # create users/groups + systemd units on remote
-scripts/install               # build + rsync binaries to remote
-scripts/bootstrap             # ceremony + service configs + bootstrap sequence
+git clone https://github.com/sludin/credo.git && cd credo
+cargo build --release
+./scripts/install init          # generate .install.json (interactive)
+./scripts/install setup         # create users/groups + systemd units on remote
+./scripts/install               # build + rsync binaries to remote
+./scripts/bootstrap             # ceremony + service configs + bootstrap sequence
 systemctl enable --now credo-vigil credo-shepherd credo-corgi
 ```
 

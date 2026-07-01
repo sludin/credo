@@ -224,12 +224,14 @@ if [[ "$NON_INTERACTIVE" != "true" ]]; then
   echo "  Root CA    : ${ROOT_CERT}"
   echo ""
 
-  printf "  [1/3] Type 'ISSUE INTERMEDIATE' to proceed (or Ctrl-C to abort): "
-  read -r CONFIRM
-  if [[ "$CONFIRM" != "ISSUE INTERMEDIATE" ]]; then
-    echo "Aborted." >&2
-    exit 1
-  fi
+  while true; do
+    printf "  [1/3] Type 'ISSUE INTERMEDIATE' to proceed (or Ctrl-C to abort): "
+    read -r CONFIRM
+    if [[ "$CONFIRM" == "ISSUE INTERMEDIATE" ]]; then
+      break
+    fi
+    echo "  Input did not match. Try again (or press Ctrl-C to abort)." >&2
+  done
   echo ""
   echo "  [2/3] Generating intermediate key, CSR, and certificate..."
   echo "        (If root key is passphrase-protected, OpenSSL will prompt for it.)"
