@@ -43,6 +43,7 @@ CORGI_HTTP_CHALLENGE_PORT=""
 CORGI_DIR=""
 CORGI_IDENTITY_URI=""
 
+ADMIN_USERNAME=""
 ADMIN_IDENTITY_URI=""
 ADMIN_OUT_CERT=""
 ADMIN_OUT_KEY=""
@@ -213,6 +214,7 @@ save_bootstrap() {
     --argjson corgiHttpPort       "${CORGI_HTTP_CHALLENGE_PORT:-0}" \
     --arg  corgiDir               "$CORGI_DIR" \
     --arg  corgiIdentityUri       "$CORGI_IDENTITY_URI" \
+    --arg  adminUsername          "$ADMIN_USERNAME" \
     --arg  adminIdentityUri       "$ADMIN_IDENTITY_URI" \
     --arg  adminOutCert           "$ADMIN_OUT_CERT" \
     --arg  adminOutKey            "$ADMIN_OUT_KEY" \
@@ -256,6 +258,7 @@ save_bootstrap() {
         identityUri:       $corgiIdentityUri
       },
       admin: {
+        username:    $adminUsername,
         identityUri: $adminIdentityUri,
         outCert:     $adminOutCert,
         outKey:      $adminOutKey
@@ -438,7 +441,7 @@ collect_answers() {
     CORGI_BOOTSTRAP_PORT=$(_require_df 'corgi.bootstrapPort' '.corgi.bootstrapPort' "$(( CORGI_PORT + 1 ))")
     CORGI_HTTP_CHALLENGE_PORT=$(_require_df 'corgi.httpChallengePort' '.corgi.httpChallengePort' '7080')
     CORGI_DIR=$(_require_df 'corgi.dir' '.corgi.dir' "$_def_corgi_dir")
-    CORGI_IDENTITY_URI=$(_require_df 'corgi.identityUri' '.corgi.identityUri' "vigil://credo/node/$CORGI_NAME")
+    CORGI_IDENTITY_URI=$(_require_df 'corgi.identityUri' '.corgi.identityUri' "vigil://credo/service/corgi/$CORGI_NAME")
   else
     ask_required 'Corgi node name' "$(_df '.corgi.name' "$_def_corgi_name")"
     CORGI_NAME="$REPLY_VAL"
@@ -452,7 +455,7 @@ collect_answers() {
     CORGI_HTTP_CHALLENGE_PORT="$REPLY_VAL"
     ask_required 'Corgi remote directory' "$(_df '.corgi.dir' "$_def_corgi_dir")"
     CORGI_DIR="$REPLY_VAL"
-    ask_required 'Corgi identity URI' "$(_df '.corgi.identityUri' "vigil://credo/node/$CORGI_NAME")"
+    ask_required 'Corgi identity URI' "$(_df '.corgi.identityUri' "vigil://credo/service/corgi/$CORGI_NAME")"
     CORGI_IDENTITY_URI="$REPLY_VAL"
   fi
   save_bootstrap
@@ -460,22 +463,21 @@ collect_answers() {
 
 collect_admin_answers() {
   printf '\n=== Admin account ===\n'
-  local _def_uri="vigil://credo/dev/admin"
-  local _def_cert="$HOME/.vigil/admin.pem"
-  local _def_key="$HOME/.vigil/admin.key"
+  local _def_username="admin"
 
   if $AUTO; then
-    ADMIN_IDENTITY_URI=$(_require_df 'admin.identityUri' '.admin.identityUri' "$_def_uri")
-    ADMIN_OUT_CERT=$(expand_home "$(_require_df 'admin.outCert' '.admin.outCert' "$_def_cert")")
-    ADMIN_OUT_KEY=$(expand_home "$(_require_df 'admin.outKey' '.admin.outKey' "$_def_key")")
+    ADMIN_USERNAME=$(_require_df 'admin.username' '.admin.username' "$_def_username")
+    ADMIN_OUT_CERT=$(expand_home "$(_require_df 'admin.outCert' '.admin.outCert' "$HOME/.credo/$DOMAIN/${ADMIN_USERNAME}.pem")")
+    ADMIN_OUT_KEY=$(expand_home "$(_require_df 'admin.outKey'   '.admin.outKey'  "$HOME/.credo/$DOMAIN/${ADMIN_USERNAME}.key")")
   else
-    ask_required 'Admin identity URI' "$(_df '.admin.identityUri' "$_def_uri")"
-    ADMIN_IDENTITY_URI="$REPLY_VAL"
-    ask_required 'Admin cert output path (local)' "$(_df '.admin.outCert' "$_def_cert")"
+    ask_required 'Admin username' "$(_df '.admin.username' "$_def_username")"
+    ADMIN_USERNAME="$REPLY_VAL"
+    ask_required 'Admin cert output path (local)' "$(_df '.admin.outCert' "$HOME/.credo/$DOMAIN/${ADMIN_USERNAME}.pem")"
     ADMIN_OUT_CERT=$(expand_home "$REPLY_VAL")
-    ask_required 'Admin key output path (local)' "$(_df '.admin.outKey' "$_def_key")"
+    ask_required 'Admin key output path (local)'  "$(_df '.admin.outKey'  "$HOME/.credo/$DOMAIN/${ADMIN_USERNAME}.key")"
     ADMIN_OUT_KEY=$(expand_home "$REPLY_VAL")
   fi
+  ADMIN_IDENTITY_URI="vigil://credo/user/$ADMIN_USERNAME"
   save_bootstrap
 }
 
