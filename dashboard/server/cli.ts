@@ -62,7 +62,7 @@ user
   .requiredOption('--name <display>', 'User display name')
   .requiredOption('--identity <uri>', 'Vigil identity URI (vigil://...)')
   .action((opts: { account: string; email: string; name: string; identity: string }) => {
-    const config = loadConfig();
+    const config = loadConfig({ skipTlsCheck: true });
     initUsersStore(config.auth.usersPath);
     const { users } = loadUsers();
 
@@ -92,7 +92,7 @@ user
   .command('list')
   .description('List all dashboard users')
   .action(() => {
-    const config = loadConfig();
+    const config = loadConfig({ skipTlsCheck: true });
     initUsersStore(config.auth.usersPath);
     const { users } = loadUsers();
 
@@ -115,7 +115,7 @@ user
   .option('--name <display>', 'Update display name')
   .option('--identity <uri>', 'Update Vigil identity URI')
   .action((opts: { account: string; email?: string; name?: string; identity?: string }) => {
-    const config = loadConfig();
+    const config = loadConfig({ skipTlsCheck: true });
     initUsersStore(config.auth.usersPath);
     const { users } = loadUsers();
     const idx = users.findIndex((u) => u.shepherdAccount === opts.account);

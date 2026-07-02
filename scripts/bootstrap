@@ -1001,6 +1001,13 @@ else
 fi
 
 if [[ "\$WANT_DASHBOARD" == "true" ]]; then
+  # Ensure dashboard user can read cert files from the corgi cert store.
+  # scripts/install handles this on new installs; this self-heals existing ones.
+  if id dashboard >/dev/null 2>&1 && ! id -nG dashboard | grep -qw credo-cert; then
+    sudo usermod -aG credo-cert dashboard
+    echo "  Added dashboard to credo-cert group."
+  fi
+
   echo ""
   echo "=== Creating admin dashboard user..."
   if [[ -x "\$DASHBOARD_DIR/dashboard" ]]; then

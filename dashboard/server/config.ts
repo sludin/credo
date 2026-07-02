@@ -117,7 +117,7 @@ function optionalString(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-export function loadConfig(): DashboardConfig {
+export function loadConfig(options?: { skipTlsCheck?: boolean }): DashboardConfig {
   const configPath = process.env.DASHBOARD_CONFIG_PATH || path.resolve(process.cwd(), 'dashboard.config.json');
   if (!fs.existsSync(configPath)) {
     throw new Error(`Dashboard config not found at ${configPath}. Copy dashboard.config.example.json to dashboard.config.json.`);
@@ -173,12 +173,14 @@ export function loadConfig(): DashboardConfig {
       .filter(e => e.name && e.ip);
   })();
 
-  for (const tlsPath of [tlsCertPath, tlsKeyPath, mtlsCertPath, mtlsKeyPath, mtlsCaPath]) {
-    if (!tlsPath) {
-      continue;
-    }
-    if (!fs.existsSync(tlsPath)) {
-      throw new Error(`TLS file not found: ${tlsPath}`);
+  if (!options?.skipTlsCheck) {
+    for (const tlsPath of [tlsCertPath, tlsKeyPath, mtlsCertPath, mtlsKeyPath, mtlsCaPath]) {
+      if (!tlsPath) {
+        continue;
+      }
+      if (!fs.existsSync(tlsPath)) {
+        throw new Error(`TLS file not found: ${tlsPath}`);
+      }
     }
   }
 
