@@ -723,9 +723,9 @@ phase_config() {
     local dashboard_dir_local="$tmp_config_dir/dashboard"
     mkdir -p "$dashboard_dir_local"
     _gen_dashboard_config > "$dashboard_dir_local/dashboard.config.json"
+    chmod 600 "$dashboard_dir_local/dashboard.config.json"
     echo "[bootstrap]   dashboard config..."
     remote_copy_dir "$dashboard_dir_local" "$DASHBOARD_DIR" "dashboard"
-    remote_run "chmod 600 \"$DASHBOARD_DIR/dashboard.config.json\""
   fi
 
   echo "[bootstrap] Files pushed."
