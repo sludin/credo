@@ -782,6 +782,15 @@ VIGIL_HOSTNAME="$VIGIL_HOSTNAME"
 SHEPHERD_HOSTNAME="$SHEPHERD_HOSTNAME"
 DOMAIN="$DOMAIN"
 ADMIN_IDENTITY_URI="$ADMIN_IDENTITY_URI"
+DASHBOARD_HOSTNAME="$DASHBOARD_HOSTNAME"
+DASHBOARD_DIR="$DASHBOARD_DIR"
+SHEPHERD_ACCOUNTS="\$SHEPHERD_DIR/shepherd.accounts.json"
+DASHBOARD_ACCOUNT_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+DASHBOARD_IDENTITY_URI="$DASHBOARD_IDENTITY_URI"
+ADMIN_USERNAME="$ADMIN_USERNAME"
+ADMIN_EMAIL="$ADMIN_EMAIL"
+ADMIN_DISPLAY_NAME="$ADMIN_DISPLAY_NAME"
+WANT_DASHBOARD="$WANT_DASHBOARD"
 ADMIN_OUT_CERT="$ADMIN_OUT_CERT"
 ADMIN_OUT_KEY="$ADMIN_OUT_KEY"
 
@@ -930,6 +939,22 @@ sudo -u shepherd bash -c "cd \$SHEPHERD_DIR && SHEPHERD_CONFIG_PATH=\$SHEPHERD_C
 
 sudo -u shepherd bash -c "cd \$SHEPHERD_DIR && SHEPHERD_CONFIG_PATH=\$SHEPHERD_CONFIG_PATH \$SHEPHERD_EXEC bootstrap corgi --admin-token \$ADMIN_TOKEN --name \$CORGI_NAME --token \$CORGI_TOKEN --fingerprint \$CORGI_FINGERPRINT --identity-uri \$CORGI_IDENTITY_URI --corgi-url https://127.0.0.1:\${CORGI_PORT}"
 
+if [[ "\$WANT_DASHBOARD" == "true" ]]; then
+  echo ""
+  echo "=== Adding dashboard service account..."
+  if jq -e '.accounts[] | select(.name == "dashboard")' "\$SHEPHERD_ACCOUNTS" >/dev/null 2>&1; then
+    echo "  Dashboard account already exists, skipping."
+  else
+    jq --arg id   "\$DASHBOARD_ACCOUNT_ID" \
+       --arg uri  "\$DASHBOARD_IDENTITY_URI" \
+       '.accounts += [{id: \$id, name: "dashboard", displayName: "Dashboard Service",
+         role: "operator", active: true, identities: [\$uri], notes: "", createdAt: null}]' \
+       "\$SHEPHERD_ACCOUNTS" > "\$SHEPHERD_ACCOUNTS.tmp"
+    mv "\$SHEPHERD_ACCOUNTS.tmp" "\$SHEPHERD_ACCOUNTS"
+    echo "  Dashboard service account added (role: operator)."
+  fi
+fi
+
 echo ""
 echo "=== Step 5/5: Restarting in server mode, waiting for certs..."
 kill "\$CPID" 2>/dev/null || true
@@ -938,10 +963,15 @@ sudo -u corgi bash -c "cd \$CORGI_DIR && CORGI_CONFIG_PATH=\$CORGI_CONFIG_PATH \
 CPID2=\$!; TRACKED_PIDS+=(\$CPID2)
 local_corgi_live="\$CORGI_DIR/store/live"
 _t=\$(date +%s)
-wait_for_certs "\$_t" \
-  "\$VIGIL_HOSTNAME:\${local_corgi_live}/\${VIGIL_HOSTNAME}/fullchain.pem" \
-  "\$SHEPHERD_HOSTNAME:\${local_corgi_live}/\${SHEPHERD_HOSTNAME}/fullchain.pem" \
+_cert_args=(
+  "\$VIGIL_HOSTNAME:\${local_corgi_live}/\${VIGIL_HOSTNAME}/fullchain.pem"
+  "\$SHEPHERD_HOSTNAME:\${local_corgi_live}/\${SHEPHERD_HOSTNAME}/fullchain.pem"
   "\$CORGI_HOSTNAME:\${local_corgi_live}/\${CORGI_HOSTNAME}/fullchain.pem"
+)
+if [[ "\$WANT_DASHBOARD" == "true" ]]; then
+  _cert_args+=("$DASHBOARD_HOSTNAME:\${local_corgi_live}/$DASHBOARD_HOSTNAME/fullchain.pem")
+fi
+wait_for_certs "\$_t" "\${_cert_args[@]}"
 
 kill "\$VPID" "\$SPID" 2>/dev/null || true; sleep 0.3
 
@@ -971,6 +1001,36 @@ else
   echo "  shepherd PID: \$SPID2"
   echo "  corgi PID:    \$CPID2"
   echo "Run 'sudo systemctl start credo-vigil credo-shepherd credo-corgi' to manage via systemd instead."
+fi
+
+if [[ "\$WANT_DASHBOARD" == "true" ]]; then
+  echo ""
+  echo "=== Creating admin dashboard user..."
+  if [[ -x "\$DASHBOARD_DIR/dashboard" ]]; then
+    cd "\$DASHBOARD_DIR"
+    if sudo -u dashboard ./dashboard user create \
+         --account  "\$ADMIN_USERNAME" \
+         --email    "\$ADMIN_EMAIL" \
+         --name     "\$ADMIN_DISPLAY_NAME" \
+         --identity "\$ADMIN_IDENTITY_URI"; then
+      echo "  User created. Save the enrollment URL above."
+    else
+      echo "  User already exists, continuing."
+    fi
+  else
+    echo "  WARNING: \$DASHBOARD_DIR/dashboard not found — deploy dashboard before running enrollment."
+  fi
+
+  echo ""
+  echo "=== Starting dashboard service..."
+  if command -v systemctl >/dev/null 2>&1 && sudo systemctl is-enabled credo-dashboard >/dev/null 2>&1; then
+    sudo systemctl unmask credo-dashboard 2>/dev/null || true
+    sudo systemctl start credo-dashboard
+    echo "  Dashboard started via systemctl."
+  else
+    echo "  No systemd unit active — start manually:"
+    echo "    cd \$DASHBOARD_DIR && sudo -u dashboard ./dashboard server start"
+  fi
 fi
 REMOTE_SCRIPT_EOF
 
