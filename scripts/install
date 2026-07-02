@@ -1002,8 +1002,8 @@ setup_users_groups() {
     echo "[setup]   user/group: $svc"
   done
 
-  # shepherd and vigil need credo-cert supplementary group to read the cert store
-  for svc in shepherd vigil; do
+  # shepherd, vigil, and dashboard need credo-cert supplementary group to read the cert store
+  for svc in shepherd vigil dashboard; do
     local found=false
     local s
     for s in "${services[@]}"; do [[ "$s" == "$svc" ]] && found=true && break; done
@@ -1029,7 +1029,7 @@ write_systemd_unit() {
   local unit_path="/etc/systemd/system/${unit_name}.service"
 
   local supp_groups=""
-  if [[ "$svc" == "shepherd" || "$svc" == "vigil" ]]; then
+  if [[ "$svc" == "shepherd" || "$svc" == "vigil" || "$svc" == "dashboard" ]]; then
     supp_groups="SupplementaryGroups=credo-cert"
   fi
 

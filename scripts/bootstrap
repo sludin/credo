@@ -725,6 +725,7 @@ phase_config() {
     _gen_dashboard_config > "$dashboard_dir_local/dashboard.config.json"
     echo "[bootstrap]   dashboard config..."
     remote_copy_dir "$dashboard_dir_local" "$DASHBOARD_DIR" "dashboard"
+    remote_run "chmod 600 \"$DASHBOARD_DIR/dashboard.config.json\""
   fi
 
   echo "[bootstrap] Files pushed."
@@ -942,15 +943,11 @@ sudo -u shepherd bash -c "cd \$SHEPHERD_DIR && SHEPHERD_CONFIG_PATH=\$SHEPHERD_C
 if [[ "\$WANT_DASHBOARD" == "true" ]]; then
   echo ""
   echo "=== Adding dashboard service account..."
-  if jq -e '.accounts[] | select(.name == "dashboard")' "\$SHEPHERD_ACCOUNTS" >/dev/null 2>&1; then
+  if sudo -u shepherd bash -c "jq -e '.accounts[] | select(.name == \"dashboard\")' \"\$SHEPHERD_ACCOUNTS\"" >/dev/null 2>&1; then
     echo "  Dashboard account already exists, skipping."
   else
-    jq --arg id   "\$DASHBOARD_ACCOUNT_ID" \
-       --arg uri  "\$DASHBOARD_IDENTITY_URI" \
-       '.accounts += [{id: \$id, name: "dashboard", displayName: "Dashboard Service",
-         role: "operator", active: true, identities: [\$uri], notes: "", createdAt: null}]' \
-       "\$SHEPHERD_ACCOUNTS" > "\$SHEPHERD_ACCOUNTS.tmp"
-    mv "\$SHEPHERD_ACCOUNTS.tmp" "\$SHEPHERD_ACCOUNTS"
+    sudo -u shepherd bash -c "jq --arg id \"\$DASHBOARD_ACCOUNT_ID\" --arg uri \"\$DASHBOARD_IDENTITY_URI\" '.accounts += [{id: \\\$id, name: \"dashboard\", displayName: \"Dashboard Service\", role: \"operator\", active: true, identities: [\\\$uri], notes: \"\", createdAt: null}]' \"\$SHEPHERD_ACCOUNTS\" > \"\$SHEPHERD_ACCOUNTS.tmp\""
+    sudo -u shepherd mv "\$SHEPHERD_ACCOUNTS.tmp" "\$SHEPHERD_ACCOUNTS"
     echo "  Dashboard service account added (role: operator)."
   fi
 fi
