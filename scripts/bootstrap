@@ -1129,6 +1129,16 @@ phase_verify() {
   check_health "vigil"    "credo-vigil"    "https://$VIGIL_HOSTNAME:$VIGIL_PORT/health"               6 "200 401"
   check_health "shepherd" "credo-shepherd" "https://$SHEPHERD_HOSTNAME:$SHEPHERD_DASHBOARD_PORT/health" 6 "200"
 
+  # Lazy-load dashboard vars (in case --phase 4 is run standalone)
+  [[ -z "$DASHBOARD_HOSTNAME" ]] && DASHBOARD_HOSTNAME=$(_df '.dashboard.hostname' '')
+  [[ -z "$DASHBOARD_PORT"     ]] && DASHBOARD_PORT=$(    _df '.dashboard.port'     '7030')
+
+  if [[ -n "${DASHBOARD_HOSTNAME:-}" ]]; then
+    # /api/health requires auth; hit / and accept login-page redirect or auth challenge
+    check_health "dashboard" "credo-dashboard" \
+      "https://$DASHBOARD_HOSTNAME:$DASHBOARD_PORT/" 6 "200 302 401"
+  fi
+
   if $all_ok; then
     echo "[bootstrap] All health checks passed."
   else
