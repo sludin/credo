@@ -718,6 +718,15 @@ phase_config() {
     remote_copy "$tmp_config_dir/vars.json" "$CREDO_ROOT"
   fi
 
+  # Generate and push dashboard config (after real paths are restored — no sed patching needed)
+  if $WANT_DASHBOARD; then
+    local dashboard_dir_local="$tmp_config_dir/dashboard"
+    mkdir -p "$dashboard_dir_local"
+    _gen_dashboard_config > "$dashboard_dir_local/dashboard.config.json"
+    echo "[bootstrap]   dashboard config..."
+    remote_copy_dir "$dashboard_dir_local" "$DASHBOARD_DIR" "dashboard"
+  fi
+
   echo "[bootstrap] Files pushed."
 }
 

@@ -179,7 +179,8 @@ _gen_shepherd_corgis_json() {
 }
 
 _gen_shepherd_assignments_json() {
-  jq -n \
+  local base
+  base=$(jq -n \
     --arg vigilHostname    "$VIGIL_HOSTNAME" \
     --arg vigilIdentityUri "$VIGIL_IDENTITY_URI" \
     --arg shepherdHostname "$SHEPHERD_HOSTNAME" \
@@ -189,41 +190,30 @@ _gen_shepherd_assignments_json() {
     --arg corgiIdentityUri "$CORGI_IDENTITY_URI" \
     '{
       assignments: [
-        {
-          certName:    $vigilHostname,
-          corgi:       $corgiName,
-          ca:          "vigil",
-          domain:      $vigilHostname,
-          sans:        [$vigilHostname],
-          identityUri: $vigilIdentityUri,
-          validation:  {type: "http-01"},
-          hooks:       [],
-          endpoints:   []
-        },
-        {
-          certName:    $shepherdHostname,
-          corgi:       $corgiName,
-          ca:          "vigil",
-          domain:      $shepherdHostname,
-          sans:        [$shepherdHostname],
-          identityUri: $shepherdIdentity,
-          validation:  {type: "http-01"},
-          hooks:       [],
-          endpoints:   []
-        },
-        {
-          certName:    $corgiHostname,
-          corgi:       $corgiName,
-          ca:          "vigil",
-          domain:      $corgiHostname,
-          sans:        [$corgiHostname],
-          identityUri: $corgiIdentityUri,
-          validation:  {type: "http-01"},
-          hooks:       [],
-          endpoints:   []
-        }
+        {certName: $vigilHostname,    corgi: $corgiName, ca: "vigil",
+         domain: $vigilHostname,    sans: [$vigilHostname],    identityUri: $vigilIdentityUri,
+         validation: {type: "http-01"}, hooks: [], endpoints: []},
+        {certName: $shepherdHostname, corgi: $corgiName, ca: "vigil",
+         domain: $shepherdHostname, sans: [$shepherdHostname], identityUri: $shepherdIdentity,
+         validation: {type: "http-01"}, hooks: [], endpoints: []},
+        {certName: $corgiHostname,    corgi: $corgiName, ca: "vigil",
+         domain: $corgiHostname,    sans: [$corgiHostname],    identityUri: $corgiIdentityUri,
+         validation: {type: "http-01"}, hooks: [], endpoints: []}
       ]
-    }'
+    }')
+
+  if [[ -n "${DASHBOARD_HOSTNAME:-}" ]]; then
+    base=$(jq \
+      --arg h "$DASHBOARD_HOSTNAME" \
+      --arg c "$CORGI_NAME" \
+      --arg u "$DASHBOARD_IDENTITY_URI" \
+      '.assignments += [{certName: $h, corgi: $c, ca: "vigil",
+        domain: $h, sans: [$h], identityUri: $u,
+        validation: {type: "http-01"}, hooks: [], endpoints: []}]' \
+      <<< "$base")
+  fi
+
+  printf '%s' "$base"
 }
 
 _gen_corgi_config() {
@@ -283,6 +273,43 @@ _gen_corgi_config() {
       defaultHooks: []
     }
     | if $dnsOverride != null then . + {dnsOverride: $dnsOverride} else . end'
+}
+
+_gen_dashboard_config() {
+  local session_secret cert_store
+  session_secret=$(openssl rand -hex 32)
+  cert_store="${CORGI_DIR}/store/live/${DASHBOARD_HOSTNAME}"
+  jq -n \
+    --argjson port        "${DASHBOARD_PORT}" \
+    --arg shepherdUrl     "https://${SHEPHERD_HOSTNAME}:${SHEPHERD_DASHBOARD_PORT}" \
+    --arg caPath          "${CA_TRUST_PATH}" \
+    --arg certPath        "${cert_store}/fullchain.pem" \
+    --arg keyPath         "${cert_store}/privkey.pem" \
+    --arg sessionSecret   "$session_secret" \
+    --arg rpId            "${DASHBOARD_HOSTNAME}" \
+    --arg origin          "https://${DASHBOARD_HOSTNAME}:${DASHBOARD_PORT}" \
+    '{
+      port:           $port,
+      bind:           "0.0.0.0",
+      shepherdApiUrl: $shepherdUrl,
+      caPath:         $caPath,
+      tls:  {certPath: $certPath, keyPath: $keyPath},
+      mtls: {certPath: $certPath, keyPath: $keyPath, caPath: $caPath, rejectUnauthorized: true},
+      requestTimeoutSeconds: 15,
+      auth: {
+        usersPath:                  "./dashboard.users.json",
+        sessionsDir:                "./sessions",
+        sessionSecret:              $sessionSecret,
+        rpId:                       $rpId,
+        rpName:                     "Credo Dashboard",
+        origin:                     $origin,
+        identityEnvironment:        "prod",
+        sessionDurationHours:       24,
+        enrollmentTokenTTLHours:    24,
+        roleRefreshIntervalSeconds: 300,
+        roleStaleTimeoutSeconds:    1800
+      }
+    }'
 }
 
 generate_all_configs() {
