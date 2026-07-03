@@ -149,4 +149,4 @@ needs it:
 | `docs/hsm-integration-plan.md` | Implemented; superseded by the implementation itself |
 | `docs/security-critique.md` | Superseded entirely by the fresh security audit |
 | `docs/security.md` | Updated for HSM backend, supply chain section |
-| `docs/rust-audit.md` | Ongoing; items complete as refactoring continues alongside this tier |
+| `docs/archive/rust-audit.md` | Ongoing; items complete as refactoring continues alongside this tier |

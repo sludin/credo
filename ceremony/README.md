@@ -186,7 +186,7 @@ scp ca/root-ecdsa/certs/root-ecdsa.cert.pem vigil:/var/apps/credo/ca/root-ecdsa.
 
 The `scripts/bootstrap` orchestrator performs this transfer automatically in Phase 2. When running the manual path, copy the files above before starting Vigil.
 
-Vigil's config points to the intermediate key at `caEcdsaIntermediateKeyPath` and the chain at `caEcdsaIntermediateCertPath`. All services use the root CA cert as their mTLS trust anchor (`caTrustPath`).
+Vigil's config points to the intermediate key at `caEcdsaIntermediateKeyPath` and the intermediate certificate at `caEcdsaIntermediateCertPath`. All services use the root CA cert as their mTLS trust anchor (`caTrustPath`).
 
 ---
 
