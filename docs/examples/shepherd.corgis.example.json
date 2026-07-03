@@ -1,0 +1,24 @@
+{
+  "_comment": "Shepherd corgi fleet inventory — copy to shepherd.corgis.json and edit. Hot-reloaded without restart.",
+
+  "defaults": {
+    "_comment": "Default mTLS credentials Shepherd presents when connecting to any Corgi. Override per-node as needed.",
+    "mtlsCert": "/etc/credo/shepherd/certs/fullchain.pem",
+    "mtlsKey":  "/etc/credo/shepherd/certs/privkey.pem",
+    "mtlsCa":   "/etc/credo/credo-catrust.pem"
+  },
+
+  "corgis": [
+    {
+      "name": "corgi-01",
+      "url":  "https://corgi-01.example.com:7001",
+      "_comment_identityUri": "Must match the URI SAN in this Corgi node's client certificate exactly",
+      "identityUri": "vigil://credo/prod/node/corgi-01"
+    },
+    {
+      "name": "corgi-02",
+      "url":  "https://corgi-02.example.com:7001",
+      "identityUri": "vigil://credo/prod/node/corgi-02"
+    }
+  ]
+}

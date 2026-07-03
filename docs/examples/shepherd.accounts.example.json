@@ -1,0 +1,34 @@
+{
+  "_comment": "Shepherd RBAC account registry — copy to shepherd.accounts.json and edit",
+
+  "accounts": [
+    {
+      "id": "acct-001",
+      "name": "alice",
+      "displayName": "Alice Admin",
+      "role": "admin",
+      "active": true,
+      "_comment_identities": "URI SANs that map to this account. Must match the cert's URI SAN byte-for-byte.",
+      "identities": ["vigil://credo/prod/admin/alice"],
+      "notes": "Primary administrator"
+    },
+    {
+      "id": "acct-002",
+      "name": "dashboard",
+      "displayName": "Dashboard Service",
+      "role": "operator",
+      "active": true,
+      "identities": ["vigil://credo/prod/service/dashboard"],
+      "notes": "Dashboard BFF service account"
+    },
+    {
+      "id": "acct-003",
+      "name": "readonly-monitor",
+      "displayName": "Monitoring Reader",
+      "role": "readonly",
+      "active": true,
+      "identities": ["vigil://credo/prod/service/monitor"],
+      "notes": "Read-only access for monitoring systems"
+    }
+  ]
+}

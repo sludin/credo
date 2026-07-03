@@ -1,0 +1,77 @@
+{
+  "_comment": "Corgi agent configuration — copy to corgi.config.json and edit for each managed node",
+
+  "nodeId": "corgi-01",
+  "commonName": "corgi-01.example.com",
+  "shepherdUrl": "https://shepherd.example.com:7010",
+  "identityUri": "vigil://credo/prod/node/corgi-01",
+
+  "mtlsPort": 7001,
+  "bind": "0.0.0.0",
+
+  "tls": {
+    "certPath": "/etc/credo/corgi/certs/fullchain.pem",
+    "keyPath":  "/etc/credo/corgi/certs/privkey.pem"
+  },
+
+  "mtls": {
+    "certPath": "/etc/credo/corgi/certs/fullchain.pem",
+    "keyPath":  "/etc/credo/corgi/certs/privkey.pem",
+    "caPath":   "/etc/credo/credo-catrust.pem"
+  },
+
+  "certStoreDir": "/var/lib/credo/corgi/store",
+
+  "filePolicy": {
+    "_comment": "Default ownership and permissions applied to all installed cert and key files",
+    "owner": "root",
+    "group": "ssl-cert",
+    "certMode": "0644",
+    "keyMode": "0640"
+  },
+
+  "httpChallenge": {
+    "_comment": "HTTP-01 challenge listener required when any assignment uses http-01 validation",
+    "enabled": true,
+    "port": 8080,
+    "bind": "0.0.0.0"
+  },
+
+  "shepherdSync": {
+    "enabled": true,
+    "intervalSeconds": 60,
+    "staleWarningSeconds": 300,
+    "assignmentsCachePath": "/var/lib/credo/corgi/corgi.assignments.cache.json"
+  },
+
+  "auth": {
+    "mode": "mtls"
+  },
+
+  "rbacIdentities": [
+    {
+      "uri":  "vigil://credo/prod/service/shepherd",
+      "role": "admin",
+      "name": "shepherd"
+    }
+  ],
+
+  "serviceHooks": {
+    "nginx":  ["systemctl", "reload", "nginx"],
+    "caddy":  ["caddy", "reload", "--config", "/etc/caddy/Caddyfile"]
+  },
+
+  "defaultHooks": ["nginx"],
+
+  "flock": [
+    {
+      "_comment": "Optional: define only when a cert needs a custom install path. Otherwise certs install to certStoreDir/live/<certName>/",
+      "name": "api.example.com",
+      "path":          "/etc/nginx/certs/api.example.com.pem",
+      "keyPath":       "/etc/nginx/certs/api.example.com.key",
+      "fullchainPath": "/etc/nginx/certs/api.example.com.fullchain.pem"
+    }
+  ],
+
+  "logLevel": "info"
+}

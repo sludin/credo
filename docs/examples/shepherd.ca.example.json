@@ -1,0 +1,49 @@
+{
+  "_comment": "Shepherd CA configuration — copy to shepherd.ca.json and edit",
+
+  "cas": {
+    "vigil": {
+      "_comment": "Internal CA via Vigil (http-01 validation). Use for internal services.",
+      "protocol": "acme",
+      "provider": "vigil",
+      "config": {
+        "directoryUrl": "https://vigil.example.com:7020/acme/directory",
+        "days": 45,
+        "renewBeforeDays": 7,
+        "accountEmail": "ops@example.com",
+        "accountKeyPath": "/etc/credo/shepherd/shepherd-acme-account-vigil.pem",
+        "supportedValidations": ["http-01"],
+        "defaultValidation": "http-01",
+        "tlsCert": "/etc/credo/shepherd/certs/fullchain.pem",
+        "tlsKey":  "/etc/credo/shepherd/certs/privkey.pem",
+        "ca":      "/etc/credo/credo-catrust.pem"
+      }
+    },
+
+    "letsencrypt": {
+      "_comment": "Let's Encrypt production CA (dns-01 via Hurricane Electric). Use for public-facing services.",
+      "protocol": "acme",
+      "provider": "letsencrypt",
+      "config": {
+        "directoryUrl": "https://acme-v02.api.letsencrypt.org/directory",
+        "days": 90,
+        "renewBeforeDays": 30,
+        "accountEmail": "ops@example.com",
+        "accountKeyPath": "/etc/credo/shepherd/shepherd-acme-account-le.pem",
+        "supportedValidations": ["dns-01"],
+        "defaultValidation": "dns-01",
+        "validation": {
+          "dns-01": {
+            "provider": "he",
+            "providerConfig": { "ddnsKey": "${SHEPHERD_DDNS_KEY}" }
+          }
+        }
+      },
+      "rateLimits": {
+        "_comment": "Track Let's Encrypt production rate limits: 50 certs/domain/week, 5 duplicates/week",
+        "certificatesPerDomain": { "count": 50, "windowDays": 7 },
+        "duplicateCertificates": { "count": 5, "windowDays": 7 }
+      }
+    }
+  }
+}

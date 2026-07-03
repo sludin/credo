@@ -1,0 +1,52 @@
+{
+  "_comment": "Vigil private CA configuration — copy to vigil.config.json and edit",
+
+  "port": 7020,
+  "bind": "0.0.0.0",
+
+  "tls": {
+    "certPath":     "/etc/credo/vigil/certs/fullchain.pem",
+    "keyPath":      "/etc/credo/vigil/certs/privkey.pem",
+    "clientCaPath": "/etc/credo/vigil/certs/root-ca.cert.pem"
+  },
+
+  "_comment_ca_keys": "CA key material must be generated offline via ceremony/ scripts before Vigil can start",
+  "caEcdsaIntermediateKeyPath":  "/etc/credo/vigil/ca/int-ecdsa/private/int-ecdsa.key.pem",
+  "caEcdsaIntermediateCertPath": "/etc/credo/vigil/ca/int-ecdsa/certs/int-ecdsa.cert.pem",
+  "caDir": "/etc/credo/vigil/ca",
+
+  "ca": {
+    "curve": "P-384",
+    "certDefaultDays": 45,
+    "crlNextUpdateHours": 24,
+    "ocspMaxAgeSeconds": 60
+  },
+
+  "commonName": "vigil.example.com",
+
+  "dataDir": "/var/lib/credo/vigil/data",
+  "ctLogPath": "/var/log/credo/vigil/ct.log",
+
+  "issuancePolicy": {
+    "_comment_allowedDnsSuffixes": "Restrict issuance to your own domain(s). Empty list allows any DNS name — do not leave empty in production.",
+    "allowedDnsSuffixes": ["example.com"],
+    "allowSubdomains": true,
+    "allowBareSuffix": true,
+    "_comment_allowedIdentityUriPrefixes": "Restrict URI SANs to your environment prefix",
+    "allowedIdentityUriPrefixes": ["vigil://credo/prod/"],
+    "allowIpSans": false
+  },
+
+  "rbacIdentities": [
+    {
+      "uri":  "vigil://credo/prod/service/shepherd",
+      "role": "admin",
+      "name": "shepherd"
+    }
+  ],
+
+  "_comment_allowNoneValidation": "Never enable in production — auto-approves challenges without verification",
+  "allowNoneValidation": false,
+
+  "logLevel": "info"
+}

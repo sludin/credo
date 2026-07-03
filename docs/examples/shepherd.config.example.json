@@ -1,0 +1,45 @@
+{
+  "_comment": "Shepherd main configuration — copy to shepherd.config.json and edit for your deployment",
+
+  "vars": {
+    "BASE": "/etc/credo/shepherd"
+  },
+
+  "baseDir": "/etc/credo/shepherd",
+
+  "_comment_agentPort": "Corgi-facing mTLS API port; dashboardPort serves JWT/admin traffic",
+  "agentPort": 7010,
+  "dashboardPort": 7011,
+  "bind": "0.0.0.0",
+
+  "tls": {
+    "certPath": "/etc/credo/shepherd/certs/fullchain.pem",
+    "keyPath":  "/etc/credo/shepherd/certs/privkey.pem",
+    "clientCaPath": "/etc/credo/credo-catrust.pem"
+  },
+
+  "auth": {
+    "_comment_jwtSigningKeyPath": "ES256 private key for signing dashboard JWT sessions — generate with: openssl ecparam -name prime256v1 -genkey -noout -out jwt-signing.pem",
+    "jwtSigningKeyPath": "/etc/credo/shepherd/jwt-signing.pem"
+  },
+
+  "commonName": "shepherd.example.com",
+  "identityUri": "vigil://credo/prod/service/shepherd",
+  "vigilUrl": "https://vigil.example.com:7020",
+  "shepherdCaPath": "/etc/credo/credo-catrust.pem",
+
+  "corgisConfigPath": "/etc/credo/shepherd/shepherd.corgis.json",
+  "assignmentsConfigPath": "/etc/credo/shepherd/shepherd.assignments.json",
+  "caConfigPath": "/etc/credo/shepherd/shepherd.ca.json",
+  "accountsPath": "/etc/credo/shepherd/shepherd.accounts.json",
+
+  "certStoreDir": "/var/lib/credo/shepherd/store",
+  "renewalJobsDir": "/var/lib/credo/shepherd/renewal-jobs",
+  "issuanceLedgerPath": "/var/lib/credo/shepherd/shepherd.issuance-log.json",
+
+  "pollIntervalSeconds": 60,
+  "corgiHealthCheckIntervalSeconds": 300,
+  "renewBeforeDays": 7,
+
+  "logLevel": "info"
+}
