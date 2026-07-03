@@ -119,7 +119,8 @@ _gen_shepherd_config() {
 }
 
 _gen_shepherd_ca_json() {
-  jq -n \
+  local base
+  base=$(jq -n \
     --arg  vigilHostname    "$VIGIL_HOSTNAME" \
     --argjson vigilPort     "$VIGIL_PORT" \
     --arg  domain           "$DOMAIN" \
@@ -146,7 +147,65 @@ _gen_shepherd_ca_json() {
           }
         }
       }
-    }'
+    }')
+
+  if [[ "${WANT_LE:-false}" == "true" ]]; then
+    base=$(jq \
+      --arg email      "$LE_ACCOUNT_EMAIL" \
+      --arg keyPath    "$LE_ACCOUNT_KEY_PATH" \
+      --arg ddnsKeyRef '${SHEPHERD_DDNS_KEY}' \
+      '.cas.letsencrypt = {
+        protocol: "acme",
+        provider: "letsencrypt",
+        config: {
+          directoryUrl:         "https://acme-v02.api.letsencrypt.org/directory",
+          days:                 90,
+          renewBeforeDays:      30,
+          accountEmail:         $email,
+          accountKeyPath:       $keyPath,
+          supportedValidations: ["dns-01","http-01"],
+          defaultValidation:    "dns-01",
+          validation: {
+            "dns-01": {
+              provider: "he",
+              providerConfig: { ddnsKey: $ddnsKeyRef }
+            }
+          },
+          rateLimits: {
+            certificatesPerDomain: { count: 50, windowDays: 7 },
+            duplicateCertificates: { count: 5, windowDays: 7 }
+          }
+        }
+      }' <<< "$base")
+  fi
+
+  if [[ "${WANT_LE_STAGING:-false}" == "true" ]]; then
+    base=$(jq \
+      --arg email      "$LE_ACCOUNT_EMAIL" \
+      --arg keyPath    "$LE_ACCOUNT_KEY_PATH" \
+      --arg ddnsKeyRef '${SHEPHERD_DDNS_KEY}' \
+      '.cas["letsencrypt-staging"] = {
+        protocol: "acme",
+        provider: "letsencrypt",
+        config: {
+          directoryUrl:         "https://acme-staging-v02.api.letsencrypt.org/directory",
+          days:                 90,
+          renewBeforeDays:      30,
+          accountEmail:         $email,
+          accountKeyPath:       $keyPath,
+          supportedValidations: ["dns-01","http-01"],
+          defaultValidation:    "dns-01",
+          validation: {
+            "dns-01": {
+              provider: "he",
+              providerConfig: { ddnsKey: $ddnsKeyRef }
+            }
+          }
+        }
+      }' <<< "$base")
+  fi
+
+  printf '%s' "$base"
 }
 
 _gen_shepherd_corgis_json() {

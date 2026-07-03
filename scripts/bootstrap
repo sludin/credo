@@ -49,6 +49,11 @@ DASHBOARD_PORT="7030"
 DASHBOARD_DIR=""
 DASHBOARD_IDENTITY_URI=""
 
+WANT_LE=false
+WANT_LE_STAGING=false
+LE_ACCOUNT_EMAIL=""
+LE_ACCOUNT_KEY_PATH=""
+
 ADMIN_USERNAME=""
 ADMIN_IDENTITY_URI=""
 ADMIN_OUT_CERT=""
@@ -238,6 +243,10 @@ save_bootstrap() {
     --argjson dashboardPort       "${DASHBOARD_PORT:-7030}" \
     --arg  dashboardDir           "$DASHBOARD_DIR" \
     --arg  dashboardIdentityUri   "$DASHBOARD_IDENTITY_URI" \
+    --argjson wantLe           "$WANT_LE" \
+    --argjson wantLeStaging    "$WANT_LE_STAGING" \
+    --arg  leAccountEmail      "$LE_ACCOUNT_EMAIL" \
+    --arg  leAccountKeyPath    "$LE_ACCOUNT_KEY_PATH" \
     --argjson dnsOverride         "$dns_arg" \
     '{
       credoRoot:   $credoRoot,
@@ -290,6 +299,12 @@ save_bootstrap() {
         port:        $dashboardPort,
         dir:         $dashboardDir,
         identityUri: $dashboardIdentityUri
+      },
+      letsencrypt: {
+        enabled:        $wantLe,
+        stagingEnabled: $wantLeStaging,
+        accountEmail:   $leAccountEmail,
+        accountKeyPath: $leAccountKeyPath
       }
     }
     | if $dnsOverride != null then . + {dnsOverride: $dnsOverride} else . end' \
@@ -494,6 +509,8 @@ collect_answers() {
   if $WANT_DASHBOARD; then
     collect_dashboard_answers
   fi
+
+  collect_le_answers
 }
 
 collect_admin_answers() {
@@ -542,6 +559,46 @@ collect_dashboard_answers() {
     DASHBOARD_DIR="$REPLY_VAL"
     ask_required 'Dashboard identity URI'     "$(_df '.dashboard.identityUri' 'vigil://credo/service/dashboard')"
     DASHBOARD_IDENTITY_URI="$REPLY_VAL"
+  fi
+  save_bootstrap
+}
+
+collect_le_answers() {
+  printf '\n=== Let'"'"'s Encrypt ===\n'
+
+  if $AUTO; then
+    local _want_le
+    _want_le=$(_df '.letsencrypt.enabled' 'false')
+    [[ "$_want_le" == "true" ]] && WANT_LE=true || WANT_LE=false
+    local _want_staging
+    _want_staging=$(_df '.letsencryptStaging.enabled' 'false')
+    [[ "$_want_staging" == "true" ]] && WANT_LE_STAGING=true || WANT_LE_STAGING=false
+  else
+    ask "Add Let's Encrypt production CA? (y/n)" \
+        "$(_df '.letsencrypt.enabled' 'false' | sed 's/true/y/;s/false/n/')"
+    [[ "${REPLY_VAL,,}" == y* ]] && WANT_LE=true || WANT_LE=false
+    ask "Add Let's Encrypt staging CA? (y/n)" \
+        "$(_df '.letsencryptStaging.enabled' 'false' | sed 's/true/y/;s/false/n/')"
+    [[ "${REPLY_VAL,,}" == y* ]] && WANT_LE_STAGING=true || WANT_LE_STAGING=false
+  fi
+
+  if $WANT_LE || $WANT_LE_STAGING; then
+    local _def_le_email
+    _def_le_email=$(_df '.letsencrypt.accountEmail' \
+                     "$(_df '.admin.email' "admin@${DOMAIN}")")
+    local _def_le_key
+    _def_le_key=$(_df '.letsencrypt.accountKeyPath' \
+                  "${SHEPHERD_DIR}/letsencrypt-account.key.pem")
+
+    if $AUTO; then
+      LE_ACCOUNT_EMAIL=$(  _require_df 'letsencrypt.accountEmail'   '.letsencrypt.accountEmail'   "$_def_le_email")
+      LE_ACCOUNT_KEY_PATH=$(_require_df 'letsencrypt.accountKeyPath' '.letsencrypt.accountKeyPath' "$_def_le_key")
+    else
+      ask_required "Let's Encrypt account email"             "$_def_le_email"
+      LE_ACCOUNT_EMAIL="$REPLY_VAL"
+      ask_required "Let's Encrypt account key path (remote)" "$_def_le_key"
+      LE_ACCOUNT_KEY_PATH="$REPLY_VAL"
+    fi
   fi
   save_bootstrap
 }
