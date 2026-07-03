@@ -37,67 +37,22 @@ The system operates on a **pull-based reconciliation model**. Shepherd never pus
 
 All inter-service communication uses mTLS with URI-SAN-only identity matching.
 
-## Installation
+## Setup
 
-### Requirements
+**Requirements:** Rust toolchain (stable) via [rustup](https://rustup.rs); Node.js 18+ and npm 9+ for the dashboard.
 
-- Rust toolchain (stable) — install via [rustup](https://rustup.rs)
-- Node.js 18+ and npm 9+ (dashboard only)
-
-### Build
+Setup has four steps: configure the deployment targets, prepare the remote host, build and deploy the service binaries, then run the bootstrap wizard (which handles PKI ceremony, TLS certificates, and initial service configuration).
 
 ```bash
-git clone <repo-url> credo
-cd credo
-cargo build --release
+git clone <repo-url> credo && cd credo
+
+./scripts/install init      # generate .install.json (interactive — hosts, paths, services)
+./scripts/install setup     # prepare remote host: directories, users, systemd units
+./scripts/install           # build and deploy service binaries
+./scripts/bootstrap         # PKI ceremony, TLS certificates, initial service configuration
 ```
 
-The compiled binaries land in `target/release/`: `shepherd`, `corgi`, `vigil`.
-
-Dashboard:
-
-```bash
-cd dashboard && npm install && npm run build
-```
-
-### Setup
-
-Before any services can communicate, a PKI trust chain must exist and each service must have a valid TLS certificate signed by that chain. This is a one-time setup.
-
-**Step 1 — PKI ceremony** (run on an air-gapped machine if possible):
-
-```bash
-cd ceremony
-cp ca-vars.env.example ca-vars.env   # edit with your CA details
-./scripts/generate-openssl-cnf.sh --env-file ca-vars.env
-./scripts/bootstrap-roots.sh         # generates root CA key + cert
-./scripts/issue-intermediary.sh      # generates ECDSA intermediate CA
-
-# Build the CA trust bundle
-cat ca/root-ecdsa/certs/root-ecdsa.cert.pem \
-    ca/int-ecdsa/certs/int-ecdsa.cert.pem \
-    > ca/credo-catrust.pem
-```
-
-Distribute `credo-catrust.pem` to every machine. Keep the root CA key offline.
-
-**Step 2 — Bootstrap services:**
-
-For single-machine or simple topologies, use the wizard:
-
-```bash
-cd wizard && ./bootstrap-wizard
-```
-
-For multi-machine deployments or precise control, follow [docs/bootstrap-guide.md](docs/bootstrap-guide.md).
-
-**Step 3 — Run:**
-
-```bash
-./target/release/shepherd server start
-./target/release/vigil server start
-./target/release/corgi server start
-```
+See [docs/bootstrap-guide.md](docs/bootstrap-guide.md) for the full walkthrough and [docs/examples/](docs/examples/) for config file skeletons.
 
 ## Documentation
 
