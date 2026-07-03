@@ -4,6 +4,8 @@ This document maps every config file in the credo system to its purpose, its def
 
 ---
 
+> **Working examples:** Copy-ready config skeletons for all services are in [`docs/examples/`](examples/).
+
 ## How config loading works (all services)
 
 Every service uses the same config-loading pipeline:
