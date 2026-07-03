@@ -1,3 +1,5 @@
+> ⚠️ Archived — Pre-auth placeholder ("no authentication, plain HTTP"); entirely superseded
+
 The dashboard acts as a front end for shepherd.  It will be built with vite+express.  it should be a modern, clean interface that allows for the following actions:
 
 - Monitor the health of shepherd
