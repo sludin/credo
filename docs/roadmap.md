@@ -292,4 +292,4 @@ Comprehensive dated security audit after Tier 1 and Tier 2 work is complete. For
 | `docs/security.md` | Updated incrementally as each tier completes |
 | `docs/operator-hardening.md` | Updated at Tier 2 completion |
 | `docs/bootstrap-guide.md` | Superseded by Tier 1 `scripts/install` + `scripts/bootstrap` |
-| `docs/rust-audit.md` | Ongoing; items complete as refactoring continues |
+| `docs/archive/rust-audit.md` | Ongoing; items complete as refactoring continues |

@@ -7,7 +7,7 @@
   "tls": {
     "certPath":     "/etc/credo/vigil/certs/fullchain.pem",
     "keyPath":      "/etc/credo/vigil/certs/privkey.pem",
-    "clientCaPath": "/etc/credo/vigil/certs/root-ca.cert.pem"
+    "clientCaPath": "/etc/credo/credo-catrust.pem"
   },
 
   "_comment_ca_keys": "CA key material must be generated offline via ceremony/ scripts before Vigil can start",
