@@ -1,0 +1,29 @@
+{
+  "_comment": "Shepherd managed certificate assignments — copy to shepherd.assignments.json and edit",
+
+  "assignments": [
+    {
+      "_comment": "Minimal assignment: certName defaults to domain when omitted",
+      "domain": "api.example.com",
+      "corgi": "corgi-01",
+      "ca": "vigil"
+    },
+    {
+      "_comment": "Assignment with explicit certName and additional SANs",
+      "certName": "web.example.com",
+      "domain": "web.example.com",
+      "sans": ["www.example.com"],
+      "corgi": "corgi-02",
+      "ca": "vigil",
+      "identityUri": "vigil://credo/prod/service/web"
+    },
+    {
+      "_comment": "Assignment with CA-default overrides; no corgi = operator-managed cert",
+      "certName": "payments.example.com",
+      "domain": "payments.example.com",
+      "ca": "letsencrypt",
+      "days": 90,
+      "renewBeforeDays": 30
+    }
+  ]
+}

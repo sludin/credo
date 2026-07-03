@@ -1,0 +1,47 @@
+{
+  "_comment": "Dashboard BFF configuration — copy to dashboard.config.json and edit",
+
+  "port": 7030,
+  "bind": "127.0.0.1",
+
+  "shepherdApiUrl": "https://shepherd.example.com:7011",
+  "caPath": "/etc/credo/credo-catrust.pem",
+  "requestTimeoutSeconds": 15,
+
+  "tls": {
+    "_comment": "Certificate the BFF presents to browsers",
+    "certPath": "/etc/credo/dashboard/certs/fullchain.pem",
+    "keyPath":  "/etc/credo/dashboard/certs/privkey.pem"
+  },
+
+  "mtls": {
+    "_comment": "Client certificate the BFF presents when calling Shepherd's dashboard API",
+    "certPath":           "/etc/credo/dashboard/certs/fullchain.pem",
+    "keyPath":            "/etc/credo/dashboard/certs/privkey.pem",
+    "caPath":             "/etc/credo/credo-catrust.pem",
+    "rejectUnauthorized": true
+  },
+
+  "dnsPollingIntervalSeconds": 5,
+  "dnsJobTimeoutSeconds": 600,
+  "dnsPublicResolvers": [
+    { "name": "Google",     "ip": "8.8.8.8" },
+    { "name": "Cloudflare", "ip": "1.1.1.1" }
+  ],
+
+  "auth": {
+    "usersPath": "/etc/credo/dashboard/dashboard.users.json",
+    "_comment_sessionSecret": "Generate with: openssl rand -hex 32",
+    "sessionSecret": "replace-with-output-of-openssl-rand-hex-32",
+    "sessionDurationHours": 24,
+    "enrollmentTokenTTLHours": 24,
+    "_comment_rpId": "Must match the hostname users access the dashboard on — no port, no scheme",
+    "rpId": "dashboard.example.com",
+    "rpName": "Credo Dashboard",
+    "origin": "https://dashboard.example.com",
+    "identityEnvironment": "prod",
+    "roleRefreshIntervalSeconds": 300,
+    "roleStaleTimeoutSeconds": 1800,
+    "sessionsDir": "/var/lib/credo/dashboard/sessions"
+  }
+}
