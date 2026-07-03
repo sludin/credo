@@ -1,3 +1,5 @@
+> ⚠️ Archived — Internal planning meta-doc; superseded by current overhaul
+
 # Documentation Plan
 
 **Date:** 2026-06-03

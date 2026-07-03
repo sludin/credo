@@ -1,3 +1,5 @@
+> ⚠️ Archived — Internal refactor audit; not operator-facing
+
 # Rust Codebase Audit: Refactoring & Dead Code
 
 Audit of the Rust workspace (shepherd, corgi, vigil, credo-lib) identifying dead code, duplicate functionality, and refactoring opportunities. Goal: reduce maintenance burden, improve consistency, consolidate shared logic into credo-lib. Dashboard (TypeScript) and ceremony (bash) are out of scope.

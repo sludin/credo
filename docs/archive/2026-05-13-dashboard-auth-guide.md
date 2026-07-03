@@ -1,3 +1,5 @@
+> ⚠️ Archived — Describes old `X-Credo-Forwarded-Identity` auth model; replaced by `docs/dashboard-guide.md`
+
 # Dashboard Authentication Guide
 
 This guide covers the dashboard authentication system introduced in May 2026: how users are
