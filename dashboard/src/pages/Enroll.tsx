@@ -1,38 +1,70 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { startRegistration } from '@simplewebauthn/browser';
 import { useAuth } from '../context/AuthContext';
+import { buildBrowserPop, extractIdentityUri } from '../utils/pop-browser';
 
 type Step = 'pop' | 'passkey' | 'done';
+const STEP_ORDER: Step[] = ['pop', 'passkey', 'done'];
+const stepIdx = (s: Step) => STEP_ORDER.indexOf(s);
 
 export default function Enroll(): React.ReactElement {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
   const { refresh } = useAuth();
+
   const [step, setStep] = useState<Step>('pop');
-  const [popJson, setPopJson] = useState('');
+  const [certPem, setCertPem] = useState('');
+  const [keyPem, setKeyPem]   = useState('');
+  const [identityUri, setIdentityUri] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [registrationOptions, setRegistrationOptions] = useState<unknown>(null);
   const [passkeyLabel, setPasskeyLabel] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const cliCommand = `dashboard enroll --cert vigil.pem --key vigil-key.pem --challenge ${token ?? '<token>'}`;
+  const certRef = useRef<HTMLInputElement>(null);
+  const keyRef  = useRef<HTMLInputElement>(null);
+
+  const readFile = useCallback((file: File): Promise<string> =>
+    new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload  = () => res(r.result as string);
+      r.onerror = () => rej(new Error(`Failed to read ${file.name}`));
+      r.readAsText(file);
+    }), []);
+
+  const handleCertFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const pem = await readFile(file);
+      setCertPem(pem);
+      setIdentityUri(extractIdentityUri(pem));
+      setError(null);
+    } catch {
+      setError('Could not read certificate file.');
+    }
+  }, [readFile]);
+
+  const handleKeyFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setKeyPem(await readFile(file));
+      setError(null);
+    } catch {
+      setError('Could not read key file.');
+    }
+  }, [readFile]);
 
   async function handleVerifyPop(): Promise<void> {
+    if (!token || !certPem || !keyPem) return;
     setLoading(true);
     setError(null);
-
-    let pop: unknown;
     try {
-      pop = JSON.parse(popJson);
-    } catch {
-      setError('Invalid JSON. Please paste the complete output from credo-enroll.');
-      setLoading(false);
-      return;
-    }
+      const pop = await buildBrowserPop(certPem, keyPem, token);
 
-    try {
       const resp = await fetch('/auth/enroll/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -72,7 +104,6 @@ export default function Enroll(): React.ReactElement {
     if (!userId || !registrationOptions) return;
     setLoading(true);
     setError(null);
-
     try {
       const authResponse = await startRegistration({
         optionsJSON: registrationOptions as Parameters<typeof startRegistration>[0]['optionsJSON'],
@@ -86,9 +117,7 @@ export default function Enroll(): React.ReactElement {
       });
 
       const data = await resp.json() as { error?: string };
-      if (!resp.ok) {
-        throw new Error(data.error ?? 'Registration failed.');
-      }
+      if (!resp.ok) throw new Error(data.error ?? 'Registration failed.');
 
       await refresh();
       setStep('done');
@@ -104,6 +133,8 @@ export default function Enroll(): React.ReactElement {
     }
   }
 
+  const canVerify = !!certPem && !!keyPem && !!identityUri && !loading;
+
   return (
     <div style={styles.container}>
       <div style={styles.card}>
@@ -112,7 +143,7 @@ export default function Enroll(): React.ReactElement {
         <div style={styles.stepper}>
           {(['pop', 'passkey', 'done'] as Step[]).map((s, i) => (
             <React.Fragment key={s}>
-              <div style={{ ...styles.stepDot, ...(step === s ? styles.stepDotActive : step > s ? styles.stepDotDone : {}) }}>
+              <div style={{ ...styles.stepDot, ...(step === s ? styles.stepDotActive : stepIdx(step) > stepIdx(s) ? styles.stepDotDone : {}) }}>
                 {i + 1}
               </div>
               {i < 2 && <div style={styles.stepLine} />}
@@ -125,25 +156,52 @@ export default function Enroll(): React.ReactElement {
         {step === 'pop' && (
           <div style={styles.section}>
             <p style={styles.desc}>
-              First, prove your identity using your Vigil certificate. Run this command on your computer:
+              Prove your identity by selecting your Vigil certificate and private key.
+              Signing happens locally — your private key never leaves this browser.
             </p>
-            <pre style={styles.code}>{cliCommand}</pre>
-            <p style={styles.desc}>
-              Paste the JSON output below:
-            </p>
-            <textarea
-              style={styles.textarea}
-              placeholder='{ "cert": "...", "signature": "...", ... }'
-              value={popJson}
-              onChange={(e) => setPopJson(e.target.value)}
-              rows={6}
-            />
+
+            <div style={styles.fileRow}>
+              <label style={styles.fileLabel}>
+                <span style={styles.fileLabelText}>Certificate (.pem)</span>
+                <button style={{ ...styles.fileButton, ...(certPem ? styles.fileButtonDone : {}) }}
+                  onClick={() => certRef.current?.click()} type="button">
+                  {certPem ? '✓ Loaded' : 'Choose file…'}
+                </button>
+                <input ref={certRef} type="file" accept=".pem,.crt,.cer" style={styles.hiddenInput}
+                  onChange={(e) => void handleCertFile(e)} />
+              </label>
+
+              <label style={styles.fileLabel}>
+                <span style={styles.fileLabelText}>Private key (.pem)</span>
+                <button style={{ ...styles.fileButton, ...(keyPem ? styles.fileButtonDone : {}) }}
+                  onClick={() => keyRef.current?.click()} type="button">
+                  {keyPem ? '✓ Loaded' : 'Choose file…'}
+                </button>
+                <input ref={keyRef} type="file" accept=".pem,.key" style={styles.hiddenInput}
+                  onChange={(e) => void handleKeyFile(e)} />
+              </label>
+            </div>
+
+            {certPem && !identityUri && (
+              <div style={styles.warn}>
+                No vigil:// URI found in this certificate's Subject Alternative Names.
+                Make sure you selected your Vigil identity certificate.
+              </div>
+            )}
+
+            {identityUri && (
+              <div style={styles.identity}>
+                <span style={styles.identityLabel}>Identity detected</span>
+                <code style={styles.identityUri}>{identityUri}</code>
+              </div>
+            )}
+
             <button
-              style={{ ...styles.button, ...(loading || !popJson.trim() ? styles.buttonDisabled : {}) }}
+              style={{ ...styles.button, ...(!canVerify ? styles.buttonDisabled : {}) }}
               onClick={() => void handleVerifyPop()}
-              disabled={loading || !popJson.trim()}
+              disabled={!canVerify}
             >
-              {loading ? 'Verifying…' : 'Verify Identity'}
+              {loading ? 'Signing…' : 'Sign & Verify Identity'}
             </button>
           </div>
         )}
@@ -203,7 +261,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     gap: 20,
   },
-  title: { margin: 0, fontSize: 22, fontWeight: 600, color: 'var(--fg, #e2e8f0)' },
+  title:   { margin: 0, fontSize: 22, fontWeight: 600, color: 'var(--fg, #e2e8f0)' },
   stepper: { display: 'flex', alignItems: 'center', gap: 0 },
   stepDot: {
     width: 28, height: 28, borderRadius: '50%',
@@ -212,34 +270,54 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'var(--surface-2, #2a2d3a)', color: 'var(--muted, #64748b)',
   },
   stepDotActive: { background: 'var(--accent, #6366f1)', color: '#fff' },
-  stepDotDone: { background: '#22c55e', color: '#fff' },
-  stepLine: { flex: 1, height: 2, background: 'var(--border, #2a2d3a)' },
-  section: { display: 'flex', flexDirection: 'column', gap: 12 },
-  desc: { margin: 0, color: 'var(--muted, #94a3b8)', fontSize: 14, lineHeight: 1.6 },
-  code: {
-    background: 'var(--surface-2, #0d0f18)',
-    border: '1px solid var(--border, #2a2d3a)',
+  stepDotDone:   { background: '#22c55e', color: '#fff' },
+  stepLine:      { flex: 1, height: 2, background: 'var(--border, #2a2d3a)' },
+  section:       { display: 'flex', flexDirection: 'column', gap: 12 },
+  desc:          { margin: 0, color: 'var(--muted, #94a3b8)', fontSize: 14, lineHeight: 1.6 },
+  fileRow:       { display: 'flex', flexDirection: 'column', gap: 8 },
+  fileLabel:     { display: 'flex', alignItems: 'center', gap: 10 },
+  fileLabelText: { color: 'var(--muted, #94a3b8)', fontSize: 13, width: 160, flexShrink: 0 },
+  hiddenInput:   { display: 'none' },
+  fileButton: {
+    padding: '7px 14px',
+    background: 'var(--surface-2, #2a2d3a)',
+    border: '1px solid var(--border, #3a3d4a)',
     borderRadius: 6,
-    padding: '10px 14px',
-    fontSize: 12,
-    fontFamily: 'monospace',
     color: 'var(--fg, #e2e8f0)',
-    overflowX: 'auto',
-    wordBreak: 'break-all',
-    whiteSpace: 'pre-wrap',
-    margin: 0,
+    fontSize: 13,
+    cursor: 'pointer',
   },
-  textarea: {
-    width: '100%',
-    background: 'var(--surface-2, #0d0f18)',
-    border: '1px solid var(--border, #2a2d3a)',
-    borderRadius: 6,
+  fileButtonDone: {
+    borderColor: '#22c55e',
+    color: '#22c55e',
+  },
+  identity: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
     padding: '10px 14px',
-    color: 'var(--fg, #e2e8f0)',
-    fontSize: 12,
-    fontFamily: 'monospace',
-    resize: 'vertical',
-    boxSizing: 'border-box',
+    background: 'rgba(99,102,241,0.08)',
+    border: '1px solid rgba(99,102,241,0.25)',
+    borderRadius: 6,
+  },
+  identityLabel: { fontSize: 11, color: 'var(--accent, #6366f1)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' },
+  identityUri:   { fontSize: 12, color: 'var(--fg, #e2e8f0)', fontFamily: 'monospace', wordBreak: 'break-all' },
+  warn: {
+    padding: '10px 14px',
+    background: 'rgba(234,179,8,0.1)',
+    border: '1px solid rgba(234,179,8,0.3)',
+    borderRadius: 6,
+    color: '#fbbf24',
+    fontSize: 13,
+  },
+  error: {
+    padding: '10px 14px',
+    background: 'rgba(239,68,68,0.1)',
+    border: '1px solid rgba(239,68,68,0.3)',
+    borderRadius: 6,
+    color: '#f87171',
+    fontSize: 13,
+    whiteSpace: 'pre-line' as const,
   },
   input: {
     width: '100%',
@@ -250,15 +328,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: 'var(--fg, #e2e8f0)',
     fontSize: 14,
     boxSizing: 'border-box',
-  },
-  error: {
-    padding: '10px 14px',
-    background: 'rgba(239,68,68,0.1)',
-    border: '1px solid rgba(239,68,68,0.3)',
-    borderRadius: 6,
-    color: '#f87171',
-    fontSize: 13,
-    whiteSpace: 'pre-line' as const,
   },
   button: {
     padding: '11px 20px',
