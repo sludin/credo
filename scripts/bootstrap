@@ -365,13 +365,13 @@ collect_answers() {
   if $AUTO; then
     CREDO_ROOT=$(_require_df 'credoRoot' '.credoRoot' "$_def_root")
     DOMAIN=$(_require_df 'domain' '.domain')
-    CA_TRUST_PATH=$(_require_df 'caTrustPath' '.caTrustPath' "$CREDO_ROOT/ca/root-ecdsa.cert.pem")
+    CA_TRUST_PATH=$(_require_df 'caTrustPath' '.caTrustPath' "$CREDO_ROOT/credo-catrust.pem")
   else
     ask_required 'Remote base directory (credoRoot)' "$(_df '.credoRoot' "$_def_root")"
     CREDO_ROOT="$REPLY_VAL"
     ask_required 'Base domain (e.g. example.com)' "$(_df '.domain')"
     DOMAIN="$REPLY_VAL"
-    ask_required 'CA trust bundle path (remote)' "$(_df '.caTrustPath' "$CREDO_ROOT/ca/root-ecdsa.cert.pem")"
+    ask_required 'CA trust bundle path (remote)' "$(_df '.caTrustPath' "$CREDO_ROOT/credo-catrust.pem")"
     CA_TRUST_PATH="$REPLY_VAL"
   fi
   save_bootstrap
@@ -759,7 +759,9 @@ phase_config() {
   echo "[bootstrap]   chown int key..."
   remote_run "sudo chown vigil:vigil '$ca_remote_dir/int-ecdsa/private/int-ecdsa.key.pem' && sudo chmod 600 '$ca_remote_dir/int-ecdsa/private/int-ecdsa.key.pem'"
   remote_run "sudo cp '$ca_remote_dir/root-ecdsa/certs/root-ecdsa.cert.pem' '$CREDO_ROOT/ca/root-ecdsa.cert.pem' 2>/dev/null || true"
-  # corgi's POST /bootstrap/ca writes the Shepherd CA cert to this path; it must be corgi-writable.
+  # Copy root cert to CA_TRUST_PATH (may differ from archive path for custom installs).
+  # corgi's POST /bootstrap/ca will overwrite this with the Shepherd CA cert; it must be corgi-writable.
+  remote_run "sudo mkdir -p '$(dirname "$CA_TRUST_PATH")' && sudo cp '$ca_remote_dir/root-ecdsa/certs/root-ecdsa.cert.pem' '$CA_TRUST_PATH'"
   remote_run "sudo chown corgi:corgi '$CA_TRUST_PATH' && sudo chmod 644 '$CA_TRUST_PATH'"
 
   echo "[bootstrap] Pushing service config files..."

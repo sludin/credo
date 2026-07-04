@@ -707,14 +707,14 @@ expand_targets() {
 # ---------------------------------------------------------------------------
 
 ask_init() {
-  local prompt="$1" default="${2:-}"
-  local reply
+  local prompt="$1" default="${2:-}" display
   if [[ -n "$default" ]]; then
-    printf '%s [%s]: ' "$prompt" "$default" >/dev/tty
+    display="$prompt [$default]: "
   else
-    printf '%s: ' "$prompt" >/dev/tty
+    display="$prompt: "
   fi
-  read -r reply </dev/tty
+  local reply
+  IFS= read -r -e -p "$display" -i "$default" reply </dev/tty || reply=""
   printf '%s' "${reply:-$default}"
 }
 
@@ -893,23 +893,12 @@ run_init() {
   if [[ "$sudo_rsync_yn" == "y" ]]; then sudo_rsync="true"; else sudo_rsync="false"; fi
   echo ""
 
-  # -- Corgi instances --
+  # -- Corgi instance --
   local corgi_names=()
   if [[ "$want_corgi" == "y" ]]; then
-    echo "Corgi instances (one per managed node). Enter names one at a time."
-    echo "Each corgi entry names a specific host where corgi is installed."
-    echo "If all services are on the same host, you likely have one corgi."
     local cname
-    while true; do
-      cname="$(ask_init "  Corgi instance name (blank to stop)" "")"
-      [[ -z "$cname" ]] && break
-      corgi_names+=("$cname")
-      echo "  Added: $cname"
-    done
-    if [[ ${#corgi_names[@]} -eq 0 ]]; then
-      echo "  No corgis added. Using default name 'corgi-01'."
-      corgi_names=("corgi-01")
-    fi
+    cname="$(ask_init "Corgi instance name" "corgi-01")"
+    corgi_names=("$cname")
     echo ""
   fi
 
@@ -1139,14 +1128,6 @@ run_setup() {
 
   setup_users_groups "$host" "$port" "$ssh_opts" "${services[@]}"
   echo ""
-
-  local has_corgi=false
-  local svc
-  for svc in "${services[@]}"; do [[ "$svc" == "corgi" ]] && has_corgi=true && break; done
-  if $has_corgi; then
-    setup_cert_store "$host" "$port" "$ssh_opts" "$base_dir"
-    echo ""
-  fi
 
   echo "[setup] Writing systemd unit files..."
   for svc in "${services[@]}"; do
