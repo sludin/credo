@@ -222,9 +222,13 @@ pub async fn enroll_corgi(
         .json()
         .await
         .context("Parsing corgi CSR response")?;
-    let csr_pem = csr_resp["csrPem"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("Missing csrPem in corgi response"))?;
+    let csr_pem = csr_resp["csrPem"].as_str().ok_or_else(|| {
+        if let Some(e) = csr_resp["error"].as_str() {
+            anyhow::anyhow!("Corgi /bootstrap/csr failed: {}", e)
+        } else {
+            anyhow::anyhow!("Missing csrPem in corgi response: {}", csr_resp)
+        }
+    })?;
 
     let fullchain_pem = sign_csr_via_vigil(vigil_client, vigil_url, csr_pem, 365)
         .await
