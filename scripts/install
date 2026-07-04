@@ -714,7 +714,7 @@ ask_init() {
     display="$prompt: "
   fi
   local reply
-  IFS= read -r -e -p "$display" -i "$default" reply </dev/tty || reply=""
+  IFS= read -r -e -p "$display" reply </dev/tty || reply=""
   printf '%s' "${reply:-$default}"
 }
 

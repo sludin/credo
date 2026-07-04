@@ -17,7 +17,7 @@ ask() {
     display="$question: "
   fi
   local input
-  IFS= read -r -e -p "$display" -i "$default" input </dev/tty || input=""
+  IFS= read -r -e -p "$display" input </dev/tty || input=""
   # trim surrounding whitespace
   input="${input#"${input%%[![:space:]]*}"}"
   input="${input%"${input##*[![:space:]]}"}"
