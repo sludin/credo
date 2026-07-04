@@ -43,10 +43,23 @@ CORGI_HTTP_CHALLENGE_PORT=""
 CORGI_DIR=""
 CORGI_IDENTITY_URI=""
 
+WANT_DASHBOARD=false
+DASHBOARD_HOSTNAME=""
+DASHBOARD_PORT="7030"
+DASHBOARD_DIR=""
+DASHBOARD_IDENTITY_URI=""
+
+WANT_LE=false
+WANT_LE_STAGING=false
+LE_ACCOUNT_EMAIL=""
+LE_ACCOUNT_KEY_PATH=""
+
 ADMIN_USERNAME=""
 ADMIN_IDENTITY_URI=""
 ADMIN_OUT_CERT=""
 ADMIN_OUT_KEY=""
+ADMIN_EMAIL=""
+ADMIN_DISPLAY_NAME=""
 
 # Ceremony variables (collected in Phase 0, used in Phase 1)
 ORG=""
@@ -105,12 +118,15 @@ remote_run() {
 }
 
 remote_copy() {
-  local src="$1" dest_dir="$2" dest_user="${3:-}"
+  local src="$1" dest_dir="$2" dest_user="${3:-}" dest_group="${4:-}"
+  local owner
+  dest_group="${dest_group:-$dest_user}"
+  owner="${dest_user}${dest_group:+:${dest_group}}"
   if [[ "$REMOTE_HOST" == "local" || "$REMOTE_HOST" == "localhost" || "$REMOTE_HOST" == "127.0.0.1" ]]; then
     if [[ -n "$dest_user" ]]; then
       sudo -u "$dest_user" mkdir -p "$dest_dir"
       sudo cp "$src" "$dest_dir/"
-      sudo chown "${dest_user}" "${dest_dir}/$(basename "$src")"
+      sudo chown "${owner}" "${dest_dir}/$(basename "$src")"
     else
       mkdir -p "$dest_dir"
       cp "$src" "$dest_dir/"
@@ -122,7 +138,7 @@ remote_copy() {
     # shellcheck disable=SC2086
     rsync -aLz -e "$ssh_e" "$src" "${REMOTE_HOST}:${tmp}"
     if [[ -n "$dest_user" ]]; then
-      remote_run "sudo mkdir -p '$dest_dir' && sudo mv '$tmp' '${dest_dir}/$(basename "$src")' && sudo chown '${dest_user}' '${dest_dir}/$(basename "$src")'"
+      remote_run "sudo mkdir -p '$dest_dir' && sudo mv '$tmp' '${dest_dir}/$(basename "$src")' && sudo chown '${owner}' '${dest_dir}/$(basename "$src")'"
     else
       remote_run "sudo mkdir -p '$dest_dir' && sudo mv '$tmp' '${dest_dir}/$(basename "$src")'"
     fi
@@ -130,12 +146,15 @@ remote_copy() {
 }
 
 remote_copy_dir() {
-  local src_dir="$1" dest_dir="$2" dest_user="${3:-}"
+  local src_dir="$1" dest_dir="$2" dest_user="${3:-}" dest_group="${4:-}"
+  local owner
+  dest_group="${dest_group:-$dest_user}"
+  owner="${dest_user}${dest_group:+:${dest_group}}"
   if [[ "$REMOTE_HOST" == "local" || "$REMOTE_HOST" == "localhost" || "$REMOTE_HOST" == "127.0.0.1" ]]; then
     if [[ -n "$dest_user" ]]; then
       sudo -u "$dest_user" mkdir -p "$dest_dir"
       sudo cp -r "${src_dir}/." "$dest_dir/"
-      sudo chown -R "${dest_user}" "$dest_dir"
+      sudo chown -R "${owner}" "$dest_dir"
     else
       mkdir -p "$dest_dir"
       cp -r "${src_dir}/." "$dest_dir/"
@@ -148,7 +167,7 @@ remote_copy_dir() {
     # shellcheck disable=SC2086
     rsync -aLz -e "$ssh_e" "${src_dir}/" "${REMOTE_HOST}:${tmp}/"
     if [[ -n "$dest_user" ]]; then
-      remote_run "sudo mkdir -p '$dest_dir' && sudo rsync -a '${tmp}/' '${dest_dir}/' && sudo chown -R '${dest_user}' '$dest_dir' && rm -rf '$tmp'"
+      remote_run "sudo mkdir -p '$dest_dir' && sudo rsync -a '${tmp}/' '${dest_dir}/' && sudo chown -R '${owner}' '$dest_dir' && rm -rf '$tmp'"
     else
       remote_run "sudo mkdir -p '$dest_dir' && sudo rsync -a '${tmp}/' '${dest_dir}/' && rm -rf '$tmp'"
     fi
@@ -218,6 +237,16 @@ save_bootstrap() {
     --arg  adminIdentityUri       "$ADMIN_IDENTITY_URI" \
     --arg  adminOutCert           "$ADMIN_OUT_CERT" \
     --arg  adminOutKey            "$ADMIN_OUT_KEY" \
+    --arg  adminEmail             "$ADMIN_EMAIL" \
+    --arg  adminDisplayName       "$ADMIN_DISPLAY_NAME" \
+    --arg  dashboardHostname      "$DASHBOARD_HOSTNAME" \
+    --argjson dashboardPort       "${DASHBOARD_PORT:-7030}" \
+    --arg  dashboardDir           "$DASHBOARD_DIR" \
+    --arg  dashboardIdentityUri   "$DASHBOARD_IDENTITY_URI" \
+    --argjson wantLe           "$WANT_LE" \
+    --argjson wantLeStaging    "$WANT_LE_STAGING" \
+    --arg  leAccountEmail      "$LE_ACCOUNT_EMAIL" \
+    --arg  leAccountKeyPath    "$LE_ACCOUNT_KEY_PATH" \
     --argjson dnsOverride         "$dns_arg" \
     '{
       credoRoot:   $credoRoot,
@@ -261,7 +290,21 @@ save_bootstrap() {
         username:    $adminUsername,
         identityUri: $adminIdentityUri,
         outCert:     $adminOutCert,
-        outKey:      $adminOutKey
+        outKey:      $adminOutKey,
+        email:       $adminEmail,
+        displayName: $adminDisplayName
+      },
+      dashboard: {
+        hostname:    $dashboardHostname,
+        port:        $dashboardPort,
+        dir:         $dashboardDir,
+        identityUri: $dashboardIdentityUri
+      },
+      letsencrypt: {
+        enabled:        $wantLe,
+        stagingEnabled: $wantLeStaging,
+        accountEmail:   $leAccountEmail,
+        accountKeyPath: $leAccountKeyPath
       }
     }
     | if $dnsOverride != null then . + {dnsOverride: $dnsOverride} else . end' \
@@ -288,6 +331,9 @@ load_install_config() {
   if [[ -z "$REMOTE_HOST" ]]; then
     echo "[bootstrap] Note: could not determine host from $INSTALL_CONFIG, defaulting to local" >&2
     REMOTE_HOST="local"
+  fi
+  if jq -e '.dashboard // empty' "$INSTALL_CONFIG" >/dev/null 2>&1; then
+    WANT_DASHBOARD=true
   fi
 }
 
@@ -319,13 +365,13 @@ collect_answers() {
   if $AUTO; then
     CREDO_ROOT=$(_require_df 'credoRoot' '.credoRoot' "$_def_root")
     DOMAIN=$(_require_df 'domain' '.domain')
-    CA_TRUST_PATH=$(_require_df 'caTrustPath' '.caTrustPath' "$CREDO_ROOT/ca/root-ecdsa.cert.pem")
+    CA_TRUST_PATH=$(_require_df 'caTrustPath' '.caTrustPath' "$CREDO_ROOT/credo-catrust.pem")
   else
     ask_required 'Remote base directory (credoRoot)' "$(_df '.credoRoot' "$_def_root")"
     CREDO_ROOT="$REPLY_VAL"
     ask_required 'Base domain (e.g. example.com)' "$(_df '.domain')"
     DOMAIN="$REPLY_VAL"
-    ask_required 'CA trust bundle path (remote)' "$(_df '.caTrustPath' "$CREDO_ROOT/ca/root-ecdsa.cert.pem")"
+    ask_required 'CA trust bundle path (remote)' "$(_df '.caTrustPath' "$CREDO_ROOT/credo-catrust.pem")"
     CA_TRUST_PATH="$REPLY_VAL"
   fi
   save_bootstrap
@@ -349,7 +395,7 @@ collect_answers() {
       COUNTRY=$(_require_df 'ceremony.country' '.ceremony.country' 'US')
       ROOT_ECDSA_CN=$(_require_df 'ceremony.rootEcdsaCn' '.ceremony.rootEcdsaCn' "$ORG Root")
       INT_ECDSA_CN=$(_require_df 'ceremony.intEcdsaCn' '.ceremony.intEcdsaCn' "$ORG Intermediary")
-      PKI_BASE_URL=$(_require_df 'ceremony.pkiBaseUrl' '.ceremony.pkiBaseUrl' 'http://pki.example.com')
+      PKI_BASE_URL=$(_require_df 'ceremony.pkiBaseUrl' '.ceremony.pkiBaseUrl' "http://pki.$DOMAIN")
       ROOT_DAYS=$(_require_df 'ceremony.rootDays' '.ceremony.rootDays' '3650')
       INT_DAYS=$(_require_df 'ceremony.intDays' '.ceremony.intDays' '730')
     else
@@ -361,8 +407,8 @@ collect_answers() {
       ROOT_ECDSA_CN="$REPLY_VAL"
       ask_required 'Intermediate CA common name' "$(_df '.ceremony.intEcdsaCn' "$ORG Intermediary")"
       INT_ECDSA_CN="$REPLY_VAL"
-      ask 'PKI base URL (for AIA/CDP extensions)' "$(_df '.ceremony.pkiBaseUrl' 'http://pki.example.com')"
-      PKI_BASE_URL="${REPLY_VAL:-http://pki.example.com}"
+      ask 'PKI base URL (for AIA/CDP extensions)' "$(_df '.ceremony.pkiBaseUrl' "http://pki.$DOMAIN")"
+      PKI_BASE_URL="${REPLY_VAL:-http://pki.$DOMAIN}"
       ask 'Root cert validity days' "$(_df '.ceremony.rootDays' '3650')"
       ROOT_DAYS="${REPLY_VAL:-3650}"
       ask 'Intermediate cert validity days' "$(_df '.ceremony.intDays' '730')"
@@ -459,6 +505,12 @@ collect_answers() {
     CORGI_IDENTITY_URI="$REPLY_VAL"
   fi
   save_bootstrap
+
+  if $WANT_DASHBOARD; then
+    collect_dashboard_answers
+  fi
+
+  collect_le_answers
 }
 
 collect_admin_answers() {
@@ -469,6 +521,8 @@ collect_admin_answers() {
     ADMIN_USERNAME=$(_require_df 'admin.username' '.admin.username' "$_def_username")
     ADMIN_OUT_CERT=$(expand_home "$(_require_df 'admin.outCert' '.admin.outCert' "$HOME/.credo/$DOMAIN/${ADMIN_USERNAME}.pem")")
     ADMIN_OUT_KEY=$(expand_home "$(_require_df 'admin.outKey'   '.admin.outKey'  "$HOME/.credo/$DOMAIN/${ADMIN_USERNAME}.key")")
+    ADMIN_EMAIL=$(       _require_df 'admin.email'       '.admin.email'       "${ADMIN_USERNAME}@${DOMAIN}")
+    ADMIN_DISPLAY_NAME=$(_require_df 'admin.displayName' '.admin.displayName' "$ADMIN_USERNAME")
   else
     ask_required 'Admin username' "$(_df '.admin.username' "$_def_username")"
     ADMIN_USERNAME="$REPLY_VAL"
@@ -476,8 +530,76 @@ collect_admin_answers() {
     ADMIN_OUT_CERT=$(expand_home "$REPLY_VAL")
     ask_required 'Admin key output path (local)'  "$(_df '.admin.outKey'  "$HOME/.credo/$DOMAIN/${ADMIN_USERNAME}.key")"
     ADMIN_OUT_KEY=$(expand_home "$REPLY_VAL")
+    ask_required 'Admin email address' "$(_df '.admin.email'       "${ADMIN_USERNAME}@${DOMAIN}")"
+    ADMIN_EMAIL="$REPLY_VAL"
+    ask_required 'Admin display name'  "$(_df '.admin.displayName' "$ADMIN_USERNAME")"
+    ADMIN_DISPLAY_NAME="$REPLY_VAL"
   fi
   ADMIN_IDENTITY_URI="vigil://credo/user/$ADMIN_USERNAME"
+  save_bootstrap
+}
+
+collect_dashboard_answers() {
+  printf '\n=== Dashboard ===\n'
+  local _def_dashboard_dir
+  _def_dashboard_dir="$(jq -r '.dashboard.remoteDir // empty' "$INSTALL_CONFIG" 2>/dev/null || true)"
+  [[ -z "$_def_dashboard_dir" ]] && _def_dashboard_dir="$CREDO_ROOT/dashboard"
+
+  if $AUTO; then
+    DASHBOARD_HOSTNAME=$(     _require_df 'dashboard.hostname'    '.dashboard.hostname'    "dashboard.$DOMAIN")
+    DASHBOARD_PORT=$(         _require_df 'dashboard.port'        '.dashboard.port'        '7030')
+    DASHBOARD_DIR=$(          _require_df 'dashboard.dir'         '.dashboard.dir'         "$_def_dashboard_dir")
+    DASHBOARD_IDENTITY_URI=$( _require_df 'dashboard.identityUri' '.dashboard.identityUri' 'vigil://credo/service/dashboard')
+  else
+    ask_required 'Dashboard hostname'         "$(_df '.dashboard.hostname'    "dashboard.$DOMAIN")"
+    DASHBOARD_HOSTNAME="$REPLY_VAL"
+    ask_int      'Dashboard port'             "$(_df '.dashboard.port'        '7030')"
+    DASHBOARD_PORT="$REPLY_VAL"
+    ask_required 'Dashboard remote directory' "$(_df '.dashboard.dir'         "$_def_dashboard_dir")"
+    DASHBOARD_DIR="$REPLY_VAL"
+    ask_required 'Dashboard identity URI'     "$(_df '.dashboard.identityUri' 'vigil://credo/service/dashboard')"
+    DASHBOARD_IDENTITY_URI="$REPLY_VAL"
+  fi
+  save_bootstrap
+}
+
+collect_le_answers() {
+  printf '\n=== Let'"'"'s Encrypt ===\n'
+
+  if $AUTO; then
+    local _want_le
+    _want_le=$(_df '.letsencrypt.enabled' 'false')
+    [[ "$_want_le" == "true" ]] && WANT_LE=true || WANT_LE=false
+    local _want_staging
+    _want_staging=$(_df '.letsencryptStaging.enabled' 'false')
+    [[ "$_want_staging" == "true" ]] && WANT_LE_STAGING=true || WANT_LE_STAGING=false
+  else
+    ask "Add Let's Encrypt production CA? (y/n)" \
+        "$(_df '.letsencrypt.enabled' 'false' | sed 's/true/y/;s/false/n/')"
+    [[ "${REPLY_VAL,,}" == y* ]] && WANT_LE=true || WANT_LE=false
+    ask "Add Let's Encrypt staging CA? (y/n)" \
+        "$(_df '.letsencryptStaging.enabled' 'false' | sed 's/true/y/;s/false/n/')"
+    [[ "${REPLY_VAL,,}" == y* ]] && WANT_LE_STAGING=true || WANT_LE_STAGING=false
+  fi
+
+  if $WANT_LE || $WANT_LE_STAGING; then
+    local _def_le_email
+    _def_le_email=$(_df '.letsencrypt.accountEmail' \
+                     "$(_df '.admin.email' "admin@${DOMAIN}")")
+    local _def_le_key
+    _def_le_key=$(_df '.letsencrypt.accountKeyPath' \
+                  "${SHEPHERD_DIR}/letsencrypt-account.key.pem")
+
+    if $AUTO; then
+      LE_ACCOUNT_EMAIL=$(  _require_df 'letsencrypt.accountEmail'   '.letsencrypt.accountEmail'   "$_def_le_email")
+      LE_ACCOUNT_KEY_PATH=$(_require_df 'letsencrypt.accountKeyPath' '.letsencrypt.accountKeyPath' "$_def_le_key")
+    else
+      ask_required "Let's Encrypt account email"             "$_def_le_email"
+      LE_ACCOUNT_EMAIL="$REPLY_VAL"
+      ask_required "Let's Encrypt account key path (remote)" "$_def_le_key"
+      LE_ACCOUNT_KEY_PATH="$REPLY_VAL"
+    fi
+  fi
   save_bootstrap
 }
 
@@ -637,7 +759,9 @@ phase_config() {
   echo "[bootstrap]   chown int key..."
   remote_run "sudo chown vigil:vigil '$ca_remote_dir/int-ecdsa/private/int-ecdsa.key.pem' && sudo chmod 600 '$ca_remote_dir/int-ecdsa/private/int-ecdsa.key.pem'"
   remote_run "sudo cp '$ca_remote_dir/root-ecdsa/certs/root-ecdsa.cert.pem' '$CREDO_ROOT/ca/root-ecdsa.cert.pem' 2>/dev/null || true"
-  # corgi's POST /bootstrap/ca writes the Shepherd CA cert to this path; it must be corgi-writable.
+  # Copy root cert to CA_TRUST_PATH (may differ from archive path for custom installs).
+  # corgi's POST /bootstrap/ca will overwrite this with the Shepherd CA cert; it must be corgi-writable.
+  remote_run "sudo mkdir -p '$(dirname "$CA_TRUST_PATH")' && sudo cp '$ca_remote_dir/root-ecdsa/certs/root-ecdsa.cert.pem' '$CA_TRUST_PATH'"
   remote_run "sudo chown corgi:corgi '$CA_TRUST_PATH' && sudo chmod 644 '$CA_TRUST_PATH'"
 
   echo "[bootstrap] Pushing service config files..."
@@ -651,6 +775,16 @@ phase_config() {
   if [[ -f "$tmp_config_dir/vars.json" ]]; then
     echo "[bootstrap]   vars.json..."
     remote_copy "$tmp_config_dir/vars.json" "$CREDO_ROOT"
+  fi
+
+  # Generate and push dashboard config (after real paths are restored — no sed patching needed)
+  if $WANT_DASHBOARD; then
+    local dashboard_dir_local="$tmp_config_dir/dashboard"
+    mkdir -p "$dashboard_dir_local"
+    _gen_dashboard_config > "$dashboard_dir_local/dashboard.config.json"
+    chmod 600 "$dashboard_dir_local/dashboard.config.json"
+    echo "[bootstrap]   dashboard config..."
+    remote_copy_dir "$dashboard_dir_local" "$DASHBOARD_DIR" "dashboard"
   fi
 
   echo "[bootstrap] Files pushed."
@@ -708,6 +842,15 @@ VIGIL_HOSTNAME="$VIGIL_HOSTNAME"
 SHEPHERD_HOSTNAME="$SHEPHERD_HOSTNAME"
 DOMAIN="$DOMAIN"
 ADMIN_IDENTITY_URI="$ADMIN_IDENTITY_URI"
+DASHBOARD_HOSTNAME="$DASHBOARD_HOSTNAME"
+DASHBOARD_DIR="$DASHBOARD_DIR"
+SHEPHERD_ACCOUNTS="\$SHEPHERD_DIR/shepherd.accounts.json"
+DASHBOARD_ACCOUNT_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+DASHBOARD_IDENTITY_URI="$DASHBOARD_IDENTITY_URI"
+ADMIN_USERNAME="$ADMIN_USERNAME"
+ADMIN_EMAIL="$ADMIN_EMAIL"
+ADMIN_DISPLAY_NAME="$ADMIN_DISPLAY_NAME"
+WANT_DASHBOARD="$WANT_DASHBOARD"
 ADMIN_OUT_CERT="$ADMIN_OUT_CERT"
 ADMIN_OUT_KEY="$ADMIN_OUT_KEY"
 
@@ -808,10 +951,14 @@ if command -v systemctl >/dev/null 2>&1; then
 fi
 
 # Ensure corgi cert store dirs exist with correct ownership (install creates certs/ not store/).
+# store/ gets setgid+credo-cert so archive/ and its contents inherit the group automatically.
 sudo mkdir -p "\$CORGI_DIR/store/live"
-sudo chown corgi:corgi "\$CORGI_DIR/store"
-sudo chown corgi:credo-cert "\$CORGI_DIR/store/live"
-sudo chmod 2750 "\$CORGI_DIR/store/live"
+sudo chown corgi:credo-cert "\$CORGI_DIR/store" "\$CORGI_DIR/store/live"
+sudo chmod 2750 "\$CORGI_DIR/store" "\$CORGI_DIR/store/live"
+# Fix any existing archive files from previous bootstrap runs.
+if sudo test -d "\$CORGI_DIR/store/archive"; then
+  sudo chown -R corgi:credo-cert "\$CORGI_DIR/store/archive"
+fi
 
 touch "\$VIGIL_LOG" "\$SHEPHERD_LOG" "\$CORGI_BOOT_LOG" "\$CORGI_LOG"
 
@@ -852,6 +999,18 @@ sudo -u shepherd bash -c "cd \$SHEPHERD_DIR && SHEPHERD_CONFIG_PATH=\$SHEPHERD_C
 
 sudo -u shepherd bash -c "cd \$SHEPHERD_DIR && SHEPHERD_CONFIG_PATH=\$SHEPHERD_CONFIG_PATH \$SHEPHERD_EXEC bootstrap corgi --admin-token \$ADMIN_TOKEN --name \$CORGI_NAME --token \$CORGI_TOKEN --fingerprint \$CORGI_FINGERPRINT --identity-uri \$CORGI_IDENTITY_URI --corgi-url https://127.0.0.1:\${CORGI_PORT}"
 
+if [[ "\$WANT_DASHBOARD" == "true" ]]; then
+  echo ""
+  echo "=== Adding dashboard service account..."
+  if sudo -u shepherd bash -c "jq -e '.accounts[] | select(.name == \"dashboard\")' \"\$SHEPHERD_ACCOUNTS\"" >/dev/null 2>&1; then
+    echo "  Dashboard account already exists, skipping."
+  else
+    sudo -u shepherd bash -c "jq --arg id \"\$DASHBOARD_ACCOUNT_ID\" --arg uri \"\$DASHBOARD_IDENTITY_URI\" '.accounts += [{id: \\\$id, name: \"dashboard\", displayName: \"Dashboard Service\", role: \"operator\", active: true, identities: [\\\$uri], notes: \"\", createdAt: null}]' \"\$SHEPHERD_ACCOUNTS\" > \"\$SHEPHERD_ACCOUNTS.tmp\""
+    sudo -u shepherd mv "\$SHEPHERD_ACCOUNTS.tmp" "\$SHEPHERD_ACCOUNTS"
+    echo "  Dashboard service account added (role: operator)."
+  fi
+fi
+
 echo ""
 echo "=== Step 5/5: Restarting in server mode, waiting for certs..."
 kill "\$CPID" 2>/dev/null || true
@@ -860,10 +1019,15 @@ sudo -u corgi bash -c "cd \$CORGI_DIR && CORGI_CONFIG_PATH=\$CORGI_CONFIG_PATH \
 CPID2=\$!; TRACKED_PIDS+=(\$CPID2)
 local_corgi_live="\$CORGI_DIR/store/live"
 _t=\$(date +%s)
-wait_for_certs "\$_t" \
-  "\$VIGIL_HOSTNAME:\${local_corgi_live}/\${VIGIL_HOSTNAME}/fullchain.pem" \
-  "\$SHEPHERD_HOSTNAME:\${local_corgi_live}/\${SHEPHERD_HOSTNAME}/fullchain.pem" \
+_cert_args=(
+  "\$VIGIL_HOSTNAME:\${local_corgi_live}/\${VIGIL_HOSTNAME}/fullchain.pem"
+  "\$SHEPHERD_HOSTNAME:\${local_corgi_live}/\${SHEPHERD_HOSTNAME}/fullchain.pem"
   "\$CORGI_HOSTNAME:\${local_corgi_live}/\${CORGI_HOSTNAME}/fullchain.pem"
+)
+if [[ "\$WANT_DASHBOARD" == "true" ]]; then
+  _cert_args+=("$DASHBOARD_HOSTNAME:\${local_corgi_live}/$DASHBOARD_HOSTNAME/fullchain.pem")
+fi
+wait_for_certs "\$_t" "\${_cert_args[@]}"
 
 kill "\$VPID" "\$SPID" 2>/dev/null || true; sleep 0.3
 
@@ -893,6 +1057,43 @@ else
   echo "  shepherd PID: \$SPID2"
   echo "  corgi PID:    \$CPID2"
   echo "Run 'sudo systemctl start credo-vigil credo-shepherd credo-corgi' to manage via systemd instead."
+fi
+
+if [[ "\$WANT_DASHBOARD" == "true" ]]; then
+  # Ensure dashboard user can read cert files from the corgi cert store.
+  # scripts/install handles this on new installs; this self-heals existing ones.
+  if id dashboard >/dev/null 2>&1 && ! id -nG dashboard | grep -qw credo-cert; then
+    sudo usermod -aG credo-cert dashboard
+    echo "  Added dashboard to credo-cert group."
+  fi
+
+  echo ""
+  echo "=== Creating admin dashboard user..."
+  if [[ -x "\$DASHBOARD_DIR/dashboard" ]]; then
+    cd "\$DASHBOARD_DIR"
+    if sudo -u dashboard ./dashboard user create \
+         --account  "\$ADMIN_USERNAME" \
+         --email    "\$ADMIN_EMAIL" \
+         --name     "\$ADMIN_DISPLAY_NAME" \
+         --identity "\$ADMIN_IDENTITY_URI"; then
+      echo "  User created. Save the enrollment URL above."
+    else
+      echo "  User already exists, continuing."
+    fi
+  else
+    echo "  WARNING: \$DASHBOARD_DIR/dashboard not found — deploy dashboard before running enrollment."
+  fi
+
+  echo ""
+  echo "=== Starting dashboard service..."
+  if command -v systemctl >/dev/null 2>&1 && sudo systemctl is-enabled credo-dashboard >/dev/null 2>&1; then
+    sudo systemctl unmask credo-dashboard 2>/dev/null || true
+    sudo systemctl start credo-dashboard
+    echo "  Dashboard started via systemctl."
+  else
+    echo "  No systemd unit active — start manually:"
+    echo "    cd \$DASHBOARD_DIR && sudo -u dashboard ./dashboard server start"
+  fi
 fi
 REMOTE_SCRIPT_EOF
 
@@ -990,6 +1191,16 @@ phase_verify() {
 
   check_health "vigil"    "credo-vigil"    "https://$VIGIL_HOSTNAME:$VIGIL_PORT/health"               6 "200 401"
   check_health "shepherd" "credo-shepherd" "https://$SHEPHERD_HOSTNAME:$SHEPHERD_DASHBOARD_PORT/health" 6 "200"
+
+  # Lazy-load dashboard vars (in case --phase 4 is run standalone)
+  [[ -z "$DASHBOARD_HOSTNAME" ]] && DASHBOARD_HOSTNAME=$(_df '.dashboard.hostname' '')
+  [[ -z "$DASHBOARD_PORT"     ]] && DASHBOARD_PORT=$(    _df '.dashboard.port'     '7030')
+
+  if [[ -n "${DASHBOARD_HOSTNAME:-}" ]]; then
+    # /api/health requires auth; hit / and accept login-page redirect or auth challenge
+    check_health "dashboard" "credo-dashboard" \
+      "https://$DASHBOARD_HOSTNAME:$DASHBOARD_PORT/" 6 "200 302 401"
+  fi
 
   if $all_ok; then
     echo "[bootstrap] All health checks passed."

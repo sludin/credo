@@ -122,12 +122,9 @@ enum CertCommands {
 
 #[derive(Subcommand)]
 enum AccountCommands {
-    /// Add an account by reading identity URIs from a PEM certificate
+    /// Issue a cert and register a new account (requires a running Shepherd)
     Add {
-        /// Path to the PEM certificate whose URI SANs become the account's identities
-        #[arg(long)]
-        cert: String,
-        /// Short account name (used in logs and as a key)
+        /// Short account name — must be unique
         #[arg(long)]
         name: String,
         /// Human-readable display name
@@ -136,9 +133,39 @@ enum AccountCommands {
         /// Role: admin | operator | readonly
         #[arg(long, default_value = "admin")]
         role: String,
-        /// Optional notes
-        #[arg(long, default_value = "")]
-        notes: String,
+        /// URI SAN for the cert; defaults to vigil://credo/admin/<name>
+        #[arg(long)]
+        identity_uri: Option<String>,
+        /// Path to write the issued cert PEM (prompted if absent)
+        #[arg(long)]
+        out_cert: Option<String>,
+        /// Path to write the generated key PEM (prompted if absent)
+        #[arg(long)]
+        out_key: Option<String>,
+        /// Path to admin cert PEM used to authenticate with Shepherd
+        #[arg(long)]
+        admin_cert: String,
+        /// Path to admin key PEM used to authenticate with Shepherd
+        #[arg(long)]
+        admin_key: String,
+    },
+    /// Issue a new cert for an existing account, preserving its identity URIs
+    Rotate {
+        /// Account name to rotate the cert for
+        #[arg(long)]
+        name: String,
+        /// Path to write the new cert PEM (prompted if absent)
+        #[arg(long)]
+        out_cert: Option<String>,
+        /// Path to write the new key PEM (prompted if absent)
+        #[arg(long)]
+        out_key: Option<String>,
+        /// Path to admin cert PEM (own cert or another admin's)
+        #[arg(long)]
+        admin_cert: String,
+        /// Path to admin key PEM
+        #[arg(long)]
+        admin_key: String,
     },
     /// List all accounts
     List,
@@ -211,12 +238,43 @@ async fn main() -> Result<()> {
         },
         Commands::Account { cmd } => match cmd {
             AccountCommands::Add {
-                cert,
                 name,
                 display_name,
                 role,
-                notes,
-            } => cmd_account_add(&cert, &name, &display_name, &role, &notes),
+                identity_uri,
+                out_cert,
+                out_key,
+                admin_cert,
+                admin_key,
+            } => {
+                cmd_account_add(AccountAddArgs {
+                    name: &name,
+                    display_name: &display_name,
+                    role_str: &role,
+                    identity_uri: identity_uri.as_deref(),
+                    out_cert: out_cert.as_deref(),
+                    out_key: out_key.as_deref(),
+                    admin_cert: &admin_cert,
+                    admin_key: &admin_key,
+                })
+                .await
+            }
+            AccountCommands::Rotate {
+                name,
+                out_cert,
+                out_key,
+                admin_cert,
+                admin_key,
+            } => {
+                cmd_account_rotate(
+                    &name,
+                    out_cert.as_deref(),
+                    out_key.as_deref(),
+                    &admin_cert,
+                    &admin_key,
+                )
+                .await
+            }
             AccountCommands::List => cmd_account_list(),
             AccountCommands::Remove { name } => cmd_account_remove(&name),
         },
@@ -760,24 +818,119 @@ async fn cmd_cert_inspect(cert_name: &str) -> Result<()> {
 // account commands
 // ---------------------------------------------------------------------------
 
-fn cmd_account_add(
-    cert_path: &str,
-    name: &str,
-    display_name: &str,
-    role_str: &str,
-    notes: &str,
-) -> Result<()> {
+/// Expand a leading `~/` to the user's home directory.
+fn expand_tilde(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return format!("{}/{}", home, rest);
+        }
+    }
+    path.to_string()
+}
+
+/// Print `prompt` and read a line; return `default` if the user enters nothing.
+fn prompt_path(prompt: &str, default: &str) -> String {
+    use std::io::{self, Write};
+    print!("{prompt}");
+    let _ = io::stdout().flush();
+    let mut input = String::new();
+    let _ = io::stdin().read_line(&mut input);
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        default.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Write `contents` to `path`, creating parent directories as needed.
+fn write_file(path: &str, contents: &str) -> Result<()> {
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Creating directory for: {path}"))?;
+    }
+    std::fs::write(path, contents).with_context(|| format!("Writing: {path}"))?;
+    Ok(())
+}
+
+struct AccountAddArgs<'a> {
+    name: &'a str,
+    display_name: &'a str,
+    role_str: &'a str,
+    identity_uri: Option<&'a str>,
+    out_cert: Option<&'a str>,
+    out_key: Option<&'a str>,
+    admin_cert: &'a str,
+    admin_key: &'a str,
+}
+
+async fn cmd_account_add(args: AccountAddArgs<'_>) -> Result<()> {
+    let AccountAddArgs {
+        name,
+        display_name,
+        role_str,
+        identity_uri,
+        out_cert,
+        out_key,
+        admin_cert,
+        admin_key,
+    } = args;
     let config = load_config().context("Loading config")?;
+    let shepherd_url = shepherd_dashboard_url(&config);
 
-    let pem =
-        std::fs::read_to_string(cert_path).with_context(|| format!("Reading cert: {cert_path}"))?;
-    let identity = credo_lib::auth::identity_from_pem(&pem)
-        .with_context(|| format!("Parsing cert: {cert_path}"))?;
-
-    if identity.san_uris.is_empty() {
-        anyhow::bail!("Certificate has no URI SANs — cannot derive identities from it");
+    // Fail early if the account already exists
+    let mut accounts =
+        shepherd::accounts::load_accounts(&config.accounts_path).context("Loading accounts")?;
+    if accounts.iter().any(|a| a.name == name) {
+        anyhow::bail!("Account '{name}' already exists");
     }
 
+    // Derive identity URI: explicit flag or vigil://credo/admin/<name>
+    let uri = identity_uri
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("vigil://credo/admin/{}", name));
+
+    // Resolve output paths (interactive prompt if not supplied)
+    let out_cert = expand_tilde(&out_cert.map(str::to_string).unwrap_or_else(|| {
+        prompt_path(
+            &format!("Output cert path [~/.vigil/{name}.pem]: "),
+            &format!("~/.vigil/{name}.pem"),
+        )
+    }));
+    let out_key = expand_tilde(&out_key.map(str::to_string).unwrap_or_else(|| {
+        prompt_path(
+            &format!("Output key path [~/.vigil/{name}.key]: "),
+            &format!("~/.vigil/{name}.key"),
+        )
+    }));
+
+    // Generate key + CSR locally; private key never leaves this process
+    let (key_pem, csr_pem) =
+        gen_key_and_csr(name, &[], &[&uri]).context("Generating key and CSR")?;
+
+    // Ask the running Shepherd to sign the CSR via Vigil
+    let client = build_shepherd_mtls_client(&config, admin_cert, admin_key)?;
+    let resp = client
+        .post(format!("{}/admin/identity-cert", shepherd_url))
+        .json(&serde_json::json!({ "csrPem": csr_pem, "days": 365 }))
+        .send()
+        .await
+        .context("POST /admin/identity-cert")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("/admin/identity-cert returned {}: {}", status, body);
+    }
+    let body: serde_json::Value = resp.json().await.context("Parsing response")?;
+    let cert_pem = body["certPem"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Missing certPem in response"))?;
+
+    // Write cert and key to disk
+    write_file(&out_cert, cert_pem)?;
+    write_file(&out_key, &key_pem)?;
+
+    // Register the account in shepherd.accounts.json
     let role = credo_lib::types::Role::from_str(role_str);
     let account = shepherd::types::Account {
         id: uuid::Uuid::new_v4().to_string(),
@@ -785,31 +938,88 @@ fn cmd_account_add(
         display_name: display_name.to_string(),
         role,
         active: true,
-        identities: identity.san_uris.clone(),
-        notes: notes.to_string(),
+        identities: vec![uri.clone()],
+        notes: String::new(),
         created_at: Some(chrono::Utc::now()),
     };
-
-    let mut accounts =
-        shepherd::accounts::load_accounts(&config.accounts_path).context("Loading accounts")?;
-
-    if accounts.iter().any(|a| a.name == name) {
-        anyhow::bail!("An account named '{name}' already exists");
-    }
-
-    println!("Adding account '{name}':");
-    for uri in &identity.san_uris {
-        println!("  identity: {uri}");
-    }
-
     shepherd::accounts::create_account(&mut accounts, account);
     shepherd::accounts::save_accounts(&config.accounts_path, &accounts)
         .context("Saving accounts")?;
 
-    println!(
-        "Account '{name}' added to {}",
-        config.accounts_path.display()
-    );
+    println!("Account '{name}' created.");
+    println!("  Identity: {uri}");
+    println!("  Cert:     {out_cert}");
+    println!("  Key:      {out_key}");
+    Ok(())
+}
+
+async fn cmd_account_rotate(
+    name: &str,
+    out_cert: Option<&str>,
+    out_key: Option<&str>,
+    admin_cert: &str,
+    admin_key: &str,
+) -> Result<()> {
+    let config = load_config().context("Loading config")?;
+    let shepherd_url = shepherd_dashboard_url(&config);
+
+    // Load the existing account
+    let accounts =
+        shepherd::accounts::load_accounts(&config.accounts_path).context("Loading accounts")?;
+    let account = accounts
+        .iter()
+        .find(|a| a.name == name)
+        .ok_or_else(|| anyhow::anyhow!("No account named '{name}' found"))?;
+
+    if account.identities.is_empty() {
+        anyhow::bail!("Account '{name}' has no identity URIs — cannot rotate cert");
+    }
+    let uri_sans: Vec<&str> = account.identities.iter().map(String::as_str).collect();
+
+    // Resolve output paths
+    let out_cert = expand_tilde(&out_cert.map(str::to_string).unwrap_or_else(|| {
+        prompt_path(
+            &format!("Output cert path [~/.vigil/{name}.pem]: "),
+            &format!("~/.vigil/{name}.pem"),
+        )
+    }));
+    let out_key = expand_tilde(&out_key.map(str::to_string).unwrap_or_else(|| {
+        prompt_path(
+            &format!("Output key path [~/.vigil/{name}.key]: "),
+            &format!("~/.vigil/{name}.key"),
+        )
+    }));
+
+    // Generate new key + CSR, preserving the same URI SANs
+    let (key_pem, csr_pem) =
+        gen_key_and_csr(name, &[], &uri_sans).context("Generating key and CSR")?;
+
+    // Sign via Shepherd → Vigil
+    let client = build_shepherd_mtls_client(&config, admin_cert, admin_key)?;
+    let resp = client
+        .post(format!("{}/admin/identity-cert", shepherd_url))
+        .json(&serde_json::json!({ "csrPem": csr_pem, "days": 365 }))
+        .send()
+        .await
+        .context("POST /admin/identity-cert")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("/admin/identity-cert returned {}: {}", status, body);
+    }
+    let body: serde_json::Value = resp.json().await.context("Parsing response")?;
+    let cert_pem = body["certPem"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Missing certPem in response"))?;
+
+    // Write new cert and key to disk
+    write_file(&out_cert, cert_pem)?;
+    write_file(&out_key, &key_pem)?;
+
+    println!("Cert rotated for '{name}'.");
+    println!("  Cert: {out_cert}");
+    println!("  Key:  {out_key}");
+    println!("  Accounts file unchanged (identity URIs preserved).");
     Ok(())
 }
 

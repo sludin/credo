@@ -171,29 +171,52 @@ shepherd cert renew api.example.com \
 
 ## `shepherd account`
 
-Account commands read and write `shepherd.accounts.json` directly on disk. Shepherd does not need to be running. Changes take effect on the next request after Shepherd hot-reloads the file (mtime-triggered).
+`add` and `rotate` require a running Shepherd instance (they call `/admin/identity-cert` to issue a cert via Vigil). `list` and `remove` read and write `shepherd.accounts.json` directly on disk; Shepherd does not need to be running.
 
 ### `shepherd account add`
 
-Add a new account. Reads URI SANs from an existing PEM certificate and uses them as the account's identities.
+Issue a certificate and register a new account in one step. The private key is generated locally and never sent to Shepherd; only the CSR is transmitted. Fails if an account with the given name already exists.
 
 ```bash
 shepherd account add \
-  --cert /etc/credo/admin/admin.fullchain.pem \
   --name alice \
   --display-name "Alice Admin" \
-  --role admin
+  --role admin \
+  --admin-cert ~/.vigil/admin.pem \
+  --admin-key  ~/.vigil/admin.key
+# prompts for --out-cert and --out-key if not supplied
 ```
 
 | Flag | Required | Default | Description |
 |------|----------|---------|-------------|
-| `--cert` | yes | — | Path to a PEM certificate. All URI SANs in the cert become the account's identities |
 | `--name` | yes | — | Short machine-readable account name (must be unique) |
 | `--display-name` | yes | — | Human-readable label |
 | `--role` | no | `admin` | One of `admin`, `operator`, `readonly` |
-| `--notes` | no | `""` | Free-text operator notes |
+| `--identity-uri` | no | `vigil://credo/admin/<name>` | URI SAN embedded in the issued certificate |
+| `--out-cert` | no | prompted | Path to write the issued certificate PEM |
+| `--out-key` | no | prompted | Path to write the generated private key PEM |
+| `--admin-cert` | yes | — | Path to an admin certificate PEM (for Shepherd mTLS auth) |
+| `--admin-key` | yes | — | Path to the admin private key PEM |
 
-The certificate must have at least one URI SAN. An account without URI SANs cannot authenticate.
+### `shepherd account rotate`
+
+Issue a new certificate for an existing account, preserving its identity URIs. The old private key is replaced on disk; no change is made to `shepherd.accounts.json`.
+
+```bash
+shepherd account rotate \
+  --name alice \
+  --admin-cert ~/.vigil/alice.pem \
+  --admin-key  ~/.vigil/alice.key
+# prompts for --out-cert and --out-key if not supplied (safe to overwrite in-place)
+```
+
+| Flag | Required | Default | Description |
+|------|----------|---------|-------------|
+| `--name` | yes | — | Account name to rotate the cert for |
+| `--out-cert` | no | prompted | Path to write the new certificate PEM |
+| `--out-key` | no | prompted | Path to write the new private key PEM |
+| `--admin-cert` | yes | — | Path to an admin cert (own cert if still valid, or another admin's) |
+| `--admin-key` | yes | — | Path to the admin key |
 
 ### `shepherd account list`
 
