@@ -458,9 +458,9 @@ fn node_identity_entry(config: &CorgiConfig) -> crate::config::FlockEntry {
             cert_mode: None,
             key_mode: None,
             cert_owner: None,
-            cert_group: None,
+            cert_group: config.file_policy.group.clone(),
             key_owner: None,
-            key_group: None,
+            key_group: config.file_policy.group.clone(),
         })
 }
 
