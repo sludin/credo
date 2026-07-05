@@ -148,9 +148,10 @@ async fn bs_ca(
 
     if let Some(parent) = ca_path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::error!(path = %parent.display(), error = %e, "Bootstrap: failed to create CA parent dir");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
+                Json(json!({ "error": format!("create_dir_all {}: {}", parent.display(), e) })),
             )
                 .into_response();
         }
@@ -162,11 +163,14 @@ async fn bs_ca(
             tracing::info!(ca_path = %ca_path.display(), "Bootstrap: Shepherd CA installed");
             (StatusCode::OK, Json(json!({ "installed": true }))).into_response()
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!(ca_path = %ca_path.display(), error = %e, "Bootstrap: failed to write CA");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("write {}: {}", ca_path.display(), e) })),
+            )
+                .into_response()
+        }
     }
 }
 

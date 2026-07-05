@@ -302,7 +302,7 @@ _gen_corgi_config() {
       mtls: {
         certPath: ("${corgiStore}/" + $corgiHostname + "/fullchain.pem"),
         keyPath:  ("${corgiStore}/" + $corgiHostname + "/privkey.pem"),
-        caPath:   "${caTrustPath}"
+        caPath:   "${corgiRoot}/credo-catrust.pem"
       },
       flock: [],
       httpChallenge: {

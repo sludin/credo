@@ -243,14 +243,7 @@ pub async fn enroll_corgi(
     let ca_pem = std::fs::read_to_string(ca_path)
         .with_context(|| format!("Reading CA bundle: {}", ca_path.display()))?;
 
-    let check = |label: &'static str, resp: reqwest::Response| -> anyhow::Result<()> {
-        if resp.status().is_success() {
-            return Ok(());
-        }
-        anyhow::bail!("{} returned HTTP {}", label, resp.status())
-    };
-
-    check(
+    require_corgi_success(
         "POST /bootstrap/ca",
         corgi_client
             .post(format!("{}/bootstrap/ca", req.corgi_url))
@@ -259,9 +252,10 @@ pub async fn enroll_corgi(
             .send()
             .await
             .context("POST /bootstrap/ca")?,
-    )?;
+    )
+    .await?;
 
-    check(
+    require_corgi_success(
         "POST /bootstrap/cert",
         corgi_client
             .post(format!("{}/bootstrap/cert", req.corgi_url))
@@ -274,9 +268,10 @@ pub async fn enroll_corgi(
             .send()
             .await
             .context("POST /bootstrap/cert")?,
-    )?;
+    )
+    .await?;
 
-    check(
+    require_corgi_success(
         "POST /bootstrap/finalize",
         corgi_client
             .post(format!("{}/bootstrap/finalize", req.corgi_url))
@@ -284,7 +279,8 @@ pub async fn enroll_corgi(
             .send()
             .await
             .context("POST /bootstrap/finalize")?,
-    )?;
+    )
+    .await?;
 
     Ok(())
 }
@@ -292,6 +288,15 @@ pub async fn enroll_corgi(
 // ---------------------------------------------------------------------------
 // Helpers (moved from main.rs)
 // ---------------------------------------------------------------------------
+
+async fn require_corgi_success(label: &str, resp: reqwest::Response) -> anyhow::Result<()> {
+    if resp.status().is_success() {
+        return Ok(());
+    }
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    anyhow::bail!("Corgi {} returned {}: {}", label, status, body)
+}
 
 pub(crate) async fn sign_csr_via_vigil(
     client: &reqwest::Client,
