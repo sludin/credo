@@ -329,7 +329,8 @@ _gen_corgi_config() {
       },
       monitorIntervalSeconds: 30,
       serviceHooks: {},
-      defaultHooks: []
+      defaultHooks: [],
+      filePolicy: {group: "credo-cert"}
     }
     | if $dnsOverride != null then . + {dnsOverride: $dnsOverride} else . end'
 }

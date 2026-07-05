@@ -939,7 +939,8 @@ run_init() {
   echo ""
   echo "  Next steps (in order):"
   echo "    1. Review the file above and adjust if needed"
-  echo "    2. ./scripts/install setup   — create users, groups, systemd units on remote"
+  echo "    2. ./scripts/install setup   — create users, groups, dirs, systemd units on all configured hosts
+       (To add a new corgi later: ./scripts/install setup corgi:<name>)"
   echo "    3. ./scripts/install         — build and deploy binaries"
   echo "    4. ./scripts/bootstrap       — ceremony + service config + bootstrap sequence"
   echo ""
@@ -1004,12 +1005,25 @@ setup_users_groups() {
 }
 
 setup_cert_store() {
-  local host="$1" port="$2" ssh_opts="$3" base_dir="$4"
-  local cert_dir="${base_dir}/corgi/certs"
-  echo "[setup] Creating setgid cert store at $cert_dir..."
-  setup_run "sudo mkdir -p '$cert_dir' && sudo chown corgi:credo-cert '$cert_dir' && sudo chmod 2750 '$cert_dir'" \
+  # corgi_dir is the corgi remoteDir (e.g. /var/apps/credo/corgi).
+  # The cert store lives at corgi_dir/store/ with setgid so all new files
+  # inherit the credo-cert group automatically.
+  local host="$1" port="$2" ssh_opts="$3" corgi_dir="$4"
+  local store="${corgi_dir}/store"
+  echo "[setup] Creating corgi cert store: $store"
+  setup_run "sudo mkdir -p '${store}/archive' '${store}/live' '${store}/pending' && sudo chown corgi:credo-cert '${store}' '${store}/archive' '${store}/live' '${store}/pending' && sudo chmod 2750 '${store}' '${store}/live' && sudo chmod 2755 '${store}/archive' '${store}/pending'" \
     "$host" "$port" "$ssh_opts"
-  echo "[setup]   $cert_dir: owner=corgi:credo-cert mode=2750 (setgid)"
+  echo "[setup]   store/:         corgi:credo-cert 2750 (setgid, group-only traverse)"
+  echo "[setup]   store/archive/: corgi:credo-cert 2755 (setgid, world-traversable)"
+  echo "[setup]   store/live/:    corgi:credo-cert 2750 (setgid, group-only traverse)"
+  echo "[setup]   store/pending/: corgi:credo-cert 2755 (setgid, world-traversable)"
+}
+
+setup_service_dir() {
+  local host="$1" port="$2" ssh_opts="$3" svc="$4" dir="$5"
+  setup_run "sudo mkdir -p '$dir' && sudo chown '${svc}:${svc}' '$dir'" \
+    "$host" "$port" "$ssh_opts"
+  echo "[setup]   $dir (${svc}:${svc})"
 }
 
 write_systemd_unit() {
@@ -1070,6 +1084,79 @@ EOF
   echo "[setup]   wrote $unit_path"
 }
 
+run_setup_one_corgi() {
+  # Full setup for one corgi node: users/groups, corgi dir, cert store, systemd unit.
+  # Called by run_setup for each corgi entry and by run_setup_corgi_by_name for targeted setup.
+  local name="$1" host="$2" port="$3" ssh_opts="$4" remote_dir="$5"
+
+  echo ""
+  echo "================================================================"
+  printf "  credo install setup — corgi: %s\n" "$name"
+  printf "  Host    : %s\n" "$host"
+  printf "  Dir     : %s\n" "$remote_dir"
+  $SETUP_DRY_RUN && echo "  Mode    : DRY RUN"
+  echo "================================================================"
+  echo ""
+
+  setup_users_groups "$host" "$port" "$ssh_opts" "corgi"
+  echo ""
+
+  echo "[setup] Creating corgi directory..."
+  setup_service_dir "$host" "$port" "$ssh_opts" "corgi" "$remote_dir"
+  echo ""
+
+  setup_cert_store "$host" "$port" "$ssh_opts" "$remote_dir"
+  echo ""
+
+  echo "[setup] Writing systemd unit file..."
+  write_systemd_unit "$host" "$port" "$ssh_opts" "corgi" "${remote_dir}/corgi" "$remote_dir"
+
+  echo "[setup] Running systemctl daemon-reload..."
+  setup_run "sudo systemctl daemon-reload" "$host" "$port" "$ssh_opts"
+
+  echo ""
+  echo "================================================================"
+  echo "  Corgi $name setup complete."
+  echo "  Next: scripts/install corgi:$name   — deploy the binary"
+  echo "  Then on $host: sudo systemctl enable --now credo-corgi"
+  echo "================================================================"
+}
+
+run_setup_corgi_by_name() {
+  # Setup a specific corgi node by name — for adding new corgis to existing deployments.
+  local name="$1"
+  local config_path="$CONFIG_PATH"
+
+  if [[ ! -f "$config_path" ]]; then
+    echo "[setup] Config not found: $config_path" >&2
+    echo "[setup] Run: scripts/install init" >&2
+    exit 1
+  fi
+
+  local exists
+  exists=$(jq -r --arg n "$name" '.corgis[]? | select(.name == $n) | .name' "$config_path")
+  if [[ -z "$exists" ]]; then
+    local available
+    available=$(jq -r '.corgis[]?.name' "$config_path" | tr '\n' ' ')
+    echo "[setup] Corgi '$name' not found in $config_path" >&2
+    echo "[setup] Configured corgis: ${available:-(none)}" >&2
+    exit 1
+  fi
+
+  local host port ssh_opts remote_dir
+  host=$(jq -r --arg n "$name" '.corgis[] | select(.name == $n) | .host // empty' "$config_path")
+  port=$(jq -r --arg n "$name" '.corgis[] | select(.name == $n) | .sshPort // 22' "$config_path")
+  ssh_opts=$(jq -r --arg n "$name" '.corgis[] | select(.name == $n) | .sshOpts // ""' "$config_path")
+  remote_dir=$(jq -r --arg n "$name" '.corgis[] | select(.name == $n) | .remoteDir // empty' "$config_path")
+
+  if [[ -z "$host" || -z "$remote_dir" ]]; then
+    echo "[setup] Corgi '$name' is missing host or remoteDir in $config_path" >&2
+    exit 1
+  fi
+
+  run_setup_one_corgi "$name" "$host" "$port" "$ssh_opts" "$remote_dir"
+}
+
 run_setup() {
   local config_path="$CONFIG_PATH"
 
@@ -1079,83 +1166,91 @@ run_setup() {
     exit 1
   fi
 
-  # Read connection info from first configured service
-  local host port ssh_opts base_dir
-  host="$(jq -r '(.shepherd // .vigil // .dashboard // .corgis[0]) | .host // empty' "$config_path")"
-  port="$(jq -r '(.shepherd // .vigil // .dashboard // .corgis[0]) | .sshPort // 22' "$config_path")"
-  ssh_opts="$(jq -r '(.shepherd // .vigil // .dashboard // .corgis[0]) | .sshOpts // ""' "$config_path")"
+  # Collect main services (shepherd, vigil, dashboard) and their shared host
+  local main_services=()
+  local main_host="" main_port="22" main_ssh_opts=""
 
-  if [[ -z "$host" ]]; then
-    echo "[setup] Cannot determine host from $config_path" >&2
-    exit 1
-  fi
-
-  # Derive base_dir from the first service's remoteDir by stripping last component
-  local first_remote_dir
-  first_remote_dir="$(jq -r '(.shepherd // .vigil // .dashboard // .corgis[0]) | .remoteDir // empty' "$config_path")"
-  base_dir="${first_remote_dir%/*}"
-  if [[ -z "$base_dir" ]]; then
-    base_dir="/var/apps/credo"
-  fi
-
-  # Collect active services
-  local services=()
   for svc in shepherd vigil dashboard; do
     if jq -e ".$svc" "$config_path" >/dev/null 2>&1; then
-      services+=("$svc")
+      main_services+=("$svc")
+      if [[ -z "$main_host" ]]; then
+        main_host=$(jq -r --arg k "$svc" '.[$k].host // empty' "$config_path")
+        main_port=$(jq -r --arg k "$svc" '.[$k].sshPort // 22' "$config_path")
+        main_ssh_opts=$(jq -r --arg k "$svc" '.[$k].sshOpts // ""' "$config_path")
+      fi
     fi
   done
-  if jq -e '.corgis | length > 0' "$config_path" >/dev/null 2>&1; then
-    services+=("corgi")
+
+  # Setup main services on their host (if any)
+  if [[ ${#main_services[@]} -gt 0 && -n "$main_host" ]]; then
+    local first_remote_dir base_dir
+    first_remote_dir=$(jq -r --arg k "${main_services[0]}" '.[$k].remoteDir // empty' "$config_path")
+    base_dir="${first_remote_dir%/*}"
+    [[ -z "$base_dir" ]] && base_dir="/var/apps/credo"
+
+    echo ""
+    echo "================================================================"
+    echo "  credo install setup"
+    echo "  Host     : $main_host"
+    echo "  Base dir : $base_dir"
+    echo "  Services : ${main_services[*]}"
+    $SETUP_DRY_RUN && echo "  Mode     : DRY RUN"
+    echo "================================================================"
+    echo ""
+
+    setup_users_groups "$main_host" "$main_port" "$main_ssh_opts" "${main_services[@]}"
+    echo ""
+
+    echo "[setup] Creating service directories..."
+    local svc
+    for svc in "${main_services[@]}"; do
+      local svc_dir
+      svc_dir=$(jq -r --arg k "$svc" '.[$k].remoteDir // empty' "$config_path")
+      [[ -z "$svc_dir" ]] && continue
+      setup_service_dir "$main_host" "$main_port" "$main_ssh_opts" "$svc" "$svc_dir"
+    done
+    echo ""
+
+    echo "[setup] Writing systemd unit files..."
+    for svc in "${main_services[@]}"; do
+      local remote_dir
+      remote_dir=$(jq -r --arg k "$svc" '.[$k].remoteDir // empty' "$config_path")
+      [[ -z "$remote_dir" ]] && continue
+      write_systemd_unit "$main_host" "$main_port" "$main_ssh_opts" "$svc" \
+        "${remote_dir}/${svc}" "$remote_dir"
+    done
+
+    setup_run "sudo systemctl daemon-reload" "$main_host" "$main_port" "$main_ssh_opts"
+
+    echo ""
+    echo "================================================================"
+    echo "  Main service setup complete."
+    echo "  Units are NOT yet enabled or started."
+    echo "  After deploying binaries, run:"
+    for svc in "${main_services[@]}"; do
+      echo "    sudo systemctl enable --now credo-${svc}"
+    done
+    echo "================================================================"
   fi
 
-  if [[ ${#services[@]} -eq 0 ]]; then
+  # Setup each corgi on its own host (idempotent when on same host as main services)
+  if jq -e '.corgis | length > 0' "$config_path" >/dev/null 2>&1; then
+    local corgi_json name c_host c_port c_ssh_opts c_remote_dir
+    while IFS= read -r corgi_json; do
+      name=$(jq -r '.name // empty' <<< "$corgi_json")
+      c_host=$(jq -r '.host // empty' <<< "$corgi_json")
+      c_port=$(jq -r '.sshPort // 22' <<< "$corgi_json")
+      c_ssh_opts=$(jq -r '.sshOpts // ""' <<< "$corgi_json")
+      c_remote_dir=$(jq -r '.remoteDir // empty' <<< "$corgi_json")
+      [[ -z "$name" || -z "$c_host" ]] && continue
+      run_setup_one_corgi "$name" "$c_host" "$c_port" "$c_ssh_opts" "$c_remote_dir"
+    done < <(jq -c '.corgis[]' "$config_path")
+  fi
+
+  if [[ ${#main_services[@]} -eq 0 ]] && ! jq -e '.corgis | length > 0' "$config_path" >/dev/null 2>&1; then
     echo "[setup] No services configured in $config_path" >&2
     exit 1
   fi
-
-  echo ""
-  echo "================================================================"
-  echo "  credo install setup"
-  echo "  Host     : $host"
-  echo "  Base dir : $base_dir"
-  echo "  Services : ${services[*]}"
-  if $SETUP_DRY_RUN; then
-    echo "  Mode     : DRY RUN"
-  fi
-  echo "================================================================"
-  echo ""
-
-  setup_users_groups "$host" "$port" "$ssh_opts" "${services[@]}"
-  echo ""
-
-  echo "[setup] Writing systemd unit files..."
-  for svc in "${services[@]}"; do
-    local remote_dir exec_start
-    if [[ "$svc" == "corgi" ]]; then
-      remote_dir="$(jq -r '.corgis[0].remoteDir // empty' "$config_path")"
-    else
-      remote_dir="$(jq -r --arg k "$svc" '.[$k].remoteDir // empty' "$config_path")"
-    fi
-    [[ -z "$remote_dir" ]] && continue
-    exec_start="${remote_dir}/${svc}"
-    write_systemd_unit "$host" "$port" "$ssh_opts" "$svc" "$exec_start" "$remote_dir"
-  done
-
-  echo ""
-  echo "[setup] Running systemctl daemon-reload..."
-  setup_run "sudo systemctl daemon-reload" "$host" "$port" "$ssh_opts"
-
-  echo ""
-  echo "================================================================"
-  echo "  Setup complete."
-  echo "  Units are NOT yet enabled or started."
-  echo "  After deploying binaries, run:"
-  for svc in "${services[@]}"; do
-    echo "    sudo systemctl enable --now credo-${svc}"
-  done
-  echo "================================================================"
-  echo ""
 }
 
 # ---------------------------------------------------------------------------
@@ -1165,8 +1260,9 @@ run_setup() {
 print_usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/install init            Generate .install.json interactively
-  ./scripts/install setup           Create service users/groups and systemd units on remote
+  ./scripts/install init                Generate .install.json interactively
+  ./scripts/install setup               Create service users/groups, dirs, and systemd units (all hosts)
+  ./scripts/install setup corgi:<name>  Setup a single corgi node — useful when adding a new corgi
   ./scripts/install [options] [target ...]
 
 Targets (default: all):
@@ -1248,6 +1344,7 @@ main() {
 
   if [[ "${1:-}" == "setup" ]]; then
     shift
+    local setup_target=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --dry-run) SETUP_DRY_RUN=true ;;
@@ -1255,11 +1352,16 @@ main() {
           [[ -z "${2:-}" ]] && { echo "[setup] --config requires a path" >&2; exit 1; }
           CONFIG_PATH=$(realpath "$2"); shift ;;
         --config=*) CONFIG_PATH=$(realpath "${1#--config=}") ;;
+        corgi:*)   setup_target="${1#corgi:}" ;;
         *) echo "[setup] Unknown option: $1" >&2; exit 1 ;;
       esac
       shift
     done
-    run_setup
+    if [[ -n "$setup_target" ]]; then
+      run_setup_corgi_by_name "$setup_target"
+    else
+      run_setup
+    fi
     exit 0
   fi
 
