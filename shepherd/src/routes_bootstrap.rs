@@ -229,6 +229,9 @@ pub async fn enroll_corgi(
             anyhow::anyhow!("Missing csrPem in corgi response: {}", csr_resp)
         }
     })?;
+    let http_challenge_port: Option<u16> = csr_resp["httpChallengePort"]
+        .as_u64()
+        .and_then(|p| u16::try_from(p).ok());
 
     let fullchain_pem = sign_csr_via_vigil(vigil_client, vigil_url, csr_pem, 365)
         .await
@@ -281,6 +284,30 @@ pub async fn enroll_corgi(
             .context("POST /bootstrap/finalize")?,
     )
     .await?;
+
+    // Persist the enrolled corgi and refresh in-memory state so shepherd picks it up immediately.
+    let corgis_path = state.config.load().corgis_config_path.clone();
+    crate::corgis::save_corgi_entry(
+        &corgis_path,
+        &req.name,
+        &req.corgi_url,
+        Some(&req.identity_uri),
+        http_challenge_port,
+    )
+    .context("Saving corgi to corgis config")?;
+    match crate::corgis::load_corgis(&corgis_path) {
+        Ok(updated) => {
+            tracing::info!(
+                name = %req.name,
+                count = updated.len(),
+                "Corgi registered in corgis config"
+            );
+            *state.corgis.write().await = updated;
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Enrolled corgi saved but failed to reload corgis state");
+        }
+    }
 
     Ok(())
 }

@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::types::{CorgiMtlsConfig, CorgiNodeConfig};
@@ -114,4 +115,57 @@ pub fn load_corgis(path: &Path) -> Result<Vec<CorgiNodeConfig>> {
     }
 
     Ok(result)
+}
+
+/// Append (or replace) a corgi entry in the corgis config file and return the updated list.
+/// Reads the raw JSON (preserving template strings in defaults), mutates the `corgis` array,
+/// and writes atomically via a temp file + rename.
+pub fn save_corgi_entry(
+    path: &Path,
+    name: &str,
+    url: &str,
+    identity_uri: Option<&str>,
+    http_challenge_port: Option<u16>,
+) -> Result<()> {
+    let mut root: serde_json::Value = if path.exists() {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("Reading corgis config: {}", path.display()))?;
+        serde_json::from_str(&raw)
+            .with_context(|| format!("Parsing corgis config: {}", path.display()))?
+    } else {
+        serde_json::json!({ "corgis": [] })
+    };
+
+    let arr = root
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("Corgis config root is not an object"))?
+        .entry("corgis")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .ok_or_else(|| anyhow::anyhow!("'corgis' is not an array"))?;
+
+    // Remove any existing entry with the same name (idempotent re-enrollment).
+    arr.retain(|e| e.get("name").and_then(|v| v.as_str()) != Some(name));
+
+    let mut entry = serde_json::json!({ "name": name, "url": url });
+    if let Some(uri) = identity_uri {
+        entry["identityUri"] = serde_json::Value::String(uri.to_string());
+    }
+    if let Some(port) = http_challenge_port {
+        entry["httpChallengePort"] = serde_json::Value::Number(port.into());
+    }
+    arr.push(entry);
+
+    let contents = serde_json::to_string_pretty(&root).context("Serializing corgis config")?;
+    let tmp = path.with_extension("json.tmp");
+    let mut f = std::fs::File::create(&tmp)
+        .with_context(|| format!("Creating temp file: {}", tmp.display()))?;
+    f.write_all(contents.as_bytes())
+        .with_context(|| format!("Writing temp file: {}", tmp.display()))?;
+    f.sync_all().context("Flushing temp file")?;
+    drop(f);
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("Renaming {} -> {}", tmp.display(), path.display()))?;
+
+    Ok(())
 }

@@ -104,7 +104,15 @@ async fn bs_csr(
     match generate_key_and_csr(&entry, &key_path, &csr_req, config_identity_uri) {
         Ok(csr_pem) => {
             tracing::info!(key_path = %key_path.display(), "Bootstrap: ECDSA key + CSR generated");
-            (StatusCode::OK, Json(json!({ "csrPem": csr_pem }))).into_response()
+            let http_challenge_port = state.config.http_challenge.port;
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "csrPem": csr_pem,
+                    "httpChallengePort": http_challenge_port,
+                })),
+            )
+                .into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
