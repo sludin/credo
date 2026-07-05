@@ -165,6 +165,9 @@ pub struct BootstrapCorgiRequest {
     pub fingerprint: String,
     pub identity_uri: String,
     pub corgi_url: String,
+    /// CA name to use for the corgi's own cert assignment (default: "vigil").
+    #[serde(default)]
+    pub ca: Option<String>,
 }
 
 pub async fn bootstrap_corgi(
@@ -232,6 +235,7 @@ pub async fn enroll_corgi(
     let http_challenge_port: Option<u16> = csr_resp["httpChallengePort"]
         .as_u64()
         .and_then(|p| u16::try_from(p).ok());
+    let common_name: Option<String> = csr_resp["commonName"].as_str().map(str::to_string);
 
     let fullchain_pem = sign_csr_via_vigil(vigil_client, vigil_url, csr_pem, 365)
         .await
@@ -307,6 +311,52 @@ pub async fn enroll_corgi(
         Err(e) => {
             tracing::warn!(error = %e, "Enrolled corgi saved but failed to reload corgis state");
         }
+    }
+
+    // Add an assignment for the corgi's own cert so shepherd manages it going forward.
+    if let Some(cn) = common_name {
+        let ca = req.ca.as_deref().unwrap_or("vigil").to_string();
+        let new_assignment = crate::types::ManagedAssignment {
+            cert_name: cn.clone(),
+            corgi: Some(req.name.clone()),
+            ca,
+            domain: Some(cn.clone()),
+            sans: vec![cn.clone()],
+            identity_uri: Some(req.identity_uri.clone()),
+            validation: Some(crate::types::AssignmentValidation {
+                validation_type: Some("http-01".to_string()),
+                force_revalidate: false,
+                methods: None,
+            }),
+            renew_before_days: None,
+            days: None,
+            cert_mode: None,
+            key_mode: None,
+            cert_owner: None,
+            cert_group: None,
+            key_owner: None,
+            key_group: None,
+            key_algorithm: None,
+            hooks: None,
+        };
+        let assignments_path = state.config.load().assignments_config_path.clone();
+        let mut assignments = crate::assignments::load_assignments(&assignments_path)
+            .context("Loading assignments for corgi cert registration")?;
+        assignments.retain(|a| a.cert_name != cn);
+        assignments.push(new_assignment);
+        crate::assignments::save_assignments(&assignments_path, &assignments)
+            .context("Saving corgi cert assignment")?;
+        tracing::info!(
+            cert_name = %cn,
+            corgi = %req.name,
+            "Corgi cert assignment registered"
+        );
+        *state.assignments.write().await = assignments;
+    } else {
+        tracing::warn!(
+            name = %req.name,
+            "Corgi CSR response missing commonName — cert assignment not created automatically"
+        );
     }
 
     Ok(())

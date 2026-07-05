@@ -105,10 +105,12 @@ async fn bs_csr(
         Ok(csr_pem) => {
             tracing::info!(key_path = %key_path.display(), "Bootstrap: ECDSA key + CSR generated");
             let http_challenge_port = state.config.http_challenge.port;
+            let common_name = &state.config.common_name;
             (
                 StatusCode::OK,
                 Json(json!({
                     "csrPem": csr_pem,
+                    "commonName": common_name,
                     "httpChallengePort": http_challenge_port,
                 })),
             )

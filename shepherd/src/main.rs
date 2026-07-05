@@ -99,6 +99,9 @@ enum BootstrapCommands {
         /// Corgi API URL; if omitted, looked up from shepherd.corgis.json by name
         #[arg(long)]
         corgi_url: Option<String>,
+        /// CA name to use for the corgi's own cert assignment (default: vigil)
+        #[arg(long, default_value = "vigil")]
+        ca: String,
     },
 }
 
@@ -213,6 +216,7 @@ async fn main() -> Result<()> {
                 fingerprint,
                 identity_uri,
                 corgi_url,
+                ca,
             } => {
                 cmd_bootstrap_corgi(BootstrapCorgiArgs {
                     admin_token: admin_token.as_deref(),
@@ -223,6 +227,7 @@ async fn main() -> Result<()> {
                     fingerprint: &fingerprint,
                     identity_uri: &identity_uri,
                     corgi_url: corgi_url.as_deref(),
+                    ca: &ca,
                 })
                 .await
             }
@@ -680,6 +685,7 @@ struct BootstrapCorgiArgs<'a> {
     fingerprint: &'a str,
     identity_uri: &'a str,
     corgi_url: Option<&'a str>,
+    ca: &'a str,
 }
 
 async fn cmd_bootstrap_corgi(args: BootstrapCorgiArgs<'_>) -> Result<()> {
@@ -692,6 +698,7 @@ async fn cmd_bootstrap_corgi(args: BootstrapCorgiArgs<'_>) -> Result<()> {
         fingerprint,
         identity_uri,
         corgi_url,
+        ca,
     } = args;
     let config = load_config().context("Loading config")?;
     let shepherd_url = shepherd_dashboard_url(&config);
@@ -720,6 +727,7 @@ async fn cmd_bootstrap_corgi(args: BootstrapCorgiArgs<'_>) -> Result<()> {
         "fingerprint": fingerprint,
         "identityUri": identity_uri,
         "corgiUrl":    resolved_url,
+        "ca":          ca,
     });
 
     let (client, endpoint, auth_header) = match admin_token {
