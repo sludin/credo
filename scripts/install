@@ -454,7 +454,7 @@ deploy_service() {
   local svc_json
   svc_json=$(jq -c --arg k "$service_key" '.[$k]' "$CONFIG_PATH")
 
-  local host remote_dir port ssh_opts rsync_opts owner post_deploy rust_target rust_profile files_str dir_mode sudo_rsync remote_user remote_group service_name restart_mode
+  local host remote_dir port ssh_opts rsync_opts owner post_deploy rust_target rust_profile files_str dir_mode sudo_rsync remote_user remote_group service_name restart_mode login_as_root
   host=$(jq -r '.host // empty' <<< "$svc_json")
   remote_dir=$(jq -r '.remoteDir // empty' <<< "$svc_json")
   port=$(jq -r '.sshPort // 22' <<< "$svc_json")
@@ -471,11 +471,17 @@ deploy_service() {
   remote_group=$(jq -r '.remoteGroup // empty' <<< "$svc_json")
   service_name=$(jq -r '.serviceName // empty' <<< "$svc_json")
   restart_mode=$(jq -r '.restartMode // "restart"' <<< "$svc_json")
+  login_as_root=$(jq -r '.loginAsRoot // false' <<< "$svc_json")
+  if [[ "$login_as_root" == "true" ]]; then sudo_rsync="false"; fi
   if [[ -z "$owner" && -n "$remote_user" && -n "$remote_group" ]]; then
     owner="${remote_user}:${remote_group}"
   fi
   if [[ -z "$post_deploy" && -n "$service_name" && "$restart_mode" != "none" ]]; then
-    post_deploy="sudo systemctl $restart_mode '$service_name'"
+    if [[ "$login_as_root" == "true" ]]; then
+      post_deploy="systemctl $restart_mode '$service_name'"
+    else
+      post_deploy="sudo systemctl $restart_mode '$service_name'"
+    fi
   fi
 
   if [[ -n "$rust_target" ]]; then
@@ -533,7 +539,7 @@ deploy_corgi_by_name() {
   local corgi_json
   corgi_json=$(jq -c --arg n "$name" '.corgis[] | select(.name == $n)' "$CONFIG_PATH")
 
-  local host remote_dir port ssh_opts rsync_opts owner post_deploy rust_target rust_profile files_str dir_mode sudo_rsync remote_user remote_group service_name restart_mode
+  local host remote_dir port ssh_opts rsync_opts owner post_deploy rust_target rust_profile files_str dir_mode sudo_rsync remote_user remote_group service_name restart_mode login_as_root
   host=$(jq -r '.host // empty' <<< "$corgi_json")
   remote_dir=$(jq -r '.remoteDir // empty' <<< "$corgi_json")
   port=$(jq -r '.sshPort // 22' <<< "$corgi_json")
@@ -550,11 +556,17 @@ deploy_corgi_by_name() {
   remote_group=$(jq -r '.remoteGroup // empty' <<< "$corgi_json")
   service_name=$(jq -r '.serviceName // empty' <<< "$corgi_json")
   restart_mode=$(jq -r '.restartMode // "restart"' <<< "$corgi_json")
+  login_as_root=$(jq -r '.loginAsRoot // false' <<< "$corgi_json")
+  if [[ "$login_as_root" == "true" ]]; then sudo_rsync="false"; fi
   if [[ -z "$owner" && -n "$remote_user" && -n "$remote_group" ]]; then
     owner="${remote_user}:${remote_group}"
   fi
   if [[ -z "$post_deploy" && -n "$service_name" && "$restart_mode" != "none" ]]; then
-    post_deploy="sudo systemctl $restart_mode '$service_name'"
+    if [[ "$login_as_root" == "true" ]]; then
+      post_deploy="systemctl $restart_mode '$service_name'"
+    else
+      post_deploy="sudo systemctl $restart_mode '$service_name'"
+    fi
   fi
 
   if [[ -n "$rust_target" ]]; then
@@ -804,7 +816,7 @@ build_dashboard_json() {
 }
 
 build_corgi_entry_json() {
-  local name="$1" host="$2" port="$3" ssh_opts="$4" base_dir="$5" rust_target="$6" sudo_rsync="$7"
+  local name="$1" host="$2" port="$3" ssh_opts="$4" base_dir="$5" rust_target="$6" sudo_rsync="$7" login_as_root="${8:-false}"
   local remote_dir="${base_dir}/corgi"
 
   local json
@@ -818,9 +830,11 @@ build_corgi_entry_json() {
     --arg remote_group "corgi" \
     --arg service_name "credo-corgi" \
     --argjson sudo_rsync "$sudo_rsync" \
+    --argjson login_as_root "$login_as_root" \
     '{name: $name, host: $host, remoteDir: $remote_dir, sshPort: $port,
       rustTarget: $rust_target, rustProfile: "release",
-      sudoRsync: $sudo_rsync, remoteUser: $remote_user,
+      sudoRsync: $sudo_rsync, loginAsRoot: $login_as_root,
+      remoteUser: $remote_user,
       remoteGroup: $remote_group, serviceName: $service_name}')
   if [[ -n "$ssh_opts" ]]; then
     json=$(jq -c --arg v "$ssh_opts" '. + {sshOpts: $v}' <<< "$json")
@@ -902,10 +916,14 @@ run_init() {
 
   # -- Corgi instance --
   local corgi_names=()
+  local corgi_login_as_roots=()
   if [[ "$want_corgi" == "y" ]]; then
-    local cname
+    local cname corgi_lar_yn corgi_lar
     cname="$(ask_init "Corgi instance name" "corgi-01")"
+    corgi_lar_yn="$(ask_init_yn "  Login as root on corgi host (no sudo available, e.g. router/OpenWrt)" "n")"
+    if [[ "$corgi_lar_yn" == "y" ]]; then corgi_lar="true"; else corgi_lar="false"; fi
     corgi_names=("$cname")
+    corgi_login_as_roots=("$corgi_lar")
     echo ""
   fi
 
@@ -930,10 +948,11 @@ run_init() {
 
   if [[ "$want_corgi" == "y" && ${#corgi_names[@]} -gt 0 ]]; then
     local corgis_arr="[]"
-    local cname
-    for cname in "${corgi_names[@]}"; do
+    local i cname
+    for i in "${!corgi_names[@]}"; do
+      cname="${corgi_names[$i]}"
       local entry
-      entry="$(build_corgi_entry_json "$cname" "$host" "$port" "$ssh_opts" "$base_dir" "$rust_target" "$sudo_rsync")"
+      entry="$(build_corgi_entry_json "$cname" "$host" "$port" "$ssh_opts" "$base_dir" "$rust_target" "$sudo_rsync" "${corgi_login_as_roots[$i]:-false}")"
       corgis_arr="$(jq -c --argjson e "$entry" '. + [$e]' <<< "$corgis_arr")"
     done
     config_json="$(jq -c --argjson corgis "$corgis_arr" '. + {corgis: $corgis}' <<< "$config_json")"
@@ -965,6 +984,7 @@ run_init() {
 # ---------------------------------------------------------------------------
 
 SETUP_DRY_RUN=false
+SETUP_SUDO="sudo"  # Set to "" for loginAsRoot machines (no sudo available)
 
 setup_run() {
   local cmd="$1" host="$2" port="${3:-22}" ssh_opts="${4:-}"
@@ -986,7 +1006,7 @@ setup_users_groups() {
   echo "[setup] Creating system users and groups..."
 
   # credo-cert group for cert consumers
-  setup_run "getent group credo-cert >/dev/null 2>&1 || sudo groupadd --system credo-cert" \
+  setup_run "getent group credo-cert >/dev/null 2>&1 || $SETUP_SUDO groupadd --system credo-cert" \
     "$host" "$port" "$ssh_opts"
   echo "[setup]   group: credo-cert"
 
@@ -995,9 +1015,9 @@ setup_users_groups() {
     # Always ensure the primary group exists first — create user only if absent.
     # Doing these separately handles the case where a prior partial setup created
     # the user but not its primary group (e.g. useradd was run without --user-group).
-    setup_run "getent group '$svc' >/dev/null 2>&1 || sudo groupadd --system '$svc'" \
+    setup_run "getent group '$svc' >/dev/null 2>&1 || $SETUP_SUDO groupadd --system '$svc'" \
       "$host" "$port" "$ssh_opts"
-    setup_run "id '$svc' >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin -g '$svc' '$svc'" \
+    setup_run "id '$svc' >/dev/null 2>&1 || $SETUP_SUDO useradd --system --no-create-home --shell /usr/sbin/nologin -g '$svc' '$svc'" \
       "$host" "$port" "$ssh_opts"
     echo "[setup]   user/group: $svc"
   done
@@ -1008,7 +1028,7 @@ setup_users_groups() {
     local s
     for s in "${services[@]}"; do [[ "$s" == "$svc" ]] && found=true && break; done
     if $found; then
-      setup_run "sudo usermod -aG credo-cert '$svc'" "$host" "$port" "$ssh_opts"
+      setup_run "$SETUP_SUDO usermod -aG credo-cert '$svc'" "$host" "$port" "$ssh_opts"
       echo "[setup]   $svc added to credo-cert"
     fi
   done
@@ -1021,7 +1041,7 @@ setup_cert_store() {
   local host="$1" port="$2" ssh_opts="$3" corgi_dir="$4"
   local store="${corgi_dir}/store"
   echo "[setup] Creating corgi cert store: $store"
-  setup_run "sudo mkdir -p '${store}/archive' '${store}/live' '${store}/pending' && sudo chown corgi:credo-cert '${store}' '${store}/archive' '${store}/live' '${store}/pending' && sudo chmod 2750 '${store}' '${store}/live' && sudo chmod 2755 '${store}/archive' '${store}/pending'" \
+  setup_run "$SETUP_SUDO mkdir -p '${store}/archive' '${store}/live' '${store}/pending' && $SETUP_SUDO chown corgi:credo-cert '${store}' '${store}/archive' '${store}/live' '${store}/pending' && $SETUP_SUDO chmod 2750 '${store}' '${store}/live' && $SETUP_SUDO chmod 2755 '${store}/archive' '${store}/pending'" \
     "$host" "$port" "$ssh_opts"
   echo "[setup]   store/:         corgi:credo-cert 2750 (setgid, group-only traverse)"
   echo "[setup]   store/archive/: corgi:credo-cert 2755 (setgid, world-traversable)"
@@ -1031,7 +1051,7 @@ setup_cert_store() {
 
 setup_service_dir() {
   local host="$1" port="$2" ssh_opts="$3" svc="$4" dir="$5"
-  setup_run "sudo mkdir -p '$dir' && sudo chown '${svc}:${svc}' '$dir'" \
+  setup_run "$SETUP_SUDO mkdir -p '$dir' && $SETUP_SUDO chown '${svc}:${svc}' '$dir'" \
     "$host" "$port" "$ssh_opts"
   echo "[setup]   $dir (${svc}:${svc})"
 }
@@ -1057,7 +1077,7 @@ setup_ca_cert() {
 
   if $SETUP_DRY_RUN; then
     echo "[setup] DRY RUN: deploy $local_ca_cert -> ${host}:${remote_ca_path}"
-    echo "[setup] DRY RUN: sudo chown corgi:corgi '$remote_ca_path' && sudo chmod 644 '$remote_ca_path'"
+    echo "[setup] DRY RUN: $SETUP_SUDO chown corgi:corgi '$remote_ca_path' && $SETUP_SUDO chmod 644 '$remote_ca_path'"
     return 0
   fi
 
@@ -1065,14 +1085,18 @@ setup_ca_cert() {
   remote_ca_dir="$(dirname "$remote_ca_path")"
 
   if is_local "$host"; then
-    sudo mkdir -p "$remote_ca_dir"
-    sudo cp "$local_ca_cert" "$remote_ca_path"
-    sudo chown corgi:corgi "$remote_ca_path"
-    sudo chmod 644 "$remote_ca_path"
+    # shellcheck disable=SC2086
+    $SETUP_SUDO mkdir -p "$remote_ca_dir"
+    # shellcheck disable=SC2086
+    $SETUP_SUDO cp "$local_ca_cert" "$remote_ca_path"
+    # shellcheck disable=SC2086
+    $SETUP_SUDO chown corgi:corgi "$remote_ca_path"
+    # shellcheck disable=SC2086
+    $SETUP_SUDO chmod 644 "$remote_ca_path"
   else
     # shellcheck disable=SC2086
     cat "$local_ca_cert" | ssh -p "$port" $ssh_opts "$host" \
-      "sudo mkdir -p '$remote_ca_dir' && sudo tee '$remote_ca_path' > /dev/null && sudo chown corgi:corgi '$remote_ca_path' && sudo chmod 644 '$remote_ca_path'"
+      "$SETUP_SUDO mkdir -p '$remote_ca_dir' && $SETUP_SUDO tee '$remote_ca_path' > /dev/null && $SETUP_SUDO chown corgi:corgi '$remote_ca_path' && $SETUP_SUDO chmod 644 '$remote_ca_path'"
   fi
   echo "[setup]   $remote_ca_path (corgi:corgi 644)"
 }
@@ -1127,10 +1151,11 @@ EOF
   fi
 
   if is_local "$host"; then
-    printf '%s\n' "$unit" | sudo tee "$unit_path" >/dev/null
+    # shellcheck disable=SC2086
+    printf '%s\n' "$unit" | $SETUP_SUDO tee "$unit_path" >/dev/null
   else
     # shellcheck disable=SC2086
-    printf '%s\n' "$unit" | ssh -p "$port" $ssh_opts "$host" "sudo tee '$unit_path' >/dev/null"
+    printf '%s\n' "$unit" | ssh -p "$port" $ssh_opts "$host" "$SETUP_SUDO tee '$unit_path' >/dev/null"
   fi
   echo "[setup]   wrote $unit_path"
 }
@@ -1140,11 +1165,21 @@ run_setup_one_corgi() {
   # Called by run_setup for each corgi entry and by run_setup_corgi_by_name for targeted setup.
   local name="$1" host="$2" port="$3" ssh_opts="$4" remote_dir="$5"
 
+  # Set SETUP_SUDO based on the loginAsRoot field for this corgi entry.
+  local login_as_root
+  login_as_root=$(jq -r --arg n "$name" '.corgis[] | select(.name == $n) | .loginAsRoot // false' "$CONFIG_PATH")
+  if [[ "$login_as_root" == "true" ]]; then
+    SETUP_SUDO=""
+  else
+    SETUP_SUDO="sudo"
+  fi
+
   echo ""
   echo "================================================================"
   printf "  credo install setup — corgi: %s\n" "$name"
   printf "  Host    : %s\n" "$host"
   printf "  Dir     : %s\n" "$remote_dir"
+  [[ "$login_as_root" == "true" ]] && echo "  Login   : root (no sudo)"
   $SETUP_DRY_RUN && echo "  Mode    : DRY RUN"
   echo "================================================================"
   echo ""
@@ -1171,13 +1206,13 @@ run_setup_one_corgi() {
   write_systemd_unit "$host" "$port" "$ssh_opts" "corgi" "${remote_dir}/corgi" "$remote_dir"
 
   echo "[setup] Running systemctl daemon-reload..."
-  setup_run "sudo systemctl daemon-reload" "$host" "$port" "$ssh_opts"
+  setup_run "$SETUP_SUDO systemctl daemon-reload" "$host" "$port" "$ssh_opts"
 
   echo ""
   echo "================================================================"
   echo "  Corgi $name setup complete."
   echo "  Next: scripts/install corgi:$name   — deploy the binary"
-  echo "  Then on $host: sudo systemctl enable --now credo-corgi"
+  echo "  Then on $host: ${SETUP_SUDO:+$SETUP_SUDO }systemctl enable --now credo-corgi"
   echo "================================================================"
 }
 
@@ -1242,10 +1277,12 @@ run_setup() {
 
   # Setup main services on their host (if any)
   if [[ ${#main_services[@]} -gt 0 && -n "$main_host" ]]; then
-    local first_remote_dir base_dir
+    local first_remote_dir base_dir main_login_as_root
     first_remote_dir=$(jq -r --arg k "${main_services[0]}" '.[$k].remoteDir // empty' "$config_path")
     base_dir="${first_remote_dir%/*}"
     [[ -z "$base_dir" ]] && base_dir="/var/apps/credo"
+    main_login_as_root=$(jq -r --arg k "${main_services[0]}" '.[$k].loginAsRoot // false' "$config_path")
+    if [[ "$main_login_as_root" == "true" ]]; then SETUP_SUDO=""; else SETUP_SUDO="sudo"; fi
 
     echo ""
     echo "================================================================"
@@ -1279,7 +1316,7 @@ run_setup() {
         "${remote_dir}/${svc}" "$remote_dir"
     done
 
-    setup_run "sudo systemctl daemon-reload" "$main_host" "$main_port" "$main_ssh_opts"
+    setup_run "$SETUP_SUDO systemctl daemon-reload" "$main_host" "$main_port" "$main_ssh_opts"
 
     echo ""
     echo "================================================================"
@@ -1287,7 +1324,7 @@ run_setup() {
     echo "  Units are NOT yet enabled or started."
     echo "  After deploying binaries, run:"
     for svc in "${main_services[@]}"; do
-      echo "    sudo systemctl enable --now credo-${svc}"
+      echo "    ${SETUP_SUDO:+$SETUP_SUDO }systemctl enable --now credo-${svc}"
     done
     echo "================================================================"
   fi

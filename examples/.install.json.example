@@ -40,6 +40,20 @@
       "rustTarget": "x86_64-unknown-linux-musl",
       "rustProfile": "release",
       "sudoRsync": true,
+      "loginAsRoot": false,
+      "remoteUser": "corgi",
+      "remoteGroup": "corgi",
+      "serviceName": "credo-corgi"
+    },
+    {
+      "name": "corgi-03",
+      "host": "root@10.4.1.3",
+      "remoteDir": "/var/apps/credo/corgi",
+      "sshPort": 22,
+      "rustTarget": "armv7-unknown-linux-musleabihf",
+      "rustProfile": "release",
+      "sudoRsync": false,
+      "loginAsRoot": true,
       "remoteUser": "corgi",
       "remoteGroup": "corgi",
       "serviceName": "credo-corgi"
