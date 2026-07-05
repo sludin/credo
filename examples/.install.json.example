@@ -1,4 +1,5 @@
 {
+  "localCaTrustPath": "/path/to/ceremony/output/credo-catrust.pem",
   "shepherd": {
     "host": "deploy@10.4.1.10",
     "remoteDir": "/var/apps/credo/shepherd",
