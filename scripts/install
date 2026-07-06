@@ -471,7 +471,7 @@ deploy_service() {
   remote_group=$(jq -r '.remoteGroup // empty' <<< "$svc_json")
   service_name=$(jq -r '.serviceName // empty' <<< "$svc_json")
   restart_mode=$(jq -r '.restartMode // "restart"' <<< "$svc_json")
-  use_sudo=$(jq -r '.useSudo // true' <<< "$svc_json")
+  use_sudo=$(jq -r 'if .useSudo == false then "false" else "true" end' <<< "$svc_json")
   if [[ "$use_sudo" == "false" ]]; then sudo_rsync="false"; fi
   if [[ -z "$owner" && -n "$remote_user" && -n "$remote_group" ]]; then
     owner="${remote_user}:${remote_group}"
@@ -1167,7 +1167,7 @@ run_setup_one_corgi() {
 
   # Set SETUP_SUDO based on the useSudo field for this corgi entry.
   local use_sudo
-  use_sudo=$(jq -r --arg n "$name" '.corgis[] | select(.name == $n) | .useSudo // true' "$CONFIG_PATH")
+  use_sudo=$(jq -r --arg n "$name" '.corgis[] | select(.name == $n) | if .useSudo == false then "false" else "true" end' "$CONFIG_PATH")
   if [[ "$use_sudo" == "false" ]]; then
     SETUP_SUDO=""
   else
@@ -1282,7 +1282,7 @@ run_setup() {
     base_dir="${first_remote_dir%/*}"
     [[ -z "$base_dir" ]] && base_dir="/var/apps/credo"
     local main_use_sudo
-    main_use_sudo=$(jq -r --arg k "${main_services[0]}" '.[$k].useSudo // true' "$config_path")
+    main_use_sudo=$(jq -r --arg k "${main_services[0]}" 'if .[$k].useSudo == false then "false" else "true" end' "$config_path")
     if [[ "$main_use_sudo" == "false" ]]; then SETUP_SUDO=""; else SETUP_SUDO="sudo"; fi
 
     echo ""
