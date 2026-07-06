@@ -40,7 +40,7 @@
       "rustTarget": "x86_64-unknown-linux-musl",
       "rustProfile": "release",
       "sudoRsync": true,
-      "loginAsRoot": false,
+      "useSudo": true,
       "remoteUser": "corgi",
       "remoteGroup": "corgi",
       "serviceName": "credo-corgi"
@@ -53,7 +53,7 @@
       "rustTarget": "armv7-unknown-linux-musleabihf",
       "rustProfile": "release",
       "sudoRsync": false,
-      "loginAsRoot": true,
+      "useSudo": false,
       "remoteUser": "corgi",
       "remoteGroup": "corgi",
       "serviceName": "credo-corgi"
