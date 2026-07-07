@@ -115,9 +115,19 @@ npm_install_remote() {
 }
 
 chown_dir() {
-  local host="$1" port="$2" ssh_opts="$3" dir="$4" owner="$5"
-  echo "[install] chown -R $owner $dir"
-  run_cmd "$host" "$port" "$ssh_opts" "sudo chown -R '$owner' '$dir'"
+  local host="$1" port="$2" ssh_opts="$3" dir="$4" owner="$5" use_sudo="${6:-true}" files_str="${7:-}"
+  echo "[install] chown $owner $dir"
+  if [[ "$use_sudo" == "true" ]]; then
+    run_cmd "$host" "$port" "$ssh_opts" "sudo chown -R '$owner' '$dir'"
+  else
+    # Non-recursive: chown the dir itself then each deployed file/subdir individually.
+    # Preserves special sub-directory ownership (e.g. store/ → corgi:credo-cert).
+    local cmd="chown '$owner' '$dir'"
+    for f in $files_str; do
+      cmd+=" && chown -R '$owner' '$dir/$f'"
+    done
+    run_cmd "$host" "$port" "$ssh_opts" "$cmd"
+  fi
 }
 
 chmod_dir() {
@@ -369,7 +379,7 @@ _deploy_rust() {
   rsync_deploy "$staging_dir" "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts" "$sudo_rsync" "$remote_user"
 
   if ! $DRY_RUN; then
-    if [[ -n "$owner" ]]; then chown_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$owner"; fi
+    if [[ -n "$owner" ]]; then chown_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$owner" "$sudo_rsync" "$files_str"; fi
     if [[ -n "$dir_mode" ]]; then chmod_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$dir_mode"; fi
     if [[ -n "$post_deploy" ]]; then run_post_deploy "$host" "$port" "$ssh_opts" "$remote_dir" "$post_deploy"; fi
   fi
@@ -400,7 +410,7 @@ _deploy_ts() {
 
   if ! $DRY_RUN; then
     npm_install_remote "$host" "$port" "$ssh_opts" "$remote_dir" "$remote_user"
-    if [[ -n "$owner" ]]; then chown_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$owner"; fi
+    if [[ -n "$owner" ]]; then chown_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$owner" "$sudo_rsync" "$files_str"; fi
     if [[ -n "$dir_mode" ]]; then chmod_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$dir_mode"; fi
     if [[ -n "$post_deploy" ]]; then run_post_deploy "$host" "$port" "$ssh_opts" "$remote_dir" "$post_deploy"; fi
   fi
@@ -430,7 +440,7 @@ _deploy_shell() {
   rsync_deploy "$staging_dir" "$host" "$remote_dir" "$port" "$ssh_opts" "$rsync_opts" "$sudo_rsync" "$remote_user"
 
   if ! $DRY_RUN; then
-    if [[ -n "$owner" ]]; then chown_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$owner"; fi
+    if [[ -n "$owner" ]]; then chown_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$owner" "$sudo_rsync" "$files_str"; fi
     if [[ -n "$dir_mode" ]]; then chmod_dir "$host" "$port" "$ssh_opts" "$remote_dir" "$dir_mode"; fi
     if [[ -n "$post_deploy" ]]; then run_post_deploy "$host" "$port" "$ssh_opts" "$remote_dir" "$post_deploy"; fi
   fi

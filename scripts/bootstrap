@@ -377,10 +377,9 @@ collect_answers() {
   save_bootstrap
 
   printf '\n=== Ceremony ===\n'
-  local _def_ca_ran="n"
-  if [[ -f "$LOCAL_CA_DIR/int-ecdsa/certs/int-ecdsa.chain.pem" ]]; then
-    _def_ca_ran="y"
-  fi
+  local _def_ca_ran
+  _def_ca_ran="$(_df '.ceremony.alreadyRan' 'false')"
+  [[ "$_def_ca_ran" == "true" ]] && _def_ca_ran="y" || _def_ca_ran="n"
   if $AUTO; then
     local _auto_ran
     _auto_ran=$(_df '.ceremony.alreadyRan' 'false')
@@ -623,11 +622,6 @@ phase_ceremony() {
   local int_chain="$ca_dir/int-ecdsa/certs/int-ecdsa.chain.pem"
   local int_cert="$ca_dir/int-ecdsa/certs/int-ecdsa.cert.pem"
   local int_key="$ca_dir/int-ecdsa/private/int-ecdsa.key.pem"
-
-  if [[ -f "$int_chain" && -f "$int_cert" && -f "$int_key" ]]; then
-    echo "[bootstrap] Ceremony already complete. Using existing CA at $ca_dir"
-    return
-  fi
 
   echo "[bootstrap] Starting PKI ceremony..."
   echo "[bootstrap] Output will be written to: $ca_dir"

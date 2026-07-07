@@ -29,7 +29,7 @@ impl IntoResponse for AppError {
             AppError::Forbidden(m) => (StatusCode::FORBIDDEN, m.clone()),
             AppError::NotFound(m) => (StatusCode::NOT_FOUND, m.clone()),
             AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
-            AppError::Internal(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            AppError::Internal(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")),
         };
         (status, Json(json!({ "error": message }))).into_response()
     }

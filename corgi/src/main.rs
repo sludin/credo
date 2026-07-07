@@ -15,6 +15,10 @@ use corgi::state::AppState;
 #[derive(Parser)]
 #[command(name = "corgi", about = "Distributed TLS certificate agent", version)]
 struct Cli {
+    /// Skip the check that corgi is run as the owner of its binary.
+    /// Use this only when you intentionally run as a different user.
+    #[arg(long, global = true)]
+    allow_wrong_user: bool,
     #[command(subcommand)]
     command: Commands,
 }
@@ -48,6 +52,43 @@ enum ServerCommands {
 }
 
 // ---------------------------------------------------------------------------
+// User check
+// ---------------------------------------------------------------------------
+
+fn check_running_user() -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let exe = std::env::current_exe().context("Resolving corgi binary path")?;
+    let meta = std::fs::metadata(&exe)
+        .with_context(|| format!("Stat-ing corgi binary: {}", exe.display()))?;
+    let binary_uid = nix::unistd::Uid::from_raw(meta.uid());
+    let current_uid = nix::unistd::getuid();
+
+    if current_uid == binary_uid {
+        return Ok(());
+    }
+
+    let binary_name = nix::unistd::User::from_uid(binary_uid)
+        .ok()
+        .flatten()
+        .map(|u| u.name)
+        .unwrap_or_else(|| format!("uid {}", binary_uid));
+    let current_name = nix::unistd::User::from_uid(current_uid)
+        .ok()
+        .flatten()
+        .map(|u| u.name)
+        .unwrap_or_else(|| format!("uid {}", current_uid));
+
+    anyhow::bail!(
+        "corgi must be run as '{}' (owner of {}), but running as '{}'. \
+         Use --allow-wrong-user to override.",
+        binary_name,
+        exe.display(),
+        current_name,
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -55,6 +96,10 @@ enum ServerCommands {
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     let cli = Cli::parse();
+
+    if !cli.allow_wrong_user {
+        check_running_user()?;
+    }
 
     match cli.command {
         Commands::Bootstrap { out, dry_run } => cmd_bootstrap(out, dry_run).await,
