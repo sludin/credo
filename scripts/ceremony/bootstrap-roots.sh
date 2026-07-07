@@ -3,7 +3,7 @@ set -euo pipefail
 
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CEREMONY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+CEREMONY_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 usage() {
   cat <<'EOF'

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+_GEN_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Generate OpenSSL CA config files for Vigil ECDSA root and intermediate CAs.
 #
 # This script writes:
@@ -89,7 +91,7 @@ abspath() {
   printf '%s\n' "$(cd -P -- "$(dirname -- "$p")" 2>/dev/null && pwd -P)/$(basename -- "$p")"
 }
 
-CA_DIR="./ca"
+CA_DIR="$(cd "${_GEN_SCRIPT_DIR}/../.." && pwd)/ca"
 ORG=""
 COUNTRY="US"
 ROOT_ECDSA_CN=""

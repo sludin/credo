@@ -144,10 +144,24 @@ pub fn save_corgi_entry(
         .as_array_mut()
         .ok_or_else(|| anyhow::anyhow!("'corgis' is not an array"))?;
 
+    // Capture the existing URL before removing the entry so we can preserve it.
+    // During bootstrap enrollment the caller passes the loopback bootstrap address
+    // (https://127.0.0.1:PORT) which is only reachable during the bootstrap window.
+    // The corgis config is pre-generated with the correct hostname URL; overwriting it
+    // with the loopback address would break subsequent flock polls (TLS hostname mismatch).
+    let existing_url = arr
+        .iter()
+        .find(|e| e.get("name").and_then(|v| v.as_str()) == Some(name))
+        .and_then(|e| e.get("url"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     // Remove any existing entry with the same name (idempotent re-enrollment).
     arr.retain(|e| e.get("name").and_then(|v| v.as_str()) != Some(name));
 
-    let mut entry = serde_json::json!({ "name": name, "url": url });
+    // Prefer the pre-configured hostname URL over the ephemeral enrollment URL.
+    let effective_url = existing_url.unwrap_or_else(|| url.to_string());
+    let mut entry = serde_json::json!({ "name": name, "url": effective_url });
     if let Some(uri) = identity_uri {
         entry["identityUri"] = serde_json::Value::String(uri.to_string());
     }

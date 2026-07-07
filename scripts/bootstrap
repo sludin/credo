@@ -85,7 +85,7 @@ REMOTE_PORT="22"
 REMOTE_SSH_OPTS=""
 
 # Local ceremony CA dir (where ceremony scripts write their output)
-LOCAL_CA_DIR="$REPO_DIR/scripts/ceremony/ca"
+LOCAL_CA_DIR="$REPO_DIR/ca"
 
 AUTO=false
 DRY_RUN=false
@@ -757,6 +757,11 @@ phase_config() {
   # corgi's POST /bootstrap/ca will overwrite this with the Shepherd CA cert; it must be corgi-writable.
   remote_run "sudo mkdir -p '$(dirname "$CA_TRUST_PATH")' && sudo cp '$ca_remote_dir/root-ecdsa/certs/root-ecdsa.cert.pem' '$CA_TRUST_PATH'"
   remote_run "sudo chown corgi:corgi '$CA_TRUST_PATH' && sudo chmod 644 '$CA_TRUST_PATH'"
+
+  # Mirror the root cert locally as credo-catrust.pem at the repo root.
+  # This is the canonical local trust anchor; .install.json localCaTrustPath points here.
+  cp "$root_cert" "$REPO_DIR/credo-catrust.pem"
+  echo "[bootstrap] Local credo-catrust.pem updated from ca/root-ecdsa/certs/root-ecdsa.cert.pem"
 
   echo "[bootstrap] Pushing service config files..."
   echo "[bootstrap]   vigil config..."

@@ -47,6 +47,10 @@ node_modules
 
 ceremony/ca/
 scripts/ceremony/ca/
+
+# PKI ceremony output and derived trust anchor (contain private keys; operator-local)
+ca/
+credo-catrust.pem
 .scratch/
 target/
 lib/credo-lib-0.1.0.tgz
