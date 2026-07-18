@@ -22,6 +22,8 @@ rustls-pemfile = { workspace = true }
 x509-parser = { workspace = true }
 pem         = { workspace = true }
 
+rand = { workspace = true }
+
 # Crypto
 sha2   = { workspace = true }
 hex    = { workspace = true }
