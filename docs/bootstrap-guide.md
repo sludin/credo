@@ -418,8 +418,8 @@ Write `corgi.config.json`:
   ],
   "shepherdSync": {
     "enabled":              true,
-    "intervalSeconds":      60,
-    "staleWarningSeconds":  300,
+    "intervalSeconds":      1800,
+    "staleWarningSeconds":  3900,
     "assignmentsCachePath": "${corgiRoot}/corgi.assignments.cache.json"
   },
   "monitorIntervalSeconds": 30,

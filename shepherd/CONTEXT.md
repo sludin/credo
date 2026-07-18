@@ -2,7 +2,7 @@
 
 ## Role
 
-Shepherd is the TLS certificate management control plane. It owns the certificate lifecycle end-to-end: issuing certs via ACME (against Vigil or Let's Encrypt), storing the cert material in a certbot-style archive, and making it available to Corgi agents on demand. It runs two separate authenticated API servers—one for Corgi nodes (mTLS, port 7010) and one for dashboard/admin access (JWT or mTLS, port 7011). Background loops poll each Corgi for health and fingerprint drift; when a Corgi's local fingerprint diverges from Shepherd's store, Shepherd serves the fresh material on the next Corgi pull.
+Shepherd is the TLS certificate management control plane. It owns the certificate lifecycle end-to-end: issuing certs via ACME (against Vigil or Let's Encrypt), storing the cert material in a certbot-style archive, and making it available to Corgi agents on demand. It runs two separate authenticated API servers—one for Corgi nodes (mTLS, port 7010) and one for dashboard/admin access (JWT or mTLS, port 7011). A background reconcile loop probes each Corgi for liveness and fingerprint drift; when a Corgi's local fingerprint diverges from Shepherd's store, Shepherd nudges the Corgi to re-pull the fresh material.
 
 ---
 
@@ -10,7 +10,7 @@ Shepherd is the TLS certificate management control plane. It owns the certificat
 
 | File | Role |
 |------|------|
-| `main.rs` | CLI entry (`shepherd server start`, bootstrap commands, cert store inspection). Spawns background poll/health loops and the two HTTP servers. |
+| `main.rs` | CLI entry (`shepherd server start`, bootstrap commands, cert store inspection). Spawns the background reconcile and renewal loops and the two HTTP servers. |
 | `lib.rs` | Module re-exports. |
 | `config.rs` | Loads `shepherd.config.json`; supports `$VAR` interpolation from environment/`.env`. Hot-reloads on SIGHUP. |
 | `state.rs` | `AppState` — holds everything shared across request handlers: config (via `ArcSwap`), JWT keys, Corgi client pool, renewal job map, accounts, assignments, CA configs, Vigil client. |
@@ -22,7 +22,7 @@ Shepherd is the TLS certificate management control plane. It owns the certificat
 | `issuance.rs` | Core ACME flow: CSR → ACME account → new order → challenge → finalize → cert store. |
 | `cert_store.rs` | Reads/writes `store/archive/{name}/cert-NNNN.pem`; manages `store/live/{name}/` symlinks; computes SHA256 fingerprints. |
 | `renewal_jobs.rs` | Async job state machine: `Queued` → `SubmittingOrder` → `Validating` → `Finalizing` → `Installing` → `Completed`/`Failed`. |
-| `poll.rs` | Background tasks: lightweight health pings (configurable interval) and full poll cycle (fingerprint sync, cert maintenance). |
+| `poll.rs` | Background tasks: combined reconcile loop (liveness probe + fingerprint sync, queued mutation-triggered cycles) and slow renewal sweep (cert maintenance). |
 | `acme_client.rs` | Per-CA ACME account cache; builds `instant-acme` HTTP client with mTLS/EAB support. |
 | `corgi_client.rs` | Per-Corgi mTLS `reqwest` client pool; `corgi_get`/`corgi_post` helpers; bootstrap identity fallback. |
 | `corgis.rs` | Parses `shepherd.corgis.json`; resolves per-Corgi mTLS credential overrides against defaults. |
@@ -68,14 +68,18 @@ Shepherd is the TLS certificate management control plane. It owns the certificat
 4. Corgi polls `GET /agents/{id}/renew/{name}/status` to track progress.
 5. On `Completed`, Corgi fetches the new cert material via `GET /agents/{id}/certs/{name}`.
 
-### Background poll cycle
+### Background reconcile loop
 
-1. Runs every `pollIntervalSeconds` (default 60 s).
-2. For each Corgi: call `GET /flock` → list of `{ certName, fingerprint }`.
-3. Compare each fingerprint to Shepherd's cert store.
-4. If fingerprints differ and Corgi has a cert → schedule cert-maintenance pull.
-5. If Corgi reports `null` fingerprint → skip (initial provisioning handles this).
-6. Separately, health-check loop pings `GET /health` every `corgiHealthCheckIntervalSeconds` (default 300 s).
+1. Runs every `reconcileIntervalSeconds` (default 300 s, jittered ±10%), with the first sweep immediately at startup. Probes are fanned out concurrently (bounded at 16 in flight).
+2. For each Corgi: call `GET /flock` → list of `{ certName, fingerprint }`. This one probe is also the liveness check (`Reachable`/`Unreachable`) — there is no separate `/health` loop.
+3. Compare each fingerprint to Shepherd's cert store; if fingerprints differ and Corgi has a cert → nudge the Corgi to re-pull (`POST /sync/assignments`).
+4. If Corgi reports `null` fingerprint → skip (initial provisioning handles this).
+5. API mutations (assignment create/update/delete, reloads) queue an immediate targeted reconcile of the affected corgi — including a sync nudge and cert maintenance — so changes apply within seconds.
+6. A corgi that just dropped offline gets one quick re-probe after 60 s to filter transient blips.
+
+### Background renewal sweep
+
+Cert maintenance (expiry check → ACME renewal) runs on its own timer, `renewalCheckIntervalSeconds` (default 43200 s = twice daily), starting ~60 s after boot. `renewBeforeDays` defaults to 30.
 
 ### Hot-reload (SIGHUP)
 

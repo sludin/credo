@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
-**Pull-based reconciliation:** Corgi periodically pulls desired assignment state from Shepherd. Shepherd never pushes to Corgi. When Shepherd is unavailable, Corgi continues operating from its local assignment cache.
+**Pull-based reconciliation, shepherd-driven:** All config and cert material flows by Corgi pulling from Shepherd. Shepherd drives *when* reconciliation happens: it probes each corgi on a jittered reconcile interval (liveness + state in one `/flock` request) and sends a data-free "sync now" nudge (`POST /sync/assignments`) when desired state changes, so changes apply within seconds. Corgi also runs a slow safety-net pull (default 30 min) and reconciles immediately at startup. When Shepherd is unavailable, Corgi continues operating from its local assignment cache.
 
 **Certificate flow:**
 1. Shepherd holds `ManagedAssignment` records (which cert, which corgi, which CA).
@@ -144,6 +144,6 @@ Always preserve these patterns — flag any deviation before proceeding:
 
 ### Architecture invariants
 
-- **Pull-based only**: Shepherd never pushes config or cert material to Corgi. Corgi always pulls.
+- **Pull-based only**: Shepherd never pushes config or cert material to Corgi. Corgi always pulls. Shepherd may send a *data-free* sync-now nudge (`POST /sync/assignments`) that triggers Corgi's pull — the nudge must never carry config or cert payload.
 - **Port discipline**: Respect the port assignments in the table above. Do not introduce new listeners without updating the table.
 - **No cross-service DB**: Services share no database. State is exchanged only via the defined HTTP/mTLS APIs.

@@ -47,6 +47,12 @@ The client certificate the BFF presents when calling Shepherd's dashboard API.
 | `mtls.caPath` | string | falls back to `caPath` | `DASHBOARD_MTLS_CA_PATH` | CA bundle for verifying Shepherd's server certificate |
 | `mtls.rejectUnauthorized` | bool | `true` | `DASHBOARD_MTLS_REJECT_UNAUTHORIZED` | Verify Shepherd's certificate. **Never set to `false` in production** — it disables mTLS verification entirely |
 
+## UI Refresh
+
+| Field | Type | Default | Env override | Description |
+|-------|------|---------|--------------|-------------|
+| `pollIntervalSeconds` | number | `30` | `DASHBOARD_POLL_INTERVAL_SECONDS` | How often the SPA auto-refreshes its data from the BFF. Served to the frontend via the public `GET /ui-config` endpoint; user actions always refresh immediately |
+
 ## DNS Checker
 
 Controls the in-memory DNS TXT polling jobs used by the DNS checker tool. Jobs are ephemeral and reset on BFF restart.

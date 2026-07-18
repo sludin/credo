@@ -70,9 +70,11 @@ Shepherd reads several companion JSON files. Each has a default path relative to
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `pollIntervalSeconds` | number | `60` | How often Shepherd polls each Corgi for flock status |
-| `corgiHealthCheckIntervalSeconds` | number | `300` | How often Shepherd sends a lightweight `/health` ping to each Corgi |
-| `renewBeforeDays` | number | `7` | Start renewal this many days before a certificate expires |
+| `reconcileIntervalSeconds` | number | `300` | How often Shepherd runs its combined reconcile probe against each Corgi (`GET /flock`): one jittered request per corgi per interval answers both liveness and cert-state questions. The first sweep runs immediately at startup |
+| `renewalCheckIntervalSeconds` | number | `43200` | How often Shepherd sweeps all assignments for certificates needing renewal (default twice daily). Assignment changes made via the API trigger maintenance for the affected corgi immediately, outside this sweep |
+| `renewBeforeDays` | number | `30` | Start renewal this many days before a certificate expires |
+
+Deprecated aliases: `pollIntervalSeconds` is accepted as an alias for `reconcileIntervalSeconds` (logged as a warning); `corgiHealthCheckIntervalSeconds` is accepted but ignored — the reconcile probe covers health checking and there is no separate `/health` loop.
 
 ## DNS Override
 

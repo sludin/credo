@@ -47,7 +47,7 @@ An operator adds a `ManagedAssignment` record to `shepherd.assignments.json`, sp
 
 ### 2. Corgi Pulls and Detects the Gap
 
-Corgi runs its own sync loop (default every 60s), independent of Shepherd. Each tick:
+Corgi reconciles immediately at startup, then runs a slow safety-net sync loop (default every 30 minutes, jittered). Shepherd drives normal reconciliation: when desired state changes it sends Corgi a data-free nudge (`POST /sync/assignments`) that triggers the same reconcile pass immediately. Each pass:
 
 1. `GET /agents/{nodeId}/assignments` from Shepherd.
 2. Write the response to the assignments cache file (for fail-stale behavior on Shepherd outage).
@@ -124,19 +124,20 @@ The ledger is pruned automatically (entries older than 7 days are dropped). If t
 
 ## Background Loops
 
-Shepherd runs two independent background loops:
+Shepherd runs two background loops:
 
-### Poll loop (default: every 60s)
+### Reconcile loop (default: every 300s, jittered)
+
+One combined probe per Corgi per interval answers both liveness and cert-state questions. The first sweep runs immediately at startup so corgi status is fresh within seconds of boot; probes fan out concurrently (bounded).
 
 1. Hot-reload config files if mtime changed: `shepherd.corgis.json`, `shepherd.accounts.json`, `shepherd.ca.json`.
-2. For each Corgi: `GET /flock` → list of `{ certName, fingerprint }`.
-3. Compare each fingerprint against Shepherd's cert store.
-4. If fingerprints differ, schedule a cert-maintenance pull (Corgi will detect this on its next sync tick via the changed fingerprint in its assignment response).
-5. Run cert maintenance: for each assignment, check whether a renewal job is needed (cert expiring soon, cert absent, fingerprint mismatch). If so, create a `RenewalJob` and drive the ACME state machine.
+2. For each Corgi: `GET /flock` → list of `{ certName, fingerprint }`. Success/failure sets node status `Reachable`/`Unreachable` — this is the liveness check; there is no separate `/health` loop.
+3. Compare each fingerprint against Shepherd's cert store. If fingerprints differ, nudge the Corgi (`POST /sync/assignments`) to re-pull.
+4. API mutations (assignment create/update/delete, reloads) queue an immediate targeted reconcile of the affected corgi — including a sync nudge and cert maintenance — so changes apply within seconds instead of waiting for the next interval. A corgi that just dropped offline gets one quick re-probe after 60s.
 
-### Health-check loop (default: every 300s)
+### Renewal sweep (default: every 12h, jittered)
 
-Separately, a lightweight loop pings `GET /health` on each Corgi. Node status transitions between `Reachable` and `Unreachable`. Shepherd continues issuing certs for unreachable nodes; Corgi will pull when connectivity is restored.
+Cert maintenance runs on its own slow timer: for each assignment, check whether a renewal job is needed (cert expiring within `renewBeforeDays`, default 30; cert absent; corgi missing key). If so, create a `RenewalJob` and drive the ACME state machine. Renewal is deliberately not time-critical — certs renew with weeks of validity remaining.
 
 ---
 
@@ -246,7 +247,7 @@ If fetching cert material from Shepherd fails, or if the atomic install fails, C
 
 ### Shepherd: Corgi Unreachable
 
-Shepherd marks a Corgi node `Unreachable` after a failed health check (every `corgiHealthCheckIntervalSeconds`, default 300s). Shepherd continues managing other nodes and issuing certs. When connectivity is restored, Shepherd resumes its poll cycle for that node.
+Shepherd marks a Corgi node `Unreachable` after a failed reconcile probe (every `reconcileIntervalSeconds`, default 300s, plus one quick 60s re-probe after a fresh failure). Shepherd continues managing other nodes and issuing certs. When connectivity is restored, Shepherd resumes reconciling that node.
 
 ### Vigil: Restart Loses In-Flight ACME State
 

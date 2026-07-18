@@ -149,13 +149,17 @@ The HTTP challenge listener is enabled automatically when the `httpChallenge` bl
 
 ## Shepherd Sync
 
-Controls how Corgi pulls assignment state from Shepherd.
+Controls how Corgi pulls assignment state from Shepherd. Shepherd drives normal
+reconciliation — it probes Corgi periodically and sends a data-free sync nudge
+(`POST /sync/assignments`) when desired state changes — so Corgi's own periodic
+pull is a slow safety net covering shepherd→corgi path breakage, not the
+primary sync path. Corgi still reconciles immediately at startup.
 
 | Field | Type | Default | Env override | Description |
 |-------|------|---------|--------------|-------------|
 | `shepherdSync.enabled` | bool | `true` | `CORGI_SHEPHERD_SYNC_ENABLED` | Enable periodic sync |
-| `shepherdSync.intervalSeconds` | number | `60` | `CORGI_SHEPHERD_SYNC_INTERVAL_SECONDS` | Sync interval |
-| `shepherdSync.staleWarningSeconds` | number | `300` | `CORGI_SHEPHERD_SYNC_STALE_WARNING_SECONDS` | Emit a warning if no successful sync within this window |
+| `shepherdSync.intervalSeconds` | number | `1800` | `CORGI_SHEPHERD_SYNC_INTERVAL_SECONDS` | Safety-net sync interval (jittered ±10%) |
+| `shepherdSync.staleWarningSeconds` | number | `3900` | `CORGI_SHEPHERD_SYNC_STALE_WARNING_SECONDS` | Emit a warning if no successful sync within this window (~2 missed pulls) |
 | `shepherdSync.assignmentsCachePath` | string | `"corgi.assignments.cache.json"` | `CORGI_SHEPHERD_ASSIGNMENTS_CACHE_PATH` | Path for the persisted assignments cache. Used when Shepherd is unreachable |
 
 ## Auth
