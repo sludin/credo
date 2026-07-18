@@ -32,6 +32,7 @@ export type DashboardConfig = {
     rejectUnauthorized: boolean;
   };
   requestTimeoutSeconds: number;
+  pollIntervalSeconds: number;
   dnsPollingIntervalSeconds: number;
   dnsJobTimeoutSeconds: number;
   dnsPublicResolvers: Array<{ name: string; ip: string }>;
@@ -59,6 +60,7 @@ type RawDashboardConfig = {
   // New seconds field; legacy ms field accepted for backward compat
   requestTimeoutSeconds?: unknown;
   requestTimeoutMs?: unknown;
+  pollIntervalSeconds?: unknown;
   dnsPollingIntervalSeconds?: unknown;
   dnsJobTimeoutSeconds?: unknown;
   dnsPublicResolvers?: unknown;
@@ -151,6 +153,13 @@ export function loadConfig(options?: { skipTlsCheck?: boolean }): DashboardConfi
       : typeof raw.requestTimeoutMs === 'number' && raw.requestTimeoutMs > 0
         ? Math.round(raw.requestTimeoutMs / 1000)
         : 15
+  );
+  // Frontend auto-refresh cadence, served to the SPA via /ui-config.
+  const pollIntervalSeconds = intFromEnv(
+    process.env.DASHBOARD_POLL_INTERVAL_SECONDS,
+    typeof raw.pollIntervalSeconds === 'number' && raw.pollIntervalSeconds > 0
+      ? raw.pollIntervalSeconds
+      : 30
   );
   const dnsPollingIntervalSeconds = intFromEnv(
     process.env.DASHBOARD_DNS_POLLING_INTERVAL_SECONDS,
@@ -250,6 +259,7 @@ export function loadConfig(options?: { skipTlsCheck?: boolean }): DashboardConfi
       rejectUnauthorized,
     },
     requestTimeoutSeconds,
+    pollIntervalSeconds,
     dnsPollingIntervalSeconds,
     dnsJobTimeoutSeconds,
     dnsPublicResolvers,

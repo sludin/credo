@@ -305,6 +305,12 @@ async function main(): Promise<void> {
   // Public auth routes (login, enroll) — no authentication required.
   app.use('/auth', createAuthRouter(config, clients.api, serviceCert));
 
+  // UI bootstrap config — public and non-sensitive so the SPA can read it
+  // before a session exists.
+  app.get('/ui-config', (_req: Request, res: Response) => {
+    res.json({ pollIntervalSeconds: config.pollIntervalSeconds });
+  });
+
   // All /api/* routes require a valid session.
   app.use('/api', requireAuth);
   app.use('/api', makeRoleRefresh(config, clients.api, serviceCert));

@@ -1,7 +1,30 @@
 // src/hooks/usePoller.ts
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-const POLL_INTERVAL_MS = 30_000;
+const DEFAULT_POLL_INTERVAL_MS = 30_000;
+
+/** Parse the /ui-config payload into a poll interval, falling back to 30s. */
+export function resolvePollIntervalMs(payload: unknown): number {
+  if (payload && typeof payload === 'object') {
+    const seconds = (payload as { pollIntervalSeconds?: unknown }).pollIntervalSeconds;
+    if (typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0) {
+      return Math.floor(seconds * 1000);
+    }
+  }
+  return DEFAULT_POLL_INTERVAL_MS;
+}
+
+// Fetched once per page load and shared by every usePoller instance.
+let pollIntervalPromise: Promise<number> | null = null;
+function getPollIntervalMs(): Promise<number> {
+  if (!pollIntervalPromise) {
+    pollIntervalPromise = fetch('/ui-config')
+      .then((res) => (res.ok ? res.json() : null))
+      .then(resolvePollIntervalMs)
+      .catch(() => DEFAULT_POLL_INTERVAL_MS);
+  }
+  return pollIntervalPromise;
+}
 
 type UsePollerResult = {
   /** Seconds since last successful poll. */
@@ -11,7 +34,8 @@ type UsePollerResult = {
 };
 
 /**
- * Calls `fetchFn` immediately on mount, then every 30 seconds.
+ * Calls `fetchFn` immediately on mount, then on the configured poll interval
+ * (BFF `pollIntervalSeconds`, default 30s).
  * Returns `refresh()` to trigger an immediate re-fetch and `secondsAgo`
  * for the topbar "Last polled Xs ago" display.
  */
@@ -19,6 +43,7 @@ export function usePoller(fetchFn: () => Promise<void>): UsePollerResult {
   const [lastFetchedAt, setLastFetchedAt] = useState<number>(0);
   const [secondsAgo, setSecondsAgo] = useState<number>(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const intervalMsRef = useRef<number>(DEFAULT_POLL_INTERVAL_MS);
   const fetchRef = useRef(fetchFn);
   fetchRef.current = fetchFn;
 
@@ -27,16 +52,32 @@ export function usePoller(fetchFn: () => Promise<void>): UsePollerResult {
     setLastFetchedAt(Date.now());
   }, []);
 
-  // Auto-poll every 30s
+  const startTimer = useCallback(() => {
+    if (timerRef.current !== null) {
+      clearInterval(timerRef.current);
+    }
+    timerRef.current = setInterval(() => { void runFetch(); }, intervalMsRef.current);
+  }, [runFetch]);
+
+  // Auto-poll on the configured interval
   useEffect(() => {
+    let cancelled = false;
     void runFetch();
-    timerRef.current = setInterval(() => { void runFetch(); }, POLL_INTERVAL_MS);
+    startTimer();
+    void getPollIntervalMs().then((ms) => {
+      if (cancelled || ms === intervalMsRef.current) {
+        return;
+      }
+      intervalMsRef.current = ms;
+      startTimer();
+    });
     return () => {
+      cancelled = true;
       if (timerRef.current !== null) {
         clearInterval(timerRef.current);
       }
     };
-  }, [runFetch]);
+  }, [runFetch, startTimer]);
 
   // "X seconds ago" counter, ticks every second
   useEffect(() => {
@@ -50,12 +91,9 @@ export function usePoller(fetchFn: () => Promise<void>): UsePollerResult {
   }, [lastFetchedAt]);
 
   const refresh = useCallback(() => {
-    if (timerRef.current !== null) {
-      clearInterval(timerRef.current);
-    }
     void runFetch();
-    timerRef.current = setInterval(() => { void runFetch(); }, POLL_INTERVAL_MS);
-  }, [runFetch]);
+    startTimer();
+  }, [runFetch, startTimer]);
 
   return { secondsAgo, refresh };
 }
