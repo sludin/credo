@@ -99,9 +99,11 @@ Defines the Corgi fleet. Shepherd polls each node in this file. The file is hot-
 ```json
 {
   "defaults": {
-    "mtlsCert": "/etc/shepherd/certs/fullchain.pem",
-    "mtlsKey":  "/etc/shepherd/certs/privkey.pem",
-    "mtlsCa":   "/etc/credo/credo-catrust.pem"
+    "mtls": {
+      "certPath": "/etc/shepherd/certs/fullchain.pem",
+      "keyPath":  "/etc/shepherd/certs/privkey.pem",
+      "caPath":   "/etc/credo/credo-catrust.pem"
+    }
   },
   "corgis": [
     {
@@ -120,9 +122,9 @@ Each Corgi entry:
 | `name` | yes | Unique identifier for this node |
 | `url` | yes | mTLS API base URL |
 | `identityUri` | yes | Expected URI SAN in Corgi's client certificate |
-| `mtlsCert` | no | Override client cert for this node (falls back to `defaults.mtlsCert`) |
-| `mtlsKey` | no | Override client key for this node |
-| `mtlsCa` | no | Override CA bundle for this node |
+| `mtls.certPath` | no | Override client cert for this node (falls back to `defaults.mtls.certPath`) |
+| `mtls.keyPath` | no | Override client key for this node |
+| `mtls.caPath` | no | Override CA bundle for this node |
 
 ### `shepherd.ca.json`
 
