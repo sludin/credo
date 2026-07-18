@@ -1,4 +1,4 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::archive::pending_key_path;
 use crate::assignments::{load_assignments_cache, merge_assignments, save_assignments_cache};
@@ -14,6 +14,7 @@ use crate::types::{CsrRequest, InstallRequest};
 /// Perform a single reconciliation pass: pull assignments from Shepherd,
 /// compare fingerprints, fetch and install changed certs, run hooks.
 pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
+    let _serialized = state.sync_lock.lock().await;
     let config = state.config.load_full();
     let http_client = state.shepherd_client.read().await.clone();
     let client = ShepherdClient::from_client(http_client, &config.shepherd_url);
@@ -261,13 +262,10 @@ pub async fn run_sync_loop(state: AppState) {
         *stored = cached;
     }
 
-    let mut ticker =
-        tokio::time::interval(Duration::from_secs(config.shepherd_sync.interval_seconds));
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
+    // Immediate first reconcile so a freshly started corgi converges right
+    // away; afterwards this is a slow, jittered safety-net pull (shepherd
+    // drives normal reconciliation via probes and sync nudges).
     loop {
-        ticker.tick().await;
-
         match reconcile_once(&state).await {
             Ok(()) => {}
             Err(e) => {
@@ -291,5 +289,8 @@ pub async fn run_sync_loop(state: AppState) {
                 }
             }
         }
+
+        let interval = state.config.load().shepherd_sync.interval_seconds;
+        tokio::time::sleep(credo_lib::timing::jittered_duration(interval, 0.1)).await;
     }
 }

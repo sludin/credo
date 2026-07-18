@@ -785,17 +785,19 @@ pub fn load_config() -> Result<CorgiConfig> {
                 .map(|v| bool_from_value(v, true))
                 .unwrap_or(true),
         ),
+        // Slow safety-net pace: shepherd drives reconciliation and sends sync
+        // nudges, so corgi's own pull only covers shepherd→corgi path breakage.
         interval_seconds: u64_from_env(
             "CORGI_SHEPHERD_SYNC_INTERVAL_SECONDS",
             ss.and_then(|s| s.interval_seconds.as_ref())
-                .map(|v| u64_from_value(v, 60))
-                .unwrap_or(60),
+                .map(|v| u64_from_value(v, 1800))
+                .unwrap_or(1800),
         ),
         stale_warning_seconds: u64_from_env(
             "CORGI_SHEPHERD_SYNC_STALE_WARNING_SECONDS",
             ss.and_then(|s| s.stale_warning_seconds.as_ref())
-                .map(|v| u64_from_value(v, 300))
-                .unwrap_or(300),
+                .map(|v| u64_from_value(v, 3900))
+                .unwrap_or(3900),
         ),
         assignments_cache_path,
     };

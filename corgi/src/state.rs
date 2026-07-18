@@ -22,6 +22,9 @@ pub struct AppState {
     pub assignments: Arc<RwLock<Vec<ManagedAssignment>>>,
     /// Last successful sync timestamp (Unix seconds).
     pub last_sync_at: Arc<RwLock<Option<u64>>>,
+    /// Serializes reconcile passes: the periodic loop and shepherd-triggered
+    /// sync nudges (`POST /sync/assignments`) must not reconcile concurrently.
+    pub sync_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppState {
@@ -41,6 +44,7 @@ impl AppState {
             challenges: Arc::new(RwLock::new(HashMap::new())),
             assignments: Arc::new(RwLock::new(vec![])),
             last_sync_at: Arc::new(RwLock::new(None)),
+            sync_lock: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 }
