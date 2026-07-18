@@ -20,87 +20,204 @@ use crate::types::{
 };
 
 // ---------------------------------------------------------------------------
+// Reconcile requests (queued by API mutation handlers)
+// ---------------------------------------------------------------------------
+
+/// Fraction of the reconcile interval used as random jitter so shepherds and
+/// per-corgi work don't fire in lockstep at scale.
+const RECONCILE_JITTER_FRAC: f64 = 0.1;
+const RENEWAL_JITTER_FRAC: f64 = 0.05;
+/// Max concurrent /flock probes per cycle.
+const PROBE_CONCURRENCY: usize = 16;
+/// A burst of API mutations coalesces into one targeted cycle.
+const MUTATION_DEBOUNCE: Duration = Duration::from_secs(1);
+/// One quick re-probe after a corgi drops offline, to filter transient blips
+/// before the next full interval.
+const UNREACHABLE_RETRY_DELAY: Duration = Duration::from_secs(60);
+
+/// A request for an immediate reconcile of one or more corgis.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReconcileRequest {
+    /// Corgi names to reconcile; `None` means every configured corgi.
+    pub corgis: Option<Vec<String>>,
+    /// Desired state changed: also nudge the corgi to re-pull assignments and
+    /// run cert maintenance so the change applies within seconds.
+    pub maintenance: bool,
+}
+
+/// Queue an immediate reconcile. Fire-and-forget: if the loop is not running
+/// (tests, shutdown) the request is simply dropped — the periodic sweep is
+/// the guaranteed convergence path.
+pub fn request_reconcile(state: &AppState, corgis: Option<Vec<String>>, maintenance: bool) {
+    let _ = state.reconcile_tx.send(ReconcileRequest {
+        corgis,
+        maintenance,
+    });
+}
+
+fn merge_requests(reqs: Vec<ReconcileRequest>) -> ReconcileRequest {
+    let mut maintenance = false;
+    let mut all = false;
+    let mut names: Vec<String> = Vec::new();
+    for r in reqs {
+        maintenance |= r.maintenance;
+        match r.corgis {
+            None => all = true,
+            Some(list) => {
+                for n in list {
+                    if !names.contains(&n) {
+                        names.push(n);
+                    }
+                }
+            }
+        }
+    }
+    ReconcileRequest {
+        corgis: if all { None } else { Some(names) },
+        maintenance,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Entry points (spawned as background tasks)
 // ---------------------------------------------------------------------------
 
-pub async fn run_health_check_loop(state: AppState) {
+/// Combined liveness + state reconcile loop. One /flock probe per corgi per
+/// interval answers both "is it alive?" and "does it have what it should?".
+/// Runs a full sweep immediately at startup, then on a jittered interval,
+/// with queued `ReconcileRequest`s handled as they arrive.
+pub async fn run_reconcile_loop(state: AppState) {
+    let rx = state.reconcile_rx.lock().unwrap().take();
+    let Some(mut rx) = rx else {
+        tracing::error!("Reconcile loop started twice; refusing second instance");
+        return;
+    };
+
+    reconcile_cycle(&state, None, false).await;
+
     loop {
-        let secs = state.config.load().corgi_health_check_interval_seconds;
-        tokio::time::sleep(Duration::from_secs(secs)).await;
-        health_check_cycle(&state).await;
-    }
-}
-
-pub async fn run_poll_loop(state: AppState) {
-    loop {
-        let secs = state.config.load().poll_interval_seconds;
-        tokio::time::sleep(Duration::from_secs(secs)).await;
-        poll_cycle(&state).await;
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Health check cycle — lightweight /health ping
-// ---------------------------------------------------------------------------
-
-async fn health_check_cycle(state: &AppState) {
-    maybe_reload_corgis(state).await;
-    maybe_reload_accounts(state).await;
-    maybe_reload_cas(state).await;
-    let corgis = state.corgis.read().await.clone();
-    for node in &corgis {
-        ping_health(state, node).await;
-    }
-}
-
-async fn ping_health(state: &AppState, node: &CorgiNodeConfig) {
-    match corgi_get::<serde_json::Value>(&state.corgi_client_pool, node, "/health").await {
-        Ok(_) => {
-            let mut cs = state.corgi_state.write().await;
-            let entry = cs
-                .entry(node.name.clone())
-                .or_insert_with(CorgiNodeState::new);
-            entry.status = CorgiStatus::Reachable;
-            entry.last_health_check = Some(Utc::now().timestamp());
-            entry.error = None;
-        }
-        Err(e) => {
-            tracing::warn!(corgi = %node.name, error = %e, "Corgi health check failed");
-            let mut cs = state.corgi_state.write().await;
-            let entry = cs
-                .entry(node.name.clone())
-                .or_insert_with(CorgiNodeState::new);
-            entry.status = CorgiStatus::Unreachable;
-            entry.error = Some(e.to_string());
+        let interval = state.config.load().reconcile_interval_seconds;
+        tokio::select! {
+            _ = tokio::time::sleep(credo_lib::timing::jittered_duration(interval, RECONCILE_JITTER_FRAC)) => {
+                reconcile_cycle(&state, None, false).await;
+            }
+            Some(first) = rx.recv() => {
+                tokio::time::sleep(MUTATION_DEBOUNCE).await;
+                let mut reqs = vec![first];
+                while let Ok(r) = rx.try_recv() {
+                    reqs.push(r);
+                }
+                let merged = merge_requests(reqs);
+                reconcile_cycle(&state, merged.corgis, merged.maintenance).await;
+            }
         }
     }
 }
 
+/// Periodic renewal sweep. Renewal is not time-critical (certs renew with
+/// weeks remaining), so this runs on its own slow interval instead of every
+/// reconcile cycle. Mutation-triggered cycles still run maintenance for the
+/// affected corgis immediately.
+pub async fn run_renewal_loop(state: AppState) {
+    // Give the startup reconcile sweep time to establish reachability;
+    // cert maintenance skips corgis that aren't known-reachable.
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    loop {
+        renewal_cycle(&state).await;
+        let interval = state.config.load().renewal_check_interval_seconds;
+        tokio::time::sleep(credo_lib::timing::jittered_duration(
+            interval,
+            RENEWAL_JITTER_FRAC,
+        ))
+        .await;
+    }
+}
+
 // ---------------------------------------------------------------------------
-// Full poll cycle
+// Cycles
 // ---------------------------------------------------------------------------
 
-async fn poll_cycle(state: &AppState) {
+async fn reconcile_cycle(state: &AppState, targets: Option<Vec<String>>, maintenance: bool) {
     maybe_reload_corgis(state).await;
     maybe_reload_assignments(state).await;
     maybe_reload_accounts(state).await;
     maybe_reload_cas(state).await;
 
-    let corgis = state.corgis.read().await.clone();
+    let corgis: Vec<CorgiNodeConfig> = {
+        let all = state.corgis.read().await;
+        match &targets {
+            None => all.clone(),
+            Some(names) => all
+                .iter()
+                .filter(|c| names.contains(&c.name))
+                .cloned()
+                .collect(),
+        }
+    };
 
-    // Phase 1: poll /flock from all corgis
-    for node in &corgis {
-        poll_flock(state, node).await;
+    // Phase 1: probe /flock concurrently — liveness + reported cert state.
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(PROBE_CONCURRENCY));
+    let mut probes = tokio::task::JoinSet::new();
+    for node in corgis.clone() {
+        let st = state.clone();
+        let sem = sem.clone();
+        probes.spawn(async move {
+            let _permit = sem.acquire().await;
+            let prev = st
+                .corgi_state
+                .read()
+                .await
+                .get(&node.name)
+                .map(|s| s.status.clone());
+            let now = poll_flock(&st, &node).await;
+            (node.name, prev, now)
+        });
+    }
+    let mut newly_unreachable = Vec::new();
+    while let Some(res) = probes.join_next().await {
+        if let Ok((name, prev, now)) = res {
+            if prev == Some(CorgiStatus::Reachable) && now == CorgiStatus::Unreachable {
+                newly_unreachable.push(name);
+            }
+        }
     }
 
-    // Phase 2: fingerprint sync — tell corgis to refresh if their cert is stale
+    // Phase 2: assignment nudge (on desired-state change) + fingerprint sync.
     for node in &corgis {
+        if maintenance {
+            nudge_corgi_sync(state, node).await;
+        }
         fingerprint_sync_check(state, node).await;
     }
 
-    // Phase 3: cert maintenance — renew if needed
+    // Phase 3 (mutation-triggered only): run cert maintenance right away so a
+    // new or changed assignment issues within seconds. The renewal loop owns
+    // the periodic sweep.
+    if maintenance {
+        cert_maintenance_for(state, &corgis).await;
+    }
+
+    for name in newly_unreachable {
+        let st = state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(UNREACHABLE_RETRY_DELAY).await;
+            request_reconcile(&st, Some(vec![name]), false);
+        });
+    }
+}
+
+async fn renewal_cycle(state: &AppState) {
+    maybe_reload_corgis(state).await;
+    maybe_reload_assignments(state).await;
+    maybe_reload_accounts(state).await;
+    maybe_reload_cas(state).await;
+    let corgis = state.corgis.read().await.clone();
+    cert_maintenance_for(state, &corgis).await;
+}
+
+async fn cert_maintenance_for(state: &AppState, corgis: &[CorgiNodeConfig]) {
     let assignments = state.assignments.read().await.clone();
-    for node in &corgis {
+    for node in corgis {
         let node_assignments: Vec<ManagedAssignment> = assignments
             .iter()
             .filter(|a| a.corgi.as_deref() == Some(node.name.as_str()))
@@ -116,6 +233,28 @@ async fn poll_cycle(state: &AppState) {
                 );
             }
         }
+    }
+}
+
+/// Ask the corgi to re-pull its assignments now. Data still flows via corgi's
+/// pull; this is a data-free trigger. Failures are logged only — the periodic
+/// sweep and corgi's own safety-net pull converge the state eventually.
+async fn nudge_corgi_sync(state: &AppState, node: &CorgiNodeConfig) {
+    {
+        let cs = state.corgi_state.read().await;
+        if cs.get(&node.name).map(|s| &s.status) != Some(&CorgiStatus::Reachable) {
+            return;
+        }
+    }
+    if let Err(e) = corgi_post::<serde_json::Value>(
+        &state.corgi_client_pool,
+        node,
+        "/sync/assignments",
+        &json!({}),
+    )
+    .await
+    {
+        tracing::warn!(corgi = %node.name, error = %e, "Failed to nudge corgi assignment sync");
     }
 }
 
@@ -142,7 +281,7 @@ struct FlockEntry {
     key_exists: bool,
 }
 
-async fn poll_flock(state: &AppState, node: &CorgiNodeConfig) {
+async fn poll_flock(state: &AppState, node: &CorgiNodeConfig) -> CorgiStatus {
     match corgi_get::<FlockResponse>(&state.corgi_client_pool, node, "/flock").await {
         Ok(resp) => {
             let flock: Vec<CorgiFlockEntry> = resp
@@ -166,6 +305,7 @@ async fn poll_flock(state: &AppState, node: &CorgiNodeConfig) {
             entry.last_health_check = Some(Utc::now().timestamp());
             entry.flock = flock;
             entry.error = None;
+            CorgiStatus::Reachable
         }
         Err(e) => {
             tracing::warn!(corgi = %node.name, error = %e, "Corgi flock poll failed");
@@ -175,6 +315,7 @@ async fn poll_flock(state: &AppState, node: &CorgiNodeConfig) {
                 .or_insert_with(CorgiNodeState::new);
             entry.status = CorgiStatus::Unreachable;
             entry.error = Some(e.to_string());
+            CorgiStatus::Unreachable
         }
     }
 }
@@ -645,5 +786,42 @@ mod tests {
     #[test]
     fn installing_phase_is_not_terminal() {
         assert!(!crate::types::RenewalPhase::Installing.is_terminal());
+    }
+
+    #[test]
+    fn merge_requests_unions_targets_and_ors_maintenance() {
+        let merged = merge_requests(vec![
+            ReconcileRequest {
+                corgis: Some(vec!["a".into()]),
+                maintenance: false,
+            },
+            ReconcileRequest {
+                corgis: Some(vec!["b".into(), "a".into()]),
+                maintenance: true,
+            },
+        ]);
+        let mut targets = merged.corgis.unwrap();
+        targets.sort();
+        assert_eq!(targets, vec!["a".to_string(), "b".to_string()]);
+        assert!(merged.maintenance);
+    }
+
+    #[test]
+    fn merge_requests_full_sweep_absorbs_targeted() {
+        let merged = merge_requests(vec![
+            ReconcileRequest {
+                corgis: Some(vec!["a".into()]),
+                maintenance: true,
+            },
+            ReconcileRequest {
+                corgis: None,
+                maintenance: false,
+            },
+        ]);
+        assert!(
+            merged.corgis.is_none(),
+            "None target means poll every corgi"
+        );
+        assert!(merged.maintenance);
     }
 }

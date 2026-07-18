@@ -619,8 +619,8 @@ pub async fn config_summary(
         "bind": config.bind,
         "certStoreDir": config.cert_store_dir,
         "renewBeforeDays": config.renew_before_days,
-        "pollIntervalSeconds": config.poll_interval_seconds,
-        "corgiHealthCheckIntervalSeconds": config.corgi_health_check_interval_seconds,
+        "reconcileIntervalSeconds": config.reconcile_interval_seconds,
+        "renewalCheckIntervalSeconds": config.renewal_check_interval_seconds,
         "cas": cas,
     })))
 }
@@ -915,6 +915,7 @@ pub async fn reload_corgis(
     let count = list.len();
     *state.corgis.write().await = list;
     *state.corgis_mtime.lock().unwrap() = file_mtime(&path);
+    crate::poll::request_reconcile(&state, None, false);
     Ok(Json(
         json!({ "reloaded": true, "corgis": count, "corgisConfigPath": path }),
     ))
@@ -990,6 +991,9 @@ pub async fn create_assignment(
     let path = state.config.load().assignments_config_path.clone();
     save_assignments(&path, &assignments).map_err(AppError::Internal)?;
     *state.assignments_mtime.lock().unwrap() = file_mtime(&path);
+    if let Some(corgi) = assignment.corgi.clone() {
+        crate::poll::request_reconcile(&state, Some(vec![corgi]), true);
+    }
     Ok(Json(serde_json::to_value(&assignment).unwrap()))
 }
 
@@ -1010,10 +1014,21 @@ pub async fn update_assignment(
         .iter_mut()
         .find(|a| a.cert_name == cert_name)
         .ok_or_else(|| AppError::NotFound(format!("No assignment for '{cert_name}'")))?;
+    let previous_corgi = assignment.corgi.clone();
     *assignment = updated.clone();
     let path = state.config.load().assignments_config_path.clone();
     save_assignments(&path, &assignments).map_err(AppError::Internal)?;
     *state.assignments_mtime.lock().unwrap() = file_mtime(&path);
+    // Reconcile both the new corgi and (if reassigned) the one that lost it.
+    let mut affected: Vec<String> = updated.corgi.clone().into_iter().collect();
+    if let Some(prev) = previous_corgi {
+        if !affected.contains(&prev) {
+            affected.push(prev);
+        }
+    }
+    if !affected.is_empty() {
+        crate::poll::request_reconcile(&state, Some(affected), true);
+    }
     Ok(Json(serde_json::to_value(&updated).unwrap()))
 }
 
@@ -1025,6 +1040,10 @@ pub async fn delete_assignment(
     check_min_role(Some(&user.role), &Role::Admin)?;
     let mut assignments = state.assignments.write().await;
     let before = assignments.len();
+    let removed_corgi = assignments
+        .iter()
+        .find(|a| a.cert_name == cert_name)
+        .and_then(|a| a.corgi.clone());
     assignments.retain(|a| a.cert_name != cert_name);
     if assignments.len() == before {
         return Err(AppError::NotFound(format!(
@@ -1034,6 +1053,9 @@ pub async fn delete_assignment(
     let path = state.config.load().assignments_config_path.clone();
     save_assignments(&path, &assignments).map_err(AppError::Internal)?;
     *state.assignments_mtime.lock().unwrap() = file_mtime(&path);
+    if let Some(corgi) = removed_corgi {
+        crate::poll::request_reconcile(&state, Some(vec![corgi]), true);
+    }
     Ok(Json(json!({ "deleted": true })))
 }
 
@@ -1047,6 +1069,7 @@ pub async fn reload_assignments(
     let count = list.len();
     *state.assignments.write().await = list;
     *state.assignments_mtime.lock().unwrap() = file_mtime(&path);
+    crate::poll::request_reconcile(&state, None, true);
     Ok(Json(
         json!({ "reloaded": true, "assignments": count, "assignmentsConfigPath": path }),
     ))

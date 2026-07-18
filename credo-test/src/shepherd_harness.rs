@@ -19,6 +19,10 @@ pub struct TestShepherd {
     pub client: reqwest::Client,
     /// JWT signing keys — use `shepherd::jwt::sign_jwt(&shepherd.jwt_keys, ...)` in tests.
     pub jwt_keys: std::sync::Arc<shepherd::jwt::JwtKeys>,
+    /// Shared application state — inspect queues/caches directly in tests.
+    /// The reconcile loop is NOT running in the harness, so queued
+    /// `ReconcileRequest`s stay in `state.reconcile_rx` for assertions.
+    pub state: AppState,
     /// Output directory (temp or persistent depending on CREDO_TEST_KEEP_OUTPUT).
     pub dir: TestDir,
     _shutdown_agent: oneshot::Sender<()>,
@@ -89,7 +93,7 @@ impl TestShepherd {
             base_agent_router
         };
 
-        let base_dashboard_router = shepherd::server::build_api_router(state);
+        let base_dashboard_router = shepherd::server::build_api_router(state.clone());
         let dashboard_router = if let Some(user) = dashboard_auth {
             base_dashboard_router.layer(axum::Extension(user))
         } else {
@@ -133,6 +137,7 @@ impl TestShepherd {
             dashboard_url,
             client,
             jwt_keys: jwt_keys_arc,
+            state,
             dir,
             _shutdown_agent: shutdown_agent_tx,
             _shutdown_dashboard: shutdown_dashboard_tx,
@@ -168,8 +173,8 @@ fn build_shepherd_config(tmp: &Path) -> ShepherdConfig {
         accounts_path: tmp.join("shepherd.accounts.json"),
         cert_store_dir: tmp.join("certstore"),
         renew_before_days: 30.0,
-        poll_interval_seconds: 60,
-        corgi_health_check_interval_seconds: 30,
+        reconcile_interval_seconds: 300,
+        renewal_check_interval_seconds: 43200,
         renewal_jobs_dir: None,
         issuance_ledger_path: tmp.join("shepherd.issuance-log.json"),
         log_level: LogLevel::Warn,

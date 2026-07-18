@@ -367,8 +367,8 @@ async fn run_server_with_tls(
     *state.corgis.write().await = corgi_list;
     *state.assignments.write().await = assignment_list;
 
-    tokio::spawn(shepherd::poll::run_health_check_loop(state.clone()));
-    tokio::spawn(shepherd::poll::run_poll_loop(state.clone()));
+    tokio::spawn(shepherd::poll::run_reconcile_loop(state.clone()));
+    tokio::spawn(shepherd::poll::run_renewal_loop(state.clone()));
 
     let mut hup = signal(SignalKind::hangup()).context("Registering SIGHUP handler")?;
     let mut tls_config = initial_tls_config;
@@ -428,7 +428,14 @@ async fn cmd_check_config() -> Result<()> {
     );
     println!("  Cert store:     {}", config.cert_store_dir.display());
     println!("  Renew before:   {} days", config.renew_before_days);
-    println!("  Poll interval:  {}s", config.poll_interval_seconds);
+    println!(
+        "  Reconcile interval: {}s",
+        config.reconcile_interval_seconds
+    );
+    println!(
+        "  Renewal check:  every {}s",
+        config.renewal_check_interval_seconds
+    );
     println!();
 
     let checks = shepherd::config::validate_paths(&config);

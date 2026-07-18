@@ -11,6 +11,7 @@ use crate::config::ShepherdConfig;
 use crate::corgi_client::{CorgiClientPool, CorgiHooksResponse};
 use crate::issuance_ledger::IssuanceLedger;
 use crate::jwt::JwtKeys;
+use crate::poll::ReconcileRequest;
 use crate::refresh_tokens::RefreshTokenStore;
 use crate::types::{
     Account, CaConfig, CorgiNodeConfig, CorgiNodeState, ManagedAssignment, RenewalJob,
@@ -50,6 +51,10 @@ pub struct AppState {
     pub hooks_cache: Arc<Mutex<HashMap<String, (CorgiHooksResponse, Instant)>>>,
     /// Path to write terminal renewal job history (None = no persistence)
     pub renewal_jobs_history_path: Option<PathBuf>,
+    /// Queue for immediate reconcile requests (API mutations → reconcile loop).
+    pub reconcile_tx: tokio::sync::mpsc::UnboundedSender<ReconcileRequest>,
+    /// Receiver side, taken once by `run_reconcile_loop` at startup.
+    pub reconcile_rx: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<ReconcileRequest>>>>,
 }
 
 impl AppState {
@@ -128,6 +133,8 @@ impl AppState {
             .max()
             .unwrap_or(7);
 
+        let (reconcile_tx, reconcile_rx) = tokio::sync::mpsc::unbounded_channel();
+
         Self {
             config: Arc::new(ArcSwap::from_pointee(config)),
             jwt_keys: Arc::new(jwt_keys),
@@ -161,6 +168,8 @@ impl AppState {
             bootstrap_admin_token: Arc::new(Mutex::new(admin_token)),
             hooks_cache: Arc::new(Mutex::new(HashMap::new())),
             renewal_jobs_history_path,
+            reconcile_tx,
+            reconcile_rx: Arc::new(Mutex::new(Some(reconcile_rx))),
         }
     }
 }

@@ -273,3 +273,88 @@ async fn reload_corgis_returns_ok() {
 
     assert_eq!(resp.status(), 200);
 }
+
+// ============================================================================
+// Reconcile triggering on assignment mutations
+// ============================================================================
+
+/// Creating an assignment queues a targeted, maintenance-enabled reconcile
+/// request for the assignment's corgi so changes apply within seconds
+/// instead of waiting for the next periodic sweep.
+#[tokio::test]
+async fn create_assignment_queues_targeted_reconcile() {
+    let shepherd = TestShepherd::start_authed().await.unwrap();
+    let mut rx = shepherd
+        .state
+        .reconcile_rx
+        .lock()
+        .unwrap()
+        .take()
+        .expect("harness leaves the reconcile receiver in place");
+
+    let resp = shepherd
+        .client
+        .post(format!("{}/admin/assignments", shepherd.dashboard_url))
+        .json(&serde_json::json!({
+            "certName": "reconcile-test",
+            "domain": "reconcile-test.example.com",
+            "ca": "letsencrypt",
+            "corgi": "corgi-1"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let req = rx
+        .try_recv()
+        .expect("mutation must queue a reconcile request");
+    assert_eq!(req.corgis, Some(vec!["corgi-1".to_string()]));
+    assert!(req.maintenance);
+}
+
+/// Deleting an assignment queues a reconcile for the corgi that held it.
+#[tokio::test]
+async fn delete_assignment_queues_targeted_reconcile() {
+    let shepherd = TestShepherd::start_authed().await.unwrap();
+
+    let resp = shepherd
+        .client
+        .post(format!("{}/admin/assignments", shepherd.dashboard_url))
+        .json(&serde_json::json!({
+            "certName": "reconcile-del",
+            "domain": "reconcile-del.example.com",
+            "ca": "letsencrypt",
+            "corgi": "corgi-2"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    // Take the receiver after create so we only observe the delete's request.
+    let mut rx = shepherd
+        .state
+        .reconcile_rx
+        .lock()
+        .unwrap()
+        .take()
+        .expect("harness leaves the reconcile receiver in place");
+    while rx.try_recv().is_ok() {}
+
+    let resp = shepherd
+        .client
+        .delete(format!(
+            "{}/admin/assignments/reconcile-del",
+            shepherd.dashboard_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let req = rx
+        .try_recv()
+        .expect("delete must queue a reconcile request");
+    assert_eq!(req.corgis, Some(vec!["corgi-2".to_string()]));
+}

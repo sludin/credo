@@ -38,8 +38,8 @@ pub struct ShepherdConfig {
 
     // Timers
     pub renew_before_days: f64,
-    pub poll_interval_seconds: u64,
-    pub corgi_health_check_interval_seconds: u64,
+    pub reconcile_interval_seconds: u64,
+    pub renewal_check_interval_seconds: u64,
 
     // Renewal jobs persistence (optional)
     pub renewal_jobs_dir: Option<PathBuf>,
@@ -106,6 +106,10 @@ struct RawShepherdConfig {
 
     // Timers
     renew_before_days: Option<f64>,
+    reconcile_interval_seconds: Option<u64>,
+    renewal_check_interval_seconds: Option<u64>,
+    // Deprecated aliases (pre-reconcile-loop): pollIntervalSeconds maps to
+    // reconcileIntervalSeconds; corgiHealthCheckIntervalSeconds is ignored.
     poll_interval_seconds: Option<u64>,
     corgi_health_check_interval_seconds: Option<u64>,
 
@@ -236,6 +240,26 @@ fn build_config(
         .unwrap_or_else(|| u16_from_env("SHEPHERD_DASHBOARD_PORT", 7011));
     let bind = raw.bind.unwrap_or_else(|| "127.0.0.1".to_string());
 
+    // --- Timers ---
+    // pollIntervalSeconds is the pre-reconcile-loop name for the same knob;
+    // corgiHealthCheckIntervalSeconds no longer has a loop of its own.
+    // eprintln! rather than tracing: config loads before logging is initialized.
+    if raw.poll_interval_seconds.is_some() && raw.reconcile_interval_seconds.is_none() {
+        eprintln!(
+            "warning: config key 'pollIntervalSeconds' is deprecated; use 'reconcileIntervalSeconds'"
+        );
+    }
+    if raw.corgi_health_check_interval_seconds.is_some() {
+        eprintln!(
+            "warning: config key 'corgiHealthCheckIntervalSeconds' is deprecated and ignored; \
+             the reconcile loop ('reconcileIntervalSeconds') now covers health checking"
+        );
+    }
+    let reconcile_interval = raw
+        .reconcile_interval_seconds
+        .or(raw.poll_interval_seconds)
+        .unwrap_or(300);
+
     // --- Log level ---
     let log_level = credo_lib::LogLevel::from_str(raw.log_level.as_deref().unwrap_or("info"));
 
@@ -274,9 +298,9 @@ fn build_config(
         ca_config_path: resolve_path_or(b, raw.ca_config_path.as_deref(), "shepherd.ca.json"),
         accounts_path: resolve_path_or(b, raw.accounts_path.as_deref(), "shepherd.accounts.json"),
         cert_store_dir: resolve_path_or(b, raw.cert_store_dir.as_deref(), "store"),
-        renew_before_days: raw.renew_before_days.unwrap_or(7.0),
-        poll_interval_seconds: raw.poll_interval_seconds.unwrap_or(60),
-        corgi_health_check_interval_seconds: raw.corgi_health_check_interval_seconds.unwrap_or(300),
+        renew_before_days: raw.renew_before_days.unwrap_or(30.0),
+        reconcile_interval_seconds: reconcile_interval,
+        renewal_check_interval_seconds: raw.renewal_check_interval_seconds.unwrap_or(43200),
         renewal_jobs_dir: resolve_path_opt(b, raw.renewal_jobs_dir.as_deref()),
         issuance_ledger_path: resolve_path_or(
             b,
@@ -295,6 +319,86 @@ fn build_config(
 // ---------------------------------------------------------------------------
 // Validate that critical paths exist (used by check-config command)
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn minimal_config(extra: serde_json::Value) -> ShepherdConfig {
+        let mut base = serde_json::json!({
+            "tls": {
+                "certPath": "tls/cert.pem",
+                "keyPath": "tls/key.pem",
+                "clientCaPath": "tls/ca.pem"
+            },
+            "auth": { "jwtSigningKeyPath": "jwt.pem" }
+        });
+        if let (Some(obj), Some(extra_obj)) = (base.as_object_mut(), extra.as_object()) {
+            for (k, v) in extra_obj {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+        let raw: RawShepherdConfig = serde_json::from_value(base).unwrap();
+        build_config(
+            raw,
+            PathBuf::from("/tmp"),
+            PathBuf::from("/tmp/shepherd.config.json"),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn reconcile_interval_defaults_to_300() {
+        let c = minimal_config(serde_json::json!({}));
+        assert_eq!(c.reconcile_interval_seconds, 300);
+    }
+
+    #[test]
+    fn renewal_check_interval_defaults_to_12h() {
+        let c = minimal_config(serde_json::json!({}));
+        assert_eq!(c.renewal_check_interval_seconds, 43200);
+    }
+
+    #[test]
+    fn renew_before_days_defaults_to_30() {
+        let c = minimal_config(serde_json::json!({}));
+        assert_eq!(c.renew_before_days, 30.0);
+    }
+
+    #[test]
+    fn explicit_reconcile_interval_is_honored() {
+        let c = minimal_config(serde_json::json!({ "reconcileIntervalSeconds": 120 }));
+        assert_eq!(c.reconcile_interval_seconds, 120);
+    }
+
+    #[test]
+    fn legacy_poll_interval_is_accepted_as_alias() {
+        let c = minimal_config(serde_json::json!({ "pollIntervalSeconds": 45 }));
+        assert_eq!(c.reconcile_interval_seconds, 45);
+    }
+
+    #[test]
+    fn new_key_wins_over_legacy_alias() {
+        let c = minimal_config(serde_json::json!({
+            "reconcileIntervalSeconds": 240,
+            "pollIntervalSeconds": 45
+        }));
+        assert_eq!(c.reconcile_interval_seconds, 240);
+    }
+
+    #[test]
+    fn legacy_health_check_interval_is_still_accepted() {
+        // Deprecated key: parsing must not fail, value is ignored.
+        let c = minimal_config(serde_json::json!({ "corgiHealthCheckIntervalSeconds": 30 }));
+        assert_eq!(c.reconcile_interval_seconds, 300);
+    }
+
+    #[test]
+    fn explicit_renewal_check_interval_is_honored() {
+        let c = minimal_config(serde_json::json!({ "renewalCheckIntervalSeconds": 3600 }));
+        assert_eq!(c.renewal_check_interval_seconds, 3600);
+    }
+}
 
 pub fn validate_paths(config: &ShepherdConfig) -> Vec<(String, bool)> {
     let mut results = vec![];
