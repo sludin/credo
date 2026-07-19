@@ -447,6 +447,7 @@ mod tests {
             key_group: None,
             key_algorithm: None,
             hooks: None,
+            monitor: None,
         }
     }
 

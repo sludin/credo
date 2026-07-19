@@ -159,6 +159,9 @@ pub struct ManagedAssignment {
     /// None/absent = inherit corgi's defaultHooks. Some([]) = explicitly no hooks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hooks: Option<Vec<HookRef>>,
+    /// Endpoint the corgi verifies the installed cert against (TLS handshake).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitor: Option<credo_lib::types::MonitorConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -291,6 +294,9 @@ pub struct CorgiFlockEntry {
     #[serde(default)]
     pub san_names: Vec<String>,
     pub key_exists: Option<bool>,
+    /// Endpoint-monitor result the corgi reported for this cert.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitor: Option<credo_lib::types::MonitorResult>,
 }
 
 #[derive(Debug, Clone)]
@@ -374,5 +380,52 @@ mod rate_limit_type_tests {
         };
         let json = serde_json::to_string(&rl).unwrap();
         assert!(!json.contains("certificatesPerDomain"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assignment_monitor_block_parses_and_round_trips() {
+        let a: ManagedAssignment = serde_json::from_str(
+            r#"{"certName":"api","ca":"vigil","monitor":{"host":"api.example.com"}}"#,
+        )
+        .unwrap();
+        let monitor = a.monitor.as_ref().expect("monitor block must parse");
+        assert_eq!(monitor.host, "api.example.com");
+        assert_eq!(monitor.port, 443);
+
+        let v = serde_json::to_value(&a).unwrap();
+        assert_eq!(v["monitor"]["host"], "api.example.com");
+    }
+
+    #[test]
+    fn assignment_without_monitor_serializes_no_monitor_key() {
+        // Keeps shepherd.assignments.json round-trips byte-stable for
+        // existing deployments.
+        let a: ManagedAssignment =
+            serde_json::from_str(r#"{"certName":"api","ca":"vigil"}"#).unwrap();
+        assert!(a.monitor.is_none());
+        let v = serde_json::to_value(&a).unwrap();
+        assert!(v.get("monitor").is_none());
+    }
+
+    #[test]
+    fn corgi_flock_entry_carries_monitor_result() {
+        // What corgi reports in /flock must survive into shepherd's state and
+        // back out through the dashboard API unchanged.
+        let e: CorgiFlockEntry = serde_json::from_str(
+            r#"{"name":"api","monitor":{"status":"cert-mismatch","seenFingerprint":"AA:BB"}}"#,
+        )
+        .unwrap();
+        let monitor = e.monitor.as_ref().expect("monitor result must parse");
+        assert_eq!(
+            monitor.status,
+            credo_lib::types::MonitorStatus::CertMismatch
+        );
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["monitor"]["seenFingerprint"], "AA:BB");
     }
 }

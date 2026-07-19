@@ -923,6 +923,22 @@ pub async fn reload_corgis(
 
 /// Validate that all hook names in an assignment exist on the target corgi.
 /// Skipped when the assignment has no hooks or no corgi assigned.
+fn validate_assignment_monitor(
+    assignment: &crate::types::ManagedAssignment,
+) -> Result<(), AppError> {
+    if let Some(monitor) = &assignment.monitor {
+        if monitor.host.trim().is_empty() {
+            return Err(AppError::BadRequest(
+                "monitor.host must be a non-empty hostname or IP".into(),
+            ));
+        }
+        if monitor.port == 0 {
+            return Err(AppError::BadRequest("monitor.port must be non-zero".into()));
+        }
+    }
+    Ok(())
+}
+
 async fn validate_assignment_hooks(
     state: &AppState,
     assignment: &crate::types::ManagedAssignment,
@@ -976,6 +992,7 @@ pub async fn create_assignment(
             "Assignment must have certName or domain".into(),
         ));
     }
+    validate_assignment_monitor(&assignment)?;
     validate_assignment_hooks(&state, &assignment).await?;
     let mut assignments = state.assignments.write().await;
     if assignments
@@ -1008,6 +1025,7 @@ pub async fn update_assignment(
     let mut updated: crate::types::ManagedAssignment = serde_json::from_value(body)
         .map_err(|e| AppError::BadRequest(format!("Invalid assignment: {e}")))?;
     updated.cert_name = cert_name.clone();
+    validate_assignment_monitor(&updated)?;
     validate_assignment_hooks(&state, &updated).await?;
     let mut assignments = state.assignments.write().await;
     let assignment = assignments

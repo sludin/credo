@@ -338,6 +338,7 @@ pub async fn enroll_corgi(
             key_group: None,
             key_algorithm: None,
             hooks: None,
+            monitor: None,
         };
         let assignments_path = state.config.load().assignments_config_path.clone();
         let mut assignments = crate::assignments::load_assignments(&assignments_path)

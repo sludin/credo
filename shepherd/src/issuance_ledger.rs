@@ -711,6 +711,7 @@ mod tests {
             key_group: None,
             key_algorithm: None,
             hooks: None,
+            monitor: None,
         };
         let result = canonical_sans(&assignment);
         assert_eq!(result, vec!["api.example.com", "www.example.com"]);
@@ -737,6 +738,7 @@ mod tests {
             key_group: None,
             key_algorithm: None,
             hooks: None,
+            monitor: None,
         };
         let result = canonical_sans(&assignment);
         assert_eq!(result, vec!["api.example.com"]);

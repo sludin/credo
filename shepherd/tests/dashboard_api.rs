@@ -358,3 +358,44 @@ async fn delete_assignment_queues_targeted_reconcile() {
         .expect("delete must queue a reconcile request");
     assert_eq!(req.corgis, Some(vec!["corgi-2".to_string()]));
 }
+
+/// A monitor block on a new assignment is validated, defaulted, and echoed.
+#[tokio::test]
+async fn create_assignment_round_trips_monitor_block() {
+    let shepherd = TestShepherd::start_authed().await.unwrap();
+    let resp = shepherd
+        .client
+        .post(format!("{}/admin/assignments", shepherd.dashboard_url))
+        .json(&serde_json::json!({
+            "certName": "monitored-cert",
+            "domain": "monitored.example.com",
+            "ca": "letsencrypt",
+            "monitor": { "host": "monitored.example.com" }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["monitor"]["host"], "monitored.example.com");
+    assert_eq!(body["monitor"]["port"], 443);
+    assert_eq!(body["monitor"]["protocol"], "https");
+}
+
+/// A monitor block with a blank host is a config error, not silence later.
+#[tokio::test]
+async fn create_assignment_rejects_blank_monitor_host() {
+    let shepherd = TestShepherd::start_authed().await.unwrap();
+    let resp = shepherd
+        .client
+        .post(format!("{}/admin/assignments", shepherd.dashboard_url))
+        .json(&serde_json::json!({
+            "certName": "bad-monitor",
+            "ca": "letsencrypt",
+            "monitor": { "host": "   " }
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}

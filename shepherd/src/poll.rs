@@ -279,6 +279,8 @@ struct FlockEntry {
     valid_to: Option<String>,
     #[serde(default)]
     key_exists: bool,
+    #[serde(default)]
+    monitor: Option<credo_lib::types::MonitorResult>,
 }
 
 async fn poll_flock(state: &AppState, node: &CorgiNodeConfig) -> CorgiStatus {
@@ -295,6 +297,7 @@ async fn poll_flock(state: &AppState, node: &CorgiNodeConfig) -> CorgiStatus {
                     status: e.status,
                     san_names: e.san_names,
                     key_exists: Some(e.key_exists),
+                    monitor: e.monitor,
                 })
                 .collect();
             let mut cs = state.corgi_state.write().await;
@@ -745,6 +748,7 @@ mod tests {
             key_group: None,
             key_algorithm: None,
             hooks: None,
+            monitor: None,
         }
     }
 
