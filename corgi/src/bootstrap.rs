@@ -456,7 +456,7 @@ fn node_identity_entry(config: &CorgiConfig) -> crate::config::FlockEntry {
             fullchain_path: config.fullchain_path.clone(),
             csr_path: config.csr_path.clone(),
             domain: None,
-            monitor: false,
+            monitor: None,
             hooks: None,
             csr_subject: Some(crate::types::CsrSubjectWire {
                 common_name: Some(config.common_name.clone()),

@@ -281,6 +281,7 @@ fn build_corgi_config(tmp: &Path, cert_store_dir: &Path) -> CorgiConfig {
             stale_warning_seconds: 300,
             assignments_cache_path: tmp.join("assignments.json"),
         },
+        monitor_interval_seconds: 900,
         config_path: tmp.join("corgi.config.json"),
         accounts_path: tmp.join("corgi.accounts.json"),
         chain_path: Some(live.join("chain.pem")),

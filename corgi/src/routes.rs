@@ -69,7 +69,11 @@ pub async fn flock_list(
 ) -> Result<Json<Value>, AppError> {
     check_min_role(role.as_ref().map(|e| &e.0), &Role::Readonly)?;
     let flock = state.flock.read().await;
-    let summaries: Vec<_> = flock.iter().map(to_flock_summary).collect();
+    let monitor_results = state.monitor_results.read().await;
+    let summaries: Vec<_> = flock
+        .iter()
+        .map(|e| to_flock_summary(e, &monitor_results))
+        .collect();
     Ok(Json(json!({ "flock": summaries })))
 }
 
@@ -148,6 +152,10 @@ pub async fn flock_install(
         changed = result.changed, fingerprint256 = %result.next_fingerprint,
         "Renewal finished successfully"
     );
+
+    if result.changed {
+        crate::monitor::schedule_post_install_check(&state, name.clone());
+    }
 
     Ok(Json(json!({
         "installed": true,

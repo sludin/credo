@@ -169,6 +169,7 @@ async fn cmd_server_start() -> Result<()> {
     let state = AppState::new(config).context("Building AppState")?;
 
     tokio::spawn(corgi::sync::run_sync_loop(state.clone()));
+    tokio::spawn(corgi::monitor::run_monitor_loop(state.clone()));
 
     let mut hup = signal(SignalKind::hangup()).context("Registering SIGHUP handler")?;
     let mut tls_config = {

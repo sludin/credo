@@ -8,6 +8,7 @@ pub mod cert_ops;
 pub mod config;
 pub mod error;
 pub mod hooks;
+pub mod monitor;
 pub mod routes;
 pub mod server;
 pub mod shepherd;

@@ -224,6 +224,10 @@ pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
                             "Hook executed"
                         );
                     }
+                    crate::monitor::schedule_post_install_check(
+                        state,
+                        assignment.cert_name.clone(),
+                    );
                 }
             }
             Err(e) => {

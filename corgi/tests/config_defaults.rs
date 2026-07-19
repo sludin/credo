@@ -35,4 +35,9 @@ fn shepherd_sync_defaults_are_safety_net_paced() {
         "stale warning should default to ~2 missed pulls"
     );
     assert!(config.shepherd_sync.enabled);
+
+    assert_eq!(
+        config.monitor_interval_seconds, 900,
+        "endpoint monitor sweep should default to 15 minutes"
+    );
 }

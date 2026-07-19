@@ -42,7 +42,10 @@ pub fn merge_assignments(
             fullchain_path: config_entry.and_then(|e| e.fullchain_path.clone()),
             csr_path: config_entry.and_then(|e| e.csr_path.clone()),
             domain: assignment.domain.clone(),
-            monitor: assignment.monitor.unwrap_or(true),
+            monitor: assignment
+                .monitor
+                .clone()
+                .or_else(|| config_entry.and_then(|e| e.monitor.clone())),
             hooks,
             csr_subject: assignment.csr_subject.clone(),
             identity_uri: assignment.identity_uri.clone(),

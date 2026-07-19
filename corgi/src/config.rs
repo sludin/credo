@@ -85,7 +85,8 @@ pub struct FlockEntry {
     pub fullchain_path: Option<PathBuf>,
     pub csr_path: Option<PathBuf>,
     pub domain: Option<String>,
-    pub monitor: bool,
+    /// Endpoint to verify the installed cert against (TLS handshake check).
+    pub monitor: Option<credo_lib::types::MonitorConfig>,
     /// None = inherit defaultHooks at runtime. Some([]) = no hooks. Some([refs]) = use exactly these.
     pub hooks: Option<Vec<HookRef>>,
     pub csr_subject: Option<CsrSubjectWire>,
@@ -161,6 +162,8 @@ pub struct CorgiConfig {
     pub rbac_identities: Vec<RbacIdentity>,
     pub proxy_auth: ProxyAuthConfig,
     pub shepherd_sync: ShepherdSyncConfig,
+    /// How often the endpoint monitor sweeps the flock (TLS handshake checks).
+    pub monitor_interval_seconds: u64,
     pub config_path: PathBuf,
     pub accounts_path: PathBuf,
     pub chain_path: Option<PathBuf>,
@@ -270,6 +273,9 @@ struct RawConfig {
 
     #[serde(rename = "shepherdSync")]
     shepherd_sync: Option<RawShepherdSync>,
+
+    #[serde(rename = "monitorIntervalSeconds")]
+    monitor_interval_seconds: Option<Value>,
 
     #[serde(rename = "accountsPath")]
     accounts_path: Option<String>,
@@ -499,7 +505,15 @@ fn parse_flock_entry(
             .map(|s| resolve_path(base_dir, s)),
         csr_path: v["csrPath"].as_str().map(|s| resolve_path(base_dir, s)),
         domain: v["domain"].as_str().map(|s| s.trim().to_string()),
-        monitor: v["monitor"].as_bool().unwrap_or(true),
+        // Legacy configs carried a boolean here (vestigial expiry-monitoring
+        // flag); only an endpoint object enables monitoring.
+        monitor: match v.get("monitor") {
+            Some(m) if m.is_object() => Some(
+                serde_json::from_value(m.clone())
+                    .with_context(|| format!("flock[{}].monitor is invalid", index))?,
+            ),
+            _ => None,
+        },
         hooks,
         csr_subject,
         identity_uri: v["identityUri"]
@@ -802,6 +816,16 @@ pub fn load_config() -> Result<CorgiConfig> {
         assignments_cache_path,
     };
 
+    // Endpoint monitor sweep. Config-error detection, not uptime monitoring —
+    // a slow pace is fine; installs trigger an immediate one-shot check.
+    let monitor_interval_seconds = u64_from_env(
+        "CORGI_MONITOR_INTERVAL_SECONDS",
+        raw.monitor_interval_seconds
+            .as_ref()
+            .map(|v| u64_from_value(v, 900))
+            .unwrap_or(900),
+    );
+
     // Log level
     let log_level_str = str_from_env(
         "CORGI_LOG_LEVEL",
@@ -901,6 +925,7 @@ pub fn load_config() -> Result<CorgiConfig> {
         rbac_identities,
         proxy_auth,
         shepherd_sync,
+        monitor_interval_seconds,
         config_path,
         accounts_path,
         chain_path,
@@ -908,4 +933,52 @@ pub fn load_config() -> Result<CorgiConfig> {
         csr_path,
         file_policy,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use credo_lib::types::{MonitorConfig, MonitorProtocol};
+
+    fn parse_entry(v: serde_json::Value) -> FlockEntry {
+        parse_flock_entry(
+            &v,
+            Path::new("/tmp"),
+            Path::new("/tmp/store"),
+            0,
+            &FilePolicyConfig::default(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn flock_entry_monitor_object_parses() {
+        let entry = parse_entry(serde_json::json!({
+            "name": "api.example.com",
+            "monitor": { "host": "127.0.0.1", "port": 8443, "protocol": "tls" }
+        }));
+        assert_eq!(
+            entry.monitor,
+            Some(MonitorConfig {
+                host: "127.0.0.1".into(),
+                port: 8443,
+                protocol: MonitorProtocol::Tls,
+            })
+        );
+    }
+
+    #[test]
+    fn flock_entry_monitor_legacy_bool_means_no_endpoint() {
+        let entry = parse_entry(serde_json::json!({
+            "name": "api.example.com",
+            "monitor": true
+        }));
+        assert_eq!(entry.monitor, None);
+    }
+
+    #[test]
+    fn flock_entry_monitor_absent_is_none() {
+        let entry = parse_entry(serde_json::json!({ "name": "api.example.com" }));
+        assert_eq!(entry.monitor, None);
+    }
 }

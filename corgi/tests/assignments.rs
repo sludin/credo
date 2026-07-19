@@ -58,6 +58,7 @@ fn make_config(dir: &TempDir) -> corgi::config::CorgiConfig {
             stale_warning_seconds: 300,
             assignments_cache_path: dir.path().join("assignments.json"),
         },
+        monitor_interval_seconds: 900,
         config_path: dir.path().join("corgi.config.json"),
         accounts_path: dir.path().join("corgi.accounts.json"),
         chain_path: None,
@@ -81,7 +82,7 @@ fn base_entry(name: &str, dir: &TempDir) -> FlockEntry {
         fullchain_path: None,
         csr_path: None,
         domain: Some(format!("{name}.credo.test")),
-        monitor: false,
+        monitor: None,
         hooks: None,
         csr_subject: None,
         identity_uri: None,
@@ -291,5 +292,42 @@ fn flock_entry_absent_hooks_inherits_defaults() {
     assert!(
         merged[0].hooks.is_none(),
         "flock entry with no hooks must inherit defaultHooks at runtime"
+    );
+}
+
+/// A locally-configured monitor endpoint survives an assignment override that
+/// doesn't carry one; an assignment endpoint wins when present.
+#[test]
+fn monitor_endpoint_falls_back_to_config_entry() {
+    use credo_lib::types::{MonitorConfig, MonitorProtocol};
+
+    let dir = TempDir::new().unwrap();
+    let config = make_config(&dir);
+    let mut local = base_entry("webapp", &dir);
+    local.monitor = Some(MonitorConfig {
+        host: "127.0.0.1".to_string(),
+        port: 8443,
+        protocol: MonitorProtocol::Https,
+    });
+    let config_flock = vec![local];
+
+    let merged = merge_assignments(&config_flock, &[assignment("webapp")], &config);
+    assert_eq!(
+        merged[0].monitor.as_ref().map(|m| m.port),
+        Some(8443),
+        "local monitor config must survive an assignment without one"
+    );
+
+    let mut a = assignment("webapp");
+    a.monitor = Some(MonitorConfig {
+        host: "webapp.credo.test".to_string(),
+        port: 443,
+        protocol: MonitorProtocol::Https,
+    });
+    let merged = merge_assignments(&config_flock, &[a], &config);
+    assert_eq!(
+        merged[0].monitor.as_ref().map(|m| m.port),
+        Some(443),
+        "assignment monitor config must win when present"
     );
 }

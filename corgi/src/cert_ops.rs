@@ -472,7 +472,10 @@ pub fn read_cert_status(entry: &FlockEntry) -> crate::types::CertificateStatus {
     }
 }
 
-pub fn to_flock_summary(entry: &FlockEntry) -> crate::types::FlockSummary {
+pub fn to_flock_summary(
+    entry: &FlockEntry,
+    monitor_results: &std::collections::HashMap<String, credo_lib::types::MonitorResult>,
+) -> crate::types::FlockSummary {
     let fingerprint256 = read_cert_fingerprint(&entry.path);
 
     struct CertFields {
@@ -532,6 +535,7 @@ pub fn to_flock_summary(entry: &FlockEntry) -> crate::types::FlockSummary {
         domain: entry.domain.clone(),
         status,
         key_exists: entry.key_path.exists(),
+        monitor: crate::monitor::monitor_result_for(entry, monitor_results),
     }
 }
 

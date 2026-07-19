@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-// Role, ClientIdentity, and HookRef live in credo-lib; re-export for convenience.
-pub use credo_lib::types::{ClientIdentity, HookRef, Role};
+// Role, ClientIdentity, HookRef, and the monitor types live in credo-lib;
+// re-export for convenience.
+pub use credo_lib::types::{
+    ClientIdentity, HookRef, MonitorConfig, MonitorProtocol, MonitorResult, MonitorStatus, Role,
+};
 
 // ---------------------------------------------------------------------------
 // API response types
@@ -18,6 +21,7 @@ pub struct FlockSummary {
     pub domain: Option<String>,
     pub status: String,
     pub key_exists: bool,
+    pub monitor: MonitorResult,
 }
 
 #[derive(Debug, Serialize)]
@@ -57,7 +61,10 @@ pub struct ManagedAssignment {
     pub days: Option<u32>,
     pub domain: Option<String>,
     pub identity_uri: Option<String>,
-    pub monitor: Option<bool>,
+    /// Endpoint to verify the installed cert against. Legacy payloads and
+    /// cached assignment files carried a boolean here; those parse as None.
+    #[serde(default, deserialize_with = "monitor_config_or_legacy_bool")]
+    pub monitor: Option<MonitorConfig>,
     #[serde(default)]
     pub hooks: Option<Vec<HookRef>>,
     pub csr_subject: Option<CsrSubjectWire>,
@@ -70,6 +77,19 @@ pub struct ManagedAssignment {
     pub cert_group: Option<String>,
     pub key_owner: Option<String>,
     pub key_group: Option<String>,
+}
+
+fn monitor_config_or_legacy_bool<'de, D>(d: D) -> Result<Option<MonitorConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    match v {
+        Some(obj @ serde_json::Value::Object(_)) => serde_json::from_value(obj)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+        _ => Ok(None),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,4 +186,52 @@ pub struct CsrRequest {
     pub common_name: Option<String>,
     pub identity_uri: Option<String>,
     pub csr_subject: Option<CsrSubjectWire>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use credo_lib::types::{MonitorConfig, MonitorProtocol};
+
+    fn assignment_json(monitor: &str) -> String {
+        format!(
+            r#"{{"corgi":"corgi-01","certName":"api.example.com","monitor":{}}}"#,
+            monitor
+        )
+    }
+
+    #[test]
+    fn assignment_monitor_accepts_endpoint_object() {
+        let a: ManagedAssignment = serde_json::from_str(&assignment_json(
+            r#"{"host":"api.example.com","port":8443}"#,
+        ))
+        .unwrap();
+        assert_eq!(
+            a.monitor,
+            Some(MonitorConfig {
+                host: "api.example.com".into(),
+                port: 8443,
+                protocol: MonitorProtocol::Https,
+            })
+        );
+    }
+
+    #[test]
+    fn assignment_monitor_tolerates_legacy_bool() {
+        // Older shepherd versions and cached assignment files carry the
+        // vestigial expiry-monitoring boolean; it must parse as "no endpoint".
+        let a: ManagedAssignment = serde_json::from_str(&assignment_json("true")).unwrap();
+        assert_eq!(a.monitor, None);
+        let a: ManagedAssignment = serde_json::from_str(&assignment_json("false")).unwrap();
+        assert_eq!(a.monitor, None);
+    }
+
+    #[test]
+    fn assignment_monitor_absent_or_null_is_none() {
+        let a: ManagedAssignment =
+            serde_json::from_str(r#"{"corgi":"corgi-01","certName":"api.example.com"}"#).unwrap();
+        assert_eq!(a.monitor, None);
+        let a: ManagedAssignment = serde_json::from_str(&assignment_json("null")).unwrap();
+        assert_eq!(a.monitor, None);
+    }
 }

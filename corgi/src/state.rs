@@ -25,6 +25,8 @@ pub struct AppState {
     /// Serializes reconcile passes: the periodic loop and shepherd-triggered
     /// sync nudges (`POST /sync/assignments`) must not reconcile concurrently.
     pub sync_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Latest endpoint-monitor result per cert name (reported via /flock).
+    pub monitor_results: Arc<RwLock<HashMap<String, credo_lib::types::MonitorResult>>>,
 }
 
 impl AppState {
@@ -45,6 +47,7 @@ impl AppState {
             assignments: Arc::new(RwLock::new(vec![])),
             last_sync_at: Arc::new(RwLock::new(None)),
             sync_lock: Arc::new(tokio::sync::Mutex::new(())),
+            monitor_results: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 }
