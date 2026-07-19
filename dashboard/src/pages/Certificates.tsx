@@ -22,6 +22,7 @@ import {
 import type { LastTerminalJobSummary } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
 import { deriveStatus, statusTone, statusLabel, type UnifiedStatus } from './Certificates.testable';
+import { monitorLabel, monitorTone, monitorToForm, monitorFromForm } from '../utils/monitor';
 import { Topbar } from '../components/Shell';
 import { usePermission } from '../hooks/usePermission';
 import type {
@@ -80,6 +81,9 @@ type FormState = {
   validationDdnsKey: string;
   hooksMode: HooksMode;
   hooksList: string[];
+  monitorHost: string;
+  monitorPort: string;
+  monitorProtocol: 'https' | 'tls';
 };
 
 const emptyForm: FormState = {
@@ -88,6 +92,7 @@ const emptyForm: FormState = {
   days: '90', renewBeforeDays: '30',
   validationType: 'none-01', validationProvider: '', validationDdnsKey: '',
   hooksMode: 'default', hooksList: [],
+  monitorHost: '', monitorPort: '443', monitorProtocol: 'https',
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -152,7 +157,11 @@ function formatTraceLine(e: LastRenewalJob['trace'][number]): string {
 }
 
 function assignmentToForm(a: Assignment): FormState {
+  const monitorFields = monitorToForm(a.monitor);
   return {
+    monitorHost: monitorFields.host,
+    monitorPort: monitorFields.port,
+    monitorProtocol: monitorFields.protocol,
     certName: a.certName,
     corgi: a.corgi,
     ca: a.ca ?? 'letsencrypt',
@@ -201,6 +210,8 @@ function toAssignmentPayload(form: FormState): Record<string, unknown> {
     payload.hooks = form.hooksList;
   }
   // hooksMode === 'default': omit hooks field entirely
+  const monitor = monitorFromForm(form.monitorHost, form.monitorPort, form.monitorProtocol);
+  if (monitor) payload.monitor = monitor;
   Object.keys(payload).forEach(k => { if (payload[k] === undefined) delete payload[k]; });
   return payload;
 }
@@ -1041,6 +1052,49 @@ export default function Certificates(): React.ReactElement {
                               );
                             })()}
 
+                            {/* Endpoint monitor */}
+                            {(() => {
+                              const endpoint = selectedRow.assignment.monitor;
+                              const result = selectedRow.flockCert?.monitor;
+                              const status = endpoint ? (result?.status ?? 'pending') : 'unmonitored';
+                              return (
+                                <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+                                  <div className="field-row" style={{ marginBottom: 4 }}>
+                                    <span className="field-label" style={{ fontWeight: 600 }}>Endpoint Monitor</span>
+                                    <span className="field-value">
+                                      <StatusBadge label={monitorLabel(status)} tone={monitorTone(status)} />
+                                    </span>
+                                  </div>
+                                  {endpoint && (
+                                    <div className="field-row">
+                                      <span className="field-label">Endpoint</span>
+                                      <span className="field-value mono" style={{ fontSize: 11 }}>
+                                        {endpoint.protocol}://{endpoint.host}:{endpoint.port}
+                                      </span>
+                                    </div>
+                                  )}
+                                  {result?.checkedAt && (
+                                    <div className="field-row">
+                                      <span className="field-label">Last Checked</span>
+                                      <span className="field-value" style={{ fontSize: 11 }}>{new Date(result.checkedAt).toLocaleString()}</span>
+                                    </div>
+                                  )}
+                                  {result?.status === 'cert-mismatch' && result.seenFingerprint && (
+                                    <div className="field-row" style={{ alignItems: 'flex-start' }}>
+                                      <span className="field-label">Served SHA-256</span>
+                                      <span className="field-value mono" style={{ fontSize: 11, color: 'var(--red)' }}>{result.seenFingerprint}</span>
+                                    </div>
+                                  )}
+                                  {result?.error && (
+                                    <div className="field-row" style={{ alignItems: 'flex-start' }}>
+                                      <span className="field-label">Error</span>
+                                      <span className="field-value" style={{ fontSize: 11, color: 'var(--yellow)' }}>{result.error}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()}
+
                             {activeJob && <ActiveJobSection job={activeJob} />}
                             {!activeJob && lastJob && (
                               <LastJobSection job={lastJob} expanded={logsExpanded} onToggle={() => setLogsExpanded(v => !v)} />
@@ -1285,6 +1339,44 @@ export default function Certificates(): React.ReactElement {
                         onChange={e => setForm(f => ({ ...f, sans: e.target.value }))}
                         style={{ width: '100%' }}
                       />
+                    </div>
+
+                    {/* Endpoint monitor */}
+                    <div className="form-section">
+                      <div className="form-section-label">Endpoint Monitor</div>
+                      <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 6 }}>
+                        The corgi periodically TLS-handshakes this endpoint and flags a mismatch
+                        if it serves a different cert. Leave host blank to disable.
+                      </div>
+                      <div className="form-row">
+                        <label className="form-label">Host</label>
+                        <input
+                          className="form-input"
+                          placeholder={form.domain.trim() || 'hostname or IP'}
+                          value={form.monitorHost}
+                          onChange={e => setForm(f => ({ ...f, monitorHost: e.target.value }))}
+                        />
+                      </div>
+                      <div className="form-row">
+                        <label className="form-label">Port</label>
+                        <input
+                          className="form-input"
+                          type="number"
+                          value={form.monitorPort}
+                          onChange={e => setForm(f => ({ ...f, monitorPort: e.target.value }))}
+                        />
+                      </div>
+                      <div className="form-row">
+                        <label className="form-label">Protocol</label>
+                        <select
+                          className="form-select"
+                          value={form.monitorProtocol}
+                          onChange={e => setForm(f => ({ ...f, monitorProtocol: e.target.value as 'https' | 'tls' }))}
+                        >
+                          <option value="https">https</option>
+                          <option value="tls">tls</option>
+                        </select>
+                      </div>
                     </div>
 
                     {/* Danger zone — edit mode only */}

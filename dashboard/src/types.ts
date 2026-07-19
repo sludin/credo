@@ -12,6 +12,22 @@ export type HealthPayload = {
   shepherdCorgi: ServiceHealth;
 };
 
+// ── Endpoint monitoring ───────────────────────────────────────────────────
+export type MonitorStatus = 'ok' | 'cert-mismatch' | 'unreachable' | 'unmonitored' | 'pending';
+
+export type MonitorEndpoint = {
+  host: string;
+  port: number;
+  protocol: 'https' | 'tls';
+};
+
+export type MonitorResult = {
+  status: MonitorStatus;
+  checkedAt?: string;
+  seenFingerprint?: string;
+  error?: string;
+};
+
 // ── Flock (Corgi + certs) ─────────────────────────────────────────────────
 export type FlockCert = {
   name: string;
@@ -20,6 +36,7 @@ export type FlockCert = {
   sanNames: string[];
   fingerprint256?: string;
   validTo?: string;
+  monitor?: MonitorResult;
 };
 
 export type CorgiState = {
@@ -84,7 +101,7 @@ export type Assignment = {
   days?: number;
   fingerprint256?: string;
   validation?: AssignmentValidation;
-  monitor?: boolean;
+  monitor?: MonitorEndpoint;
   hooks?: string[];
 };
 

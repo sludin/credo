@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { usePoller } from '../hooks/usePoller';
 import { fetchFlock, renewCert } from '../api';
 import { StatusBadge, certTone, serviceTone } from '../components/StatusBadge';
+import { monitorLabel, monitorTone } from '../utils/monitor';
 import { Topbar } from '../components/Shell';
 import { usePermission } from '../hooks/usePermission';
 import type { CorgiState } from '../types';
@@ -164,12 +165,13 @@ export default function Corgis(): React.ReactElement {
                                   <th className="th-sort" style={{ borderBottom: 'none' }} onClick={() => toggleCertSort('domain')}>Domain <span>{sortIndicator(certSort.key === 'domain', certSort.dir)}</span></th>
                                   <th className="th-sort" style={{ borderBottom: 'none' }} onClick={() => toggleCertSort('daysLeft')}>Days Left <span>{sortIndicator(certSort.key === 'daysLeft', certSort.dir)}</span></th>
                                   <th className="th-sort" style={{ borderBottom: 'none' }} onClick={() => toggleCertSort('status')}>Status <span>{sortIndicator(certSort.key === 'status', certSort.dir)}</span></th>
+                                  <th style={{ borderBottom: 'none' }}>Monitor</th>
                                   <th style={{ borderBottom: 'none' }}>Actions</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {corgi.flock.length === 0 && (
-                                  <tr><td colSpan={5} className="text-muted" style={{ padding: '8px 10px' }}>No certs</td></tr>
+                                  <tr><td colSpan={6} className="text-muted" style={{ padding: '8px 10px' }}>No certs</td></tr>
                                 )}
                                 {sortedFlock(corgi).map((cert) => {
                                   const daysLeft = Math.floor(cert.lifetimeDays);
@@ -189,6 +191,12 @@ export default function Corgis(): React.ReactElement {
                                         {daysLeft > 0 ? daysLeft : '—'}
                                       </td>
                                       <td><StatusBadge label={certLabel} tone={certStatusTone} /></td>
+                                      <td title={cert.monitor?.error ?? (cert.monitor?.checkedAt ? `Checked ${new Date(cert.monitor.checkedAt).toLocaleTimeString()}` : undefined)}>
+                                        <StatusBadge
+                                          label={monitorLabel(cert.monitor?.status ?? 'unmonitored')}
+                                          tone={monitorTone(cert.monitor?.status ?? 'unmonitored')}
+                                        />
+                                      </td>
                                       <td onClick={(e) => e.stopPropagation()}>
                                         <details className="action-menu">
                                           <summary className="btn btn-ghost btn-sm">···</summary>
