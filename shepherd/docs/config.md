@@ -274,4 +274,5 @@ Managed certificate assignments. Each entry maps a certificate name to a Corgi n
 | `identityUri` | no | URI SAN to embed in the certificate |
 | `days` | no | Certificate validity in days (overrides CA default) |
 | `renewBeforeDays` | no | Renewal threshold in days (overrides CA default) |
+| `monitor` | no | Endpoint monitor block: `{ "host": "...", "port": 443, "protocol": "https" }`. The corgi periodically TLS-handshakes `host:port` (SNI = assignment `domain`, falling back to `host`) and reports `cert-mismatch` when the served leaf differs from the installed cert. `port` defaults to `443`; `protocol` is `"https"` (default) or `"tls"` — both are a plain TLS handshake in v1. Omit for no monitoring |
 | `forceRevalidate` | no | (**Not yet implemented**) Force a full ACME revalidation cycle regardless of cert age. Intended for testing |

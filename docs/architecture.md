@@ -139,6 +139,10 @@ One combined probe per Corgi per interval answers both liveness and cert-state q
 
 Cert maintenance runs on its own slow timer: for each assignment, check whether a renewal job is needed (cert expiring within `renewBeforeDays`, default 30; cert absent; corgi missing key). If so, create a `RenewalJob` and drive the ACME state machine. Renewal is deliberately not time-critical — certs renew with weeks of validity remaining.
 
+### Endpoint monitor (corgi-side, default: every 15 min, jittered)
+
+Corgi closes the last link in the verification chain. Shepherd's reconcile probe already verifies *shepherd-expected == corgi-installed* (fingerprint sync); the endpoint monitor verifies *corgi-installed == endpoint-served*. For each flock entry with a `monitor` block on its assignment (`host`, `port` default 443, `protocol` `https`/`tls`), Corgi TLS-handshakes the endpoint (SNI = assignment domain), captures the served leaf **without verifying the chain** (an expired or untrusted cert is mismatch data, not a connection error), and compares its SHA-256 fingerprint against the locally installed cert. Statuses per cert: `unmonitored` (no block), `pending` (not yet checked), `unreachable` (TCP/TLS failure), `cert-mismatch`, `ok`. Results ride the `/flock` response into Shepherd's reconcile probe and out to the dashboard — no new network paths. Cert installs trigger an extra one-shot check ~5s after hooks run, so a hook that failed to reload its service surfaces within seconds of a renewal. The goal is catching config errors that would let a cert update silently not take effect; corgi-less (operator-managed) assignments report `unmonitored` in v1.
+
 ---
 
 ## mTLS Bootstrap

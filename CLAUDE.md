@@ -24,6 +24,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 2. Shepherd runs its own ACME issuance and stores cert material in a certstore (`archive/` + `live/` layout mirroring certbot).
 3. Corgi pulls assignments; if local fingerprint differs from Shepherd's `fingerprint256`, Corgi fetches updated cert material from Shepherd.
 4. Corgi installs certs locally and runs configured service hooks.
+5. If the assignment has a `monitor` block (host/port/protocol), Corgi periodically TLS-handshakes the endpoint (no chain verification — an untrusted cert is data) and reports `ok` / `cert-mismatch` / `unreachable` per cert in its `/flock` response, catching installs that never took effect (e.g. a hook that didn't reload the service).
 
 **mTLS everywhere:** All inter-service communication uses mutual TLS. Shepherd's agent port validates Corgi client certificates. Vigil validates admin/shepherd client certs via user registry.
 

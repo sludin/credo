@@ -22,7 +22,7 @@ Shepherd is the TLS certificate management control plane. It owns the certificat
 | `issuance.rs` | Core ACME flow: CSR → ACME account → new order → challenge → finalize → cert store. |
 | `cert_store.rs` | Reads/writes `store/archive/{name}/cert-NNNN.pem`; manages `store/live/{name}/` symlinks; computes SHA256 fingerprints. |
 | `renewal_jobs.rs` | Async job state machine: `Queued` → `SubmittingOrder` → `Validating` → `Finalizing` → `Installing` → `Completed`/`Failed`. |
-| `poll.rs` | Background tasks: combined reconcile loop (liveness probe + fingerprint sync, queued mutation-triggered cycles) and slow renewal sweep (cert maintenance). |
+| `poll.rs` | Background tasks: combined reconcile loop (liveness probe + fingerprint sync, queued mutation-triggered cycles) and slow renewal sweep (cert maintenance). The `/flock` probe also collects corgi-reported endpoint-monitor results (served-leaf vs installed-cert checks). |
 | `acme_client.rs` | Per-CA ACME account cache; builds `instant-acme` HTTP client with mTLS/EAB support. |
 | `corgi_client.rs` | Per-Corgi mTLS `reqwest` client pool; `corgi_get`/`corgi_post` helpers; bootstrap identity fallback. |
 | `corgis.rs` | Parses `shepherd.corgis.json`; resolves per-Corgi mTLS credential overrides against defaults. |

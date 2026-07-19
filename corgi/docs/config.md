@@ -127,7 +127,7 @@ Hooks and file ownership are now handled by `certHooks` / `defaultHooks` and `fi
 | `csrPath` | no | — | Path to write the CSR |
 | `domain` | no | — | Primary domain override for ACME ordering |
 | `sans` | no | `[]` | Additional SANs beyond the primary domain |
-| `monitor` | no | `true` | Whether to include this cert in expiry monitoring |
+| `monitor` | no | — | Endpoint monitor block: `{ "host": "...", "port": 443, "protocol": "https" }`. Corgi periodically TLS-handshakes the endpoint and reports `cert-mismatch` when the served leaf differs from the installed cert. Usually set on the Shepherd assignment instead; a local block is the fallback when the assignment has none. Legacy boolean values are accepted and ignored |
 | `certMode` | no | from `filePolicy` | Octal file mode for cert files (e.g. `"0644"`) |
 | `keyMode` | no | from `filePolicy` | Octal file mode for key files (e.g. `"0600"`) |
 | `certOwner` / `certGroup` | no | from `filePolicy` | Per-cert file ownership |
@@ -161,6 +161,21 @@ primary sync path. Corgi still reconciles immediately at startup.
 | `shepherdSync.intervalSeconds` | number | `1800` | `CORGI_SHEPHERD_SYNC_INTERVAL_SECONDS` | Safety-net sync interval (jittered ±10%) |
 | `shepherdSync.staleWarningSeconds` | number | `3900` | `CORGI_SHEPHERD_SYNC_STALE_WARNING_SECONDS` | Emit a warning if no successful sync within this window (~2 missed pulls) |
 | `shepherdSync.assignmentsCachePath` | string | `"corgi.assignments.cache.json"` | `CORGI_SHEPHERD_ASSIGNMENTS_CACHE_PATH` | Path for the persisted assignments cache. Used when Shepherd is unreachable |
+
+## Endpoint Monitor
+
+Corgi periodically TLS-handshakes each flock entry that has a `monitor` block
+(from the Shepherd assignment or local config) and compares the served leaf
+fingerprint against the locally installed cert. Results (`ok`,
+`cert-mismatch`, `unreachable`, `pending`, `unmonitored`) ride the `/flock`
+response, so Shepherd picks them up on its normal reconcile probe. The checker
+deliberately does not verify the peer chain — an expired or untrusted cert is
+mismatch data, not a connection error. Cert installs additionally trigger a
+one-shot check ~5s after hooks run.
+
+| Field | Type | Default | Env override | Description |
+|-------|------|---------|--------------|-------------|
+| `monitorIntervalSeconds` | number | `900` | `CORGI_MONITOR_INTERVAL_SECONDS` | Sweep interval (jittered ±10%). Slow by design — this hunts config errors, not uptime |
 
 ## Auth
 
