@@ -2,22 +2,19 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePoller } from '../hooks/usePoller';
+import { useColumnVisibility } from '../hooks/useColumnVisibility';
 import { fetchHealth, fetchFlock, fetchCerts } from '../api';
-import { StatusBadge, certTone, serviceTone } from '../components/StatusBadge';
+import { StatusBadge, serviceTone } from '../components/StatusBadge';
 import { StatBox } from '../components/StatBox';
 import { Topbar } from '../components/Shell';
+import { CERT_COLUMNS, visibleCertColumns, type CertColumnKey, DEFAULT_VISIBLE_CERT_COLUMNS } from './certHealthColumns';
 import type { CorgiState, CertStoreEntry, HealthPayload } from '../types';
 
 type SortDir = 'asc' | 'desc';
-type CertSortKey = 'domain' | 'corgi' | 'ca' | 'daysLeft' | 'expires' | 'status';
+type CertSortKey = CertColumnKey;
 type CorgiSortKey = 'name' | 'host' | 'status' | 'certs' | 'lastSeen';
 
-/** "Apr 30 14:51:20 2027 GMT" → "Apr 30 2027" (handles single-digit day padding) */
-function fmtDate(s: string | undefined): string {
-  if (!s) return '—';
-  const p = s.split(' ').filter(Boolean);
-  return p.length >= 4 ? `${p[0]} ${p[1]}, ${p[3]}` : s;
-}
+const CERT_COLUMNS_STORAGE_KEY = 'credo.columns.overview.certHealth';
 
 export default function Overview(): React.ReactElement {
   const navigate = useNavigate();
@@ -27,6 +24,8 @@ export default function Overview(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [certSort, setCertSort] = useState<{ key: CertSortKey; dir: SortDir }>({ key: 'daysLeft', dir: 'asc' });
   const [corgiSort, setCorgiSort] = useState<{ key: CorgiSortKey; dir: SortDir }>({ key: 'name', dir: 'asc' });
+  const { visible: visibleCertColumnKeys, isVisible, toggle: toggleCertColumn } =
+    useColumnVisibility(CERT_COLUMNS_STORAGE_KEY, DEFAULT_VISIBLE_CERT_COLUMNS);
 
   const { secondsAgo, refresh } = usePoller(async () => {
     try {
@@ -48,25 +47,14 @@ export default function Overview(): React.ReactElement {
     })
   );
 
-  const sortedCertRows = [...certRows].sort((a, b) => {
-    const aDomain = (a.cert.sanNames[0] ?? a.cert.name).toLowerCase();
-    const bDomain = (b.cert.sanNames[0] ?? b.cert.name).toLowerCase();
-    const aCa = (a.store?.assignment?.ca ?? '').toLowerCase();
-    const bCa = (b.store?.assignment?.ca ?? '').toLowerCase();
-    const aExpires = a.cert.validTo ? new Date(a.cert.validTo).getTime() : Number.MAX_SAFE_INTEGER;
-    const bExpires = b.cert.validTo ? new Date(b.cert.validTo).getTime() : Number.MAX_SAFE_INTEGER;
-    const aStatus = a.cert.status.toLowerCase();
-    const bStatus = b.cert.status.toLowerCase();
+  const certColumnByKey = new Map(CERT_COLUMNS.map((c) => [c.key, c]));
 
-    let cmp = 0;
-    switch (certSort.key) {
-      case 'domain': cmp = aDomain.localeCompare(bDomain); break;
-      case 'corgi': cmp = a.corgi.localeCompare(b.corgi); break;
-      case 'ca': cmp = aCa.localeCompare(bCa); break;
-      case 'daysLeft': cmp = a.daysLeft - b.daysLeft; break;
-      case 'expires': cmp = aExpires - bExpires; break;
-      case 'status': cmp = aStatus.localeCompare(bStatus); break;
-    }
+  const sortedCertRows = [...certRows].sort((a, b) => {
+    const sortValue = certColumnByKey.get(certSort.key)?.sortValue;
+    if (!sortValue) return 0;
+    const av = sortValue(a);
+    const bv = sortValue(b);
+    const cmp = typeof av === 'number' && typeof bv === 'number' ? av - bv : String(av).localeCompare(String(bv));
     return certSort.dir === 'asc' ? cmp : -cmp;
   });
 
@@ -100,6 +88,8 @@ export default function Overview(): React.ReactElement {
     return dir === 'asc' ? '↑' : '↓';
   }
 
+  const visibleCols = visibleCertColumns(visibleCertColumnKeys);
+
   const totalCerts   = certRows.length;
   const expiringSoon = certRows.filter((r) => r.daysLeft <= 30 && r.daysLeft > 0).length;
   const expired      = certRows.filter((r) => r.daysLeft <= 0 || r.cert.status === 'not-ok').length;
@@ -123,43 +113,52 @@ export default function Overview(): React.ReactElement {
           <div className="card-header">
             <span className="card-title">Certificate Health</span>
             <span className="card-subtitle">{certRows.length} certs across {corgis.length} corgis</span>
+            <details className="action-menu">
+              <summary className="btn btn-ghost btn-sm">Columns ⚙</summary>
+              <div className="action-menu-dropdown">
+                {CERT_COLUMNS.filter((col) => !col.pinned).map((col) => (
+                  <label key={col.key} className="action-menu-item" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <input type="checkbox" checked={isVisible(col.key)} onChange={() => toggleCertColumn(col.key)} />
+                    {col.header}
+                  </label>
+                ))}
+              </div>
+            </details>
           </div>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th className="th-sort" onClick={() => toggleCertSort('domain')}>Domain / Cert <span>{sortIndicator(certSort.key === 'domain', certSort.dir)}</span></th>
-                  <th className="th-sort" onClick={() => toggleCertSort('corgi')}>Corgi <span>{sortIndicator(certSort.key === 'corgi', certSort.dir)}</span></th>
-                  <th className="th-sort" onClick={() => toggleCertSort('ca')}>CA <span>{sortIndicator(certSort.key === 'ca', certSort.dir)}</span></th>
-                  <th className="th-sort" onClick={() => toggleCertSort('daysLeft')}>Days Left <span>{sortIndicator(certSort.key === 'daysLeft', certSort.dir)}</span></th>
-                  <th className="th-sort" onClick={() => toggleCertSort('expires')}>Expires <span>{sortIndicator(certSort.key === 'expires', certSort.dir)}</span></th>
-                  <th className="th-sort" onClick={() => toggleCertSort('status')}>Status <span>{sortIndicator(certSort.key === 'status', certSort.dir)}</span></th>
+                  {visibleCols.map((col) =>
+                    col.sortable ? (
+                      <th key={col.key} className="th-sort" onClick={() => toggleCertSort(col.key)}>
+                        {col.header} <span>{sortIndicator(certSort.key === col.key, certSort.dir)}</span>
+                      </th>
+                    ) : (
+                      <th key={col.key}>{col.header}</th>
+                    )
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {sortedCertRows.length === 0 && (
-                  <tr><td colSpan={6} className="text-muted" style={{ textAlign: 'center', padding: 20 }}>No certs found</td></tr>
+                  <tr>
+                    <td colSpan={visibleCols.length} className="text-muted" style={{ textAlign: 'center', padding: 20 }}>
+                      No certs found
+                    </td>
+                  </tr>
                 )}
-                {sortedCertRows.map((row) => {
-                  const tone = certTone(row.cert.status, row.daysLeft);
-                  const label = tone === 'yellow' ? `Expiring ${row.daysLeft}d` : tone === 'red' ? 'Error' : 'Valid';
-                  return (
-                    <tr
-                      key={`${row.corgi}:${row.cert.name}`}
-                      className="clickable"
-                      onClick={() => navigate(`/certificates?cert=${encodeURIComponent(row.cert.name)}`)}
-                    >
-                      <td className="fw-500">{row.cert.sanNames[0] ?? row.cert.name}</td>
-                      <td className="text-muted">{row.corgi}</td>
-                      <td className="text-muted">{row.store?.assignment?.ca ?? '—'}</td>
-                      <td className={tone === 'green' ? 'text-green' : tone === 'yellow' ? 'text-yellow' : 'text-red'}>
-                        {row.daysLeft > 0 ? row.daysLeft : '—'}
-                      </td>
-                      <td className="text-muted">{fmtDate(row.cert.validTo)}</td>
-                      <td><StatusBadge label={label} tone={tone} /></td>
-                    </tr>
-                  );
-                })}
+                {sortedCertRows.map((row) => (
+                  <tr
+                    key={`${row.corgi}:${row.cert.name}`}
+                    className="clickable"
+                    onClick={() => navigate(`/certificates?cert=${encodeURIComponent(row.cert.name)}`)}
+                  >
+                    {visibleCols.map((col) => (
+                      <React.Fragment key={col.key}>{col.render(row)}</React.Fragment>
+                    ))}
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
