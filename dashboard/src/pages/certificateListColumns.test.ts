@@ -20,4 +20,20 @@ describe('visibleCertificateListColumns', () => {
     const allKeys = CERTIFICATE_LIST_COLUMNS.map((c) => c.key);
     expect(visibleCertificateListColumns(new Set(allKeys)).map((c) => c.key)).toEqual(allKeys);
   });
+
+  it('has the same optional columns as the cert-health table, all hidden by default', () => {
+    const keys = CERTIFICATE_LIST_COLUMNS.map((c) => c.key);
+    expect(keys).toEqual(
+      expect.arrayContaining(['monitorStatus', 'monitorChecked', 'fingerprint', 'sanCount'])
+    );
+    expect(DEFAULT_VISIBLE_CERTIFICATE_LIST_COLUMNS).not.toEqual(
+      expect.arrayContaining(['monitorStatus', 'monitorChecked', 'fingerprint', 'sanCount'])
+    );
+  });
+
+  it('adds optional columns when toggled on, without dropping defaults', () => {
+    const cols = visibleCertificateListColumns(new Set([...DEFAULT_VISIBLE_CERTIFICATE_LIST_COLUMNS, 'monitorStatus']));
+    expect(cols.map((c) => c.key)).toContain('monitorStatus');
+    expect(cols).toHaveLength(6);
+  });
 });

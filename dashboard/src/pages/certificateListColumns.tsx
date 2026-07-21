@@ -2,10 +2,13 @@
 import React from 'react';
 import { StatusBadge } from '../components/StatusBadge';
 import { statusTone, statusLabel } from './Certificates.testable';
+import { monitorTone, monitorLabel } from '../utils/monitor';
 import { visibleColumns, type ColumnDef } from '../lib/columns';
 import { fmtDate, type UnifiedCertRow } from './Certificates';
 
-export type CertificateListColumnKey = 'name' | 'corgi' | 'ca' | 'status' | 'expires';
+export type CertificateListColumnKey =
+  | 'name' | 'corgi' | 'ca' | 'status' | 'expires'
+  | 'monitorStatus' | 'monitorChecked' | 'fingerprint' | 'sanCount';
 
 export type CertificateListColumn = ColumnDef<CertificateListColumnKey, UnifiedCertRow>;
 
@@ -38,6 +41,36 @@ export const CERTIFICATE_LIST_COLUMNS: CertificateListColumn[] = [
     key: 'expires', header: 'Expires', sortable: true,
     sortValue: (r) => r.daysLeft ?? Infinity,
     render: (r) => <td className="text-muted">{r.validTo ? fmtDate(r.validTo) : '—'}</td>,
+  },
+  {
+    key: 'monitorStatus', header: 'Monitor Status', sortable: true,
+    sortValue: (r) => r.flockCert?.monitor?.status ?? 'unmonitored',
+    render: (r) => {
+      const status = r.flockCert?.monitor?.status ?? 'unmonitored';
+      return <td><StatusBadge label={monitorLabel(status)} tone={monitorTone(status)} /></td>;
+    },
+  },
+  {
+    key: 'monitorChecked', header: 'Monitor Last Checked', sortable: true,
+    sortValue: (r) => (r.flockCert?.monitor?.checkedAt ? new Date(r.flockCert.monitor.checkedAt).getTime() : 0),
+    render: (r) => (
+      <td className="text-muted">
+        {r.flockCert?.monitor?.checkedAt ? new Date(r.flockCert.monitor.checkedAt).toLocaleString() : '—'}
+      </td>
+    ),
+  },
+  {
+    key: 'fingerprint', header: 'Fingerprint', sortable: false,
+    render: (r) => (
+      <td className="mono text-muted">
+        {r.fingerprint256 ? `${r.fingerprint256.slice(0, 16)}…` : '—'}
+      </td>
+    ),
+  },
+  {
+    key: 'sanCount', header: 'SAN Count', sortable: true,
+    sortValue: (r) => r.sanNames.length,
+    render: (r) => <td className="text-muted">{r.sanNames.length}</td>,
   },
 ];
 
