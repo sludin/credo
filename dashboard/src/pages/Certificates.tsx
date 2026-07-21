@@ -39,7 +39,7 @@ import type {
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type UnifiedCertRow = {
+export type UnifiedCertRow = {
   certName: string;
   corgi: string;
   ca: string;
@@ -97,7 +97,7 @@ const emptyForm: FormState = {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function fmtDate(s: string | undefined | null): string {
+export function fmtDate(s: string | undefined | null): string {
   if (!s) return '—';
   const p = s.split(' ').filter(Boolean);
   return p.length >= 4 ? `${p[0]} ${p[1]}, ${p[3]}` : s;
