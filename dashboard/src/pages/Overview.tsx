@@ -8,14 +8,35 @@ import { StatusBadge, serviceTone } from '../components/StatusBadge';
 import { StatBox } from '../components/StatBox';
 import { Topbar } from '../components/Shell';
 import { ColumnMenu } from '../components/ColumnMenu';
+import { visibleColumns } from '../lib/columns';
 import { CERT_COLUMNS, visibleCertColumns, type CertColumnKey, DEFAULT_VISIBLE_CERT_COLUMNS } from './certHealthColumns';
+import { CORGI_COLUMNS, DEFAULT_VISIBLE_CORGI_COLUMNS, type CorgiColumnKey, type CorgiColumn } from './corgiColumns';
 import type { CorgiState, CertStoreEntry, HealthPayload } from '../types';
 
 type SortDir = 'asc' | 'desc';
 type CertSortKey = CertColumnKey;
-type CorgiSortKey = 'name' | 'host' | 'status' | 'certs' | 'lastSeen';
+type CorgiSortKey = CorgiColumnKey;
 
 const CERT_COLUMNS_STORAGE_KEY = 'credo.columns.overview.certHealth';
+const CORGI_COLUMNS_STORAGE_KEY = 'credo.columns.overview.corgiFleet';
+
+function buildServicesColumn(health: HealthPayload | null): CorgiColumn {
+  return {
+    key: 'services',
+    header: 'Services',
+    sortable: false,
+    render: () => (
+      <td>
+        {health?.shepherdApi?.status && (
+          <StatusBadge
+            label={health.shepherdApi.status === 'healthy' ? 'API' : 'API down'}
+            tone={serviceTone(health.shepherdApi.status)}
+          />
+        )}
+      </td>
+    ),
+  };
+}
 
 export default function Overview(): React.ReactElement {
   const navigate = useNavigate();
@@ -27,6 +48,8 @@ export default function Overview(): React.ReactElement {
   const [corgiSort, setCorgiSort] = useState<{ key: CorgiSortKey; dir: SortDir }>({ key: 'name', dir: 'asc' });
   const { visible: visibleCertColumnKeys, toggle: toggleCertColumn } =
     useColumnVisibility(CERT_COLUMNS_STORAGE_KEY, DEFAULT_VISIBLE_CERT_COLUMNS);
+  const { visible: visibleCorgiColumnKeys, toggle: toggleCorgiColumn } =
+    useColumnVisibility<CorgiColumnKey>(CORGI_COLUMNS_STORAGE_KEY, [...DEFAULT_VISIBLE_CORGI_COLUMNS, 'services']);
 
   const { secondsAgo, refresh } = usePoller(async () => {
     try {
@@ -59,20 +82,15 @@ export default function Overview(): React.ReactElement {
     return certSort.dir === 'asc' ? cmp : -cmp;
   });
 
-  const sortedCorgis = [...corgis].sort((a, b) => {
-    const aHost = (() => { try { return new URL(a.url).hostname; } catch { return a.url; } })().toLowerCase();
-    const bHost = (() => { try { return new URL(b.url).hostname; } catch { return b.url; } })().toLowerCase();
-    const aLast = a.lastPolledAt ? new Date(a.lastPolledAt).getTime() : 0;
-    const bLast = b.lastPolledAt ? new Date(b.lastPolledAt).getTime() : 0;
+  const overviewCorgiColumns: CorgiColumn[] = [...CORGI_COLUMNS, buildServicesColumn(health)];
+  const corgiColumnByKey = new Map(overviewCorgiColumns.map((c) => [c.key, c]));
 
-    let cmp = 0;
-    switch (corgiSort.key) {
-      case 'name': cmp = a.name.localeCompare(b.name); break;
-      case 'host': cmp = aHost.localeCompare(bHost); break;
-      case 'status': cmp = a.status.localeCompare(b.status); break;
-      case 'certs': cmp = a.flock.length - b.flock.length; break;
-      case 'lastSeen': cmp = aLast - bLast; break;
-    }
+  const sortedCorgis = [...corgis].sort((a, b) => {
+    const sortValue = corgiColumnByKey.get(corgiSort.key)?.sortValue;
+    if (!sortValue) return 0;
+    const av = sortValue(a);
+    const bv = sortValue(b);
+    const cmp = typeof av === 'number' && typeof bv === 'number' ? av - bv : String(av).localeCompare(String(bv));
     return corgiSort.dir === 'asc' ? cmp : -cmp;
   });
 
@@ -90,6 +108,7 @@ export default function Overview(): React.ReactElement {
   }
 
   const visibleCols = visibleCertColumns(visibleCertColumnKeys);
+  const visibleCorgiCols = visibleColumns(overviewCorgiColumns, visibleCorgiColumnKeys);
 
   const totalCerts   = certRows.length;
   const expiringSoon = certRows.filter((r) => r.daysLeft <= 30 && r.daysLeft > 0).length;
@@ -160,49 +179,42 @@ export default function Overview(): React.ReactElement {
           <div className="card-header">
             <span className="card-title">Corgi Fleet</span>
             <span className="card-subtitle">{corgis.length} configured</span>
+            <ColumnMenu columns={overviewCorgiColumns} visible={visibleCorgiColumnKeys} onToggle={toggleCorgiColumn} />
           </div>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th className="th-sort" onClick={() => toggleCorgiSort('name')}>Name <span>{sortIndicator(corgiSort.key === 'name', corgiSort.dir)}</span></th>
-                  <th className="th-sort" onClick={() => toggleCorgiSort('host')}>Host <span>{sortIndicator(corgiSort.key === 'host', corgiSort.dir)}</span></th>
-                  <th className="th-sort" onClick={() => toggleCorgiSort('status')}>Status <span>{sortIndicator(corgiSort.key === 'status', corgiSort.dir)}</span></th>
-                  <th className="th-sort" onClick={() => toggleCorgiSort('certs')}>Certs <span>{sortIndicator(corgiSort.key === 'certs', corgiSort.dir)}</span></th>
-                  <th className="th-sort" onClick={() => toggleCorgiSort('lastSeen')}>Last Seen <span>{sortIndicator(corgiSort.key === 'lastSeen', corgiSort.dir)}</span></th>
-                  <th>Services</th>
+                  {visibleCorgiCols.map((col) =>
+                    col.sortable ? (
+                      <th key={col.key} className="th-sort" onClick={() => toggleCorgiSort(col.key)}>
+                        {col.header} <span>{sortIndicator(corgiSort.key === col.key, corgiSort.dir)}</span>
+                      </th>
+                    ) : (
+                      <th key={col.key}>{col.header}</th>
+                    )
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {sortedCorgis.length === 0 && (
-                  <tr><td colSpan={6} className="text-muted" style={{ textAlign: 'center', padding: 20 }}>No corgis found</td></tr>
+                  <tr>
+                    <td colSpan={visibleCorgiCols.length} className="text-muted" style={{ textAlign: 'center', padding: 20 }}>
+                      No corgis found
+                    </td>
+                  </tr>
                 )}
-                {sortedCorgis.map((corgi) => {
-                  const tone = serviceTone(corgi.status);
-                  const statusLabel = corgi.status.charAt(0).toUpperCase() + corgi.status.slice(1);
-                  const host = (() => { try { return new URL(corgi.url).hostname; } catch { return corgi.url; } })();
-                  return (
-                    <tr
-                      key={corgi.name}
-                      className="clickable"
-                      onClick={() => navigate(`/corgis?corgi=${encodeURIComponent(corgi.name)}`)}
-                    >
-                      <td className="fw-500">{corgi.name}</td>
-                      <td className="text-muted mono">{host}</td>
-                      <td><StatusBadge label={statusLabel} tone={tone} /></td>
-                      <td>{corgi.flock.length}</td>
-                      <td className="text-muted">{corgi.lastPolledAt ? new Date(corgi.lastPolledAt).toLocaleTimeString() : '—'}</td>
-                      <td>
-                        {health?.shepherdApi?.status && (
-                          <StatusBadge
-                            label={health.shepherdApi.status === 'healthy' ? 'API' : 'API down'}
-                            tone={serviceTone(health.shepherdApi.status)}
-                          />
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {sortedCorgis.map((corgi) => (
+                  <tr
+                    key={corgi.name}
+                    className="clickable"
+                    onClick={() => navigate(`/corgis?corgi=${encodeURIComponent(corgi.name)}`)}
+                  >
+                    {visibleCorgiCols.map((col) => (
+                      <React.Fragment key={col.key}>{col.render(corgi)}</React.Fragment>
+                    ))}
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
