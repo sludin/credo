@@ -21,10 +21,18 @@ import {
 } from '../api';
 import type { LastTerminalJobSummary } from '../api';
 import { StatusBadge } from '../components/StatusBadge';
-import { deriveStatus, statusTone, statusLabel, type UnifiedStatus } from './Certificates.testable';
+import { deriveStatus, type UnifiedStatus } from './Certificates.testable';
 import { monitorLabel, monitorTone, monitorToForm, monitorFromForm } from '../utils/monitor';
 import { Topbar } from '../components/Shell';
 import { usePermission } from '../hooks/usePermission';
+import { useColumnVisibility } from '../hooks/useColumnVisibility';
+import { ColumnMenu } from '../components/ColumnMenu';
+import {
+  CERTIFICATE_LIST_COLUMNS,
+  DEFAULT_VISIBLE_CERTIFICATE_LIST_COLUMNS,
+  visibleCertificateListColumns,
+  type CertificateListColumnKey,
+} from './certificateListColumns';
 import type {
   Assignment,
   CertStoreEntry,
@@ -57,7 +65,7 @@ export type UnifiedCertRow = {
 type PanelMode = 'detail' | 'none-info' | 'edit' | 'new';
 
 type SortDir = 'asc' | 'desc';
-type SortKey = 'name' | 'corgi' | 'ca' | 'status' | 'expires';
+type SortKey = CertificateListColumnKey;
 
 type InspectTab = 'structured' | 'raw' | 'pem';
 
@@ -456,6 +464,8 @@ export default function Certificates(): React.ReactElement {
   // UI state
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'name', dir: 'asc' });
+  const { visible: visibleCertListColumnKeys, toggle: toggleCertListColumn } =
+    useColumnVisibility<CertificateListColumnKey>('credo.columns.certificates.list', DEFAULT_VISIBLE_CERTIFICATE_LIST_COLUMNS);
   const [selectedCertName, setSelectedCertName] = useState<string | null>(null);
   const [panelMode, setPanelMode] = useState<PanelMode>('detail');
 
@@ -594,17 +604,18 @@ export default function Certificates(): React.ReactElement {
       )
     : rows;
 
+  const certListColumnByKey = new Map(CERTIFICATE_LIST_COLUMNS.map((c) => [c.key, c]));
+
   const sorted = [...filtered].sort((a, b) => {
-    let cmp = 0;
-    switch (sort.key) {
-      case 'name': cmp = a.certName.localeCompare(b.certName); break;
-      case 'corgi': cmp = a.corgi.localeCompare(b.corgi); break;
-      case 'ca': cmp = a.ca.localeCompare(b.ca); break;
-      case 'status': cmp = a.status.localeCompare(b.status); break;
-      case 'expires': cmp = (a.daysLeft ?? Infinity) - (b.daysLeft ?? Infinity); break;
-    }
+    const sortValue = certListColumnByKey.get(sort.key)?.sortValue;
+    if (!sortValue) return 0;
+    const av = sortValue(a);
+    const bv = sortValue(b);
+    const cmp = typeof av === 'number' && typeof bv === 'number' ? av - bv : String(av).localeCompare(String(bv));
     return sort.dir === 'asc' ? cmp : -cmp;
   });
+
+  const visibleCertListCols = visibleCertificateListColumns(visibleCertListColumnKeys);
 
   function toggleSort(key: SortKey): void {
     setSort(prev => prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' });
@@ -850,21 +861,22 @@ export default function Certificates(): React.ReactElement {
                 value={filter}
                 onChange={e => setFilter(e.target.value)}
               />
+              <ColumnMenu columns={CERTIFICATE_LIST_COLUMNS} visible={visibleCertListColumnKeys} onToggle={toggleCertListColumn} />
             </div>
             <div className="table-wrap" style={{ flex: 1, overflowY: 'auto' }}>
               <table>
                 <thead>
                   <tr>
-                    <th className="th-sort" onClick={() => toggleSort('name')}>Name <span>{sortIndicator(sort.key === 'name', sort.dir)}</span></th>
-                    <th className="th-sort" onClick={() => toggleSort('corgi')}>Corgi <span>{sortIndicator(sort.key === 'corgi', sort.dir)}</span></th>
-                    <th className="th-sort" onClick={() => toggleSort('ca')}>CA <span>{sortIndicator(sort.key === 'ca', sort.dir)}</span></th>
-                    <th className="th-sort" onClick={() => toggleSort('status')}>Status <span>{sortIndicator(sort.key === 'status', sort.dir)}</span></th>
-                    <th className="th-sort" onClick={() => toggleSort('expires')}>Expires <span>{sortIndicator(sort.key === 'expires', sort.dir)}</span></th>
+                    {visibleCertListCols.map((col) => (
+                      <th key={col.key} className="th-sort" onClick={() => toggleSort(col.key)}>
+                        {col.header} <span>{sortIndicator(sort.key === col.key, sort.dir)}</span>
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
                   {sorted.length === 0 && (
-                    <tr><td colSpan={5} className="text-muted" style={{ textAlign: 'center', padding: 20 }}>No certificates</td></tr>
+                    <tr><td colSpan={visibleCertListCols.length} className="text-muted" style={{ textAlign: 'center', padding: 20 }}>No certificates</td></tr>
                   )}
                   {sorted.map(row => (
                     <tr
@@ -872,19 +884,9 @@ export default function Certificates(): React.ReactElement {
                       className={`clickable${selectedCertName === row.certName ? ' expanded' : ''}`}
                       onClick={() => handleSelectRow(row)}
                     >
-                      <td className="fw-500">{row.domain}</td>
-                      <td className="text-muted">{row.corgi}</td>
-                      <td className="text-muted">{row.ca}</td>
-                      <td>
-                        <StatusBadge
-                          label={statusLabel(row.status, row.daysLeft)}
-                          tone={statusTone(row.status)}
-                          spinning={row.status === 'renewing'}
-                        />
-                      </td>
-                      <td className="text-muted">
-                        {row.validTo ? fmtDate(row.validTo) : '—'}
-                      </td>
+                      {visibleCertListCols.map((col) => (
+                        <React.Fragment key={col.key}>{col.render(row)}</React.Fragment>
+                      ))}
                     </tr>
                   ))}
                 </tbody>
