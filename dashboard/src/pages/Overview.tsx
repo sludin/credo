@@ -7,6 +7,7 @@ import { fetchHealth, fetchFlock, fetchCerts } from '../api';
 import { StatusBadge, serviceTone } from '../components/StatusBadge';
 import { StatBox } from '../components/StatBox';
 import { Topbar } from '../components/Shell';
+import { ColumnMenu } from '../components/ColumnMenu';
 import { CERT_COLUMNS, visibleCertColumns, type CertColumnKey, DEFAULT_VISIBLE_CERT_COLUMNS } from './certHealthColumns';
 import type { CorgiState, CertStoreEntry, HealthPayload } from '../types';
 
@@ -24,7 +25,7 @@ export default function Overview(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [certSort, setCertSort] = useState<{ key: CertSortKey; dir: SortDir }>({ key: 'daysLeft', dir: 'asc' });
   const [corgiSort, setCorgiSort] = useState<{ key: CorgiSortKey; dir: SortDir }>({ key: 'name', dir: 'asc' });
-  const { visible: visibleCertColumnKeys, isVisible, toggle: toggleCertColumn } =
+  const { visible: visibleCertColumnKeys, toggle: toggleCertColumn } =
     useColumnVisibility(CERT_COLUMNS_STORAGE_KEY, DEFAULT_VISIBLE_CERT_COLUMNS);
 
   const { secondsAgo, refresh } = usePoller(async () => {
@@ -113,17 +114,7 @@ export default function Overview(): React.ReactElement {
           <div className="card-header">
             <span className="card-title">Certificate Health</span>
             <span className="card-subtitle">{certRows.length} certs across {corgis.length} corgis</span>
-            <details className="action-menu">
-              <summary className="btn btn-ghost btn-sm">Columns ⚙</summary>
-              <div className="action-menu-dropdown">
-                {CERT_COLUMNS.filter((col) => !col.pinned).map((col) => (
-                  <label key={col.key} className="action-menu-item" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <input type="checkbox" checked={isVisible(col.key)} onChange={() => toggleCertColumn(col.key)} />
-                    {col.header}
-                  </label>
-                ))}
-              </div>
-            </details>
+            <ColumnMenu columns={CERT_COLUMNS} visible={visibleCertColumnKeys} onToggle={toggleCertColumn} />
           </div>
           <div className="table-wrap">
             <table>
