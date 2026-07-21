@@ -15,7 +15,7 @@
     "@peculiar/x509": "^2.0.0",
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.0",
-    "axios": "^1.17.0",
+    "axios": "^1.18.0",
     "commander": "^12.1.0",
     "express": "^4.21.2",
     "express-session": "^1.19.0",
