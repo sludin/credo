@@ -3,14 +3,17 @@ import React, { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { usePoller } from '../hooks/usePoller';
 import { fetchFlock, renewCert } from '../api';
-import { StatusBadge, certTone, serviceTone } from '../components/StatusBadge';
+import { StatusBadge, certTone } from '../components/StatusBadge';
 import { monitorLabel, monitorTone } from '../utils/monitor';
 import { Topbar } from '../components/Shell';
 import { usePermission } from '../hooks/usePermission';
+import { useColumnVisibility } from '../hooks/useColumnVisibility';
+import { ColumnMenu } from '../components/ColumnMenu';
+import { CORGI_COLUMNS, DEFAULT_VISIBLE_CORGI_COLUMNS, visibleCorgiColumns, type CorgiColumnKey } from './corgiColumns';
 import type { CorgiState } from '../types';
 
 type SortDir = 'asc' | 'desc';
-type CorgiSortKey = 'name' | 'host' | 'status' | 'certs' | 'lastSeen';
+type CorgiSortKey = CorgiColumnKey;
 type CertSortKey = 'cert' | 'domain' | 'daysLeft' | 'status';
 
 export default function Corgis(): React.ReactElement {
@@ -28,6 +31,8 @@ export default function Corgis(): React.ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [corgiSort, setCorgiSort] = useState<{ key: CorgiSortKey; dir: SortDir }>({ key: 'name', dir: 'asc' });
   const [certSort, setCertSort] = useState<{ key: CertSortKey; dir: SortDir }>({ key: 'cert', dir: 'asc' });
+  const { visible: visibleCorgiColumnKeys, toggle: toggleCorgiColumn } =
+    useColumnVisibility<CorgiColumnKey>('credo.columns.corgis.corgiList', DEFAULT_VISIBLE_CORGI_COLUMNS);
 
   const { secondsAgo, refresh } = usePoller(async () => {
     try {
@@ -58,20 +63,14 @@ export default function Corgis(): React.ReactElement {
     }
   }
 
-  const sortedCorgis = [...corgis].sort((a, b) => {
-    const aHost = (() => { try { return new URL(a.url).hostname; } catch { return a.url; } })().toLowerCase();
-    const bHost = (() => { try { return new URL(b.url).hostname; } catch { return b.url; } })().toLowerCase();
-    const aLast = a.lastPolledAt ? new Date(a.lastPolledAt).getTime() : 0;
-    const bLast = b.lastPolledAt ? new Date(b.lastPolledAt).getTime() : 0;
+  const corgiColumnByKey = new Map(CORGI_COLUMNS.map((c) => [c.key, c]));
 
-    let cmp = 0;
-    switch (corgiSort.key) {
-      case 'name': cmp = a.name.localeCompare(b.name); break;
-      case 'host': cmp = aHost.localeCompare(bHost); break;
-      case 'status': cmp = a.status.localeCompare(b.status); break;
-      case 'certs': cmp = a.flock.length - b.flock.length; break;
-      case 'lastSeen': cmp = aLast - bLast; break;
-    }
+  const sortedCorgis = [...corgis].sort((a, b) => {
+    const sortValue = corgiColumnByKey.get(corgiSort.key)?.sortValue;
+    if (!sortValue) return 0;
+    const av = sortValue(a);
+    const bv = sortValue(b);
+    const cmp = typeof av === 'number' && typeof bv === 'number' ? av - bv : String(av).localeCompare(String(bv));
     return corgiSort.dir === 'asc' ? cmp : -cmp;
   });
 
@@ -103,6 +102,8 @@ export default function Corgis(): React.ReactElement {
     return dir === 'asc' ? '↑' : '↓';
   }
 
+  const visibleCorgiCols = visibleCorgiColumns(visibleCorgiColumnKeys);
+
   return (
     <>
       <Topbar title="Corgis" subtitle="Cert agents" secondsAgo={secondsAgo} onRefresh={refresh} />
@@ -114,28 +115,30 @@ export default function Corgis(): React.ReactElement {
           <div className="card-header">
             <span className="card-title">Corgi Fleet</span>
             <span className="card-subtitle">{corgis.length} registered</span>
+            <ColumnMenu columns={CORGI_COLUMNS} visible={visibleCorgiColumnKeys} onToggle={toggleCorgiColumn} />
           </div>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th style={{ width: 20 }} />
-                  <th className="th-sort" onClick={() => toggleCorgiSort('name')}>Name <span>{sortIndicator(corgiSort.key === 'name', corgiSort.dir)}</span></th>
-                  <th className="th-sort" onClick={() => toggleCorgiSort('host')}>Host <span>{sortIndicator(corgiSort.key === 'host', corgiSort.dir)}</span></th>
-                  <th className="th-sort" onClick={() => toggleCorgiSort('status')}>Status <span>{sortIndicator(corgiSort.key === 'status', corgiSort.dir)}</span></th>
-                  <th className="th-sort" onClick={() => toggleCorgiSort('certs')}>Certs <span>{sortIndicator(corgiSort.key === 'certs', corgiSort.dir)}</span></th>
-                  <th className="th-sort" onClick={() => toggleCorgiSort('lastSeen')}>Last Seen <span>{sortIndicator(corgiSort.key === 'lastSeen', corgiSort.dir)}</span></th>
+                  {visibleCorgiCols.map((col) =>
+                    col.sortable ? (
+                      <th key={col.key} className="th-sort" onClick={() => toggleCorgiSort(col.key)}>
+                        {col.header} <span>{sortIndicator(corgiSort.key === col.key, corgiSort.dir)}</span>
+                      </th>
+                    ) : (
+                      <th key={col.key}>{col.header}</th>
+                    )
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {sortedCorgis.length === 0 && (
-                  <tr><td colSpan={6} className="text-muted" style={{ textAlign: 'center', padding: 20 }}>No corgis</td></tr>
+                  <tr><td colSpan={1 + visibleCorgiCols.length} className="text-muted" style={{ textAlign: 'center', padding: 20 }}>No corgis</td></tr>
                 )}
                 {sortedCorgis.map((corgi) => {
                   const isExpanded = expandedCorgi === corgi.name;
-                  const tone = serviceTone(corgi.status);
-                  const statusLabel = corgi.status.charAt(0).toUpperCase() + corgi.status.slice(1);
-                  const host = (() => { try { return new URL(corgi.url).hostname; } catch { return corgi.url; } })();
 
                   return (
                     <React.Fragment key={corgi.name}>
@@ -144,19 +147,15 @@ export default function Corgis(): React.ReactElement {
                         onClick={() => toggleExpand(corgi.name)}
                       >
                         <td style={{ color: 'var(--muted)', fontSize: 11 }}>{isExpanded ? '▾' : '▸'}</td>
-                        <td className="fw-500">{corgi.name}</td>
-                        <td className="text-muted mono">{host}</td>
-                        <td><StatusBadge label={statusLabel} tone={tone} /></td>
-                        <td>{corgi.flock.length}</td>
-                        <td className="text-muted">
-                          {corgi.lastPolledAt ? new Date(corgi.lastPolledAt).toLocaleTimeString() : '—'}
-                        </td>
+                        {visibleCorgiCols.map((col) => (
+                          <React.Fragment key={col.key}>{col.render(corgi)}</React.Fragment>
+                        ))}
                       </tr>
 
                       {isExpanded && (
                         <tr>
                           <td />
-                          <td colSpan={5} style={{ padding: '0 0 8px 0' }}>
+                          <td colSpan={visibleCorgiCols.length} style={{ padding: '0 0 8px 0' }}>
                             <table style={{ width: '100%', borderCollapse: 'collapse', background: 'var(--surface2)' }}>
                               <thead>
                                 <tr>
