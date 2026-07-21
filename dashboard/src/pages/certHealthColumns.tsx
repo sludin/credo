@@ -2,6 +2,7 @@
 import React from 'react';
 import { StatusBadge, certTone } from '../components/StatusBadge';
 import { monitorTone, monitorLabel } from '../utils/monitor';
+import { visibleColumns, type ColumnDef } from '../lib/columns';
 import type { CertStoreEntry, FlockCert } from '../types';
 
 export type CertColumnKey =
@@ -10,15 +11,7 @@ export type CertColumnKey =
 
 export type CertRow = { corgi: string; cert: FlockCert; store?: CertStoreEntry; daysLeft: number };
 
-export type CertColumn = {
-  key: CertColumnKey;
-  header: string;
-  /** Pinned columns are always shown and don't appear in the visibility menu. */
-  pinned?: boolean;
-  sortable: boolean;
-  sortValue?: (row: CertRow) => string | number;
-  render: (row: CertRow) => React.ReactNode;
-};
+export type CertColumn = ColumnDef<CertColumnKey, CertRow>;
 
 /** "Apr 30 14:51:20 2027 GMT" → "Apr 30, 2027" (handles single-digit day padding) */
 export function fmtDate(s: string | undefined): string {
@@ -104,7 +97,6 @@ export const CERT_COLUMNS: CertColumn[] = [
 
 export const DEFAULT_VISIBLE_CERT_COLUMNS: CertColumnKey[] = ['domain', 'corgi', 'ca', 'daysLeft', 'expires', 'status'];
 
-/** Keeps pinned columns plus any explicitly-visible ones, in registry order. */
 export function visibleCertColumns(visible: ReadonlySet<CertColumnKey>): CertColumn[] {
-  return CERT_COLUMNS.filter((c) => c.pinned || visible.has(c.key));
+  return visibleColumns(CERT_COLUMNS, visible);
 }
