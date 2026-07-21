@@ -2,13 +2,21 @@
 import React, { useState } from 'react';
 import { usePoller } from '../hooks/usePoller';
 import { fetchVigilCA, fetchVigilCerts, fetchFlock, fetchCerts } from '../api';
-import { StatusBadge, certTone } from '../components/StatusBadge';
+import { StatusBadge } from '../components/StatusBadge';
 import { StatBox } from '../components/StatBox';
 import { Topbar } from '../components/Shell';
+import { useColumnVisibility } from '../hooks/useColumnVisibility';
+import { ColumnMenu } from '../components/ColumnMenu';
+import {
+  VIGIL_CERT_COLUMNS,
+  DEFAULT_VISIBLE_VIGIL_CERT_COLUMNS,
+  visibleVigilCertColumns,
+  type VigilCertColumnKey,
+} from './vigilCertColumns';
 import type { VigilCAInfo, VigilCertsPayload, CorgiState, CertStoreEntry } from '../types';
 
 type SortDir = 'asc' | 'desc';
-type SortKey = 'certName' | 'corgi' | 'domain' | 'daysLeft' | 'status';
+type SortKey = VigilCertColumnKey;
 
 function daysUntil(isoDate: string | undefined): number {
   if (!isoDate) return 999;
@@ -32,6 +40,8 @@ export default function VigilCA(): React.ReactElement {
   const [toast, setToast] = useState<{ msg: string; error?: boolean } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'daysLeft', dir: 'asc' });
+  const { visible: visibleVigilColumnKeys, toggle: toggleVigilColumn } =
+    useColumnVisibility<VigilCertColumnKey>('credo.columns.vigil.issuedCerts', DEFAULT_VISIBLE_VIGIL_CERT_COLUMNS);
 
   const { secondsAgo, refresh } = usePoller(async () => {
     try {
@@ -71,17 +81,18 @@ export default function VigilCA(): React.ReactElement {
       })
   );
 
+  const vigilColumnByKey = new Map(VIGIL_CERT_COLUMNS.map((c) => [c.key, c]));
+
   const sortedVigilFlockCerts = [...vigilFlockCerts].sort((a, b) => {
-    let cmp = 0;
-    switch (sort.key) {
-      case 'certName': cmp = a.cert.name.localeCompare(b.cert.name); break;
-      case 'corgi': cmp = a.corgi.localeCompare(b.corgi); break;
-      case 'domain': cmp = (a.cert.sanNames[0] ?? '').localeCompare(b.cert.sanNames[0] ?? ''); break;
-      case 'daysLeft': cmp = a.daysLeft - b.daysLeft; break;
-      case 'status': cmp = a.cert.status.localeCompare(b.cert.status); break;
-    }
+    const sortValue = vigilColumnByKey.get(sort.key)?.sortValue;
+    if (!sortValue) return 0;
+    const av = sortValue(a);
+    const bv = sortValue(b);
+    const cmp = typeof av === 'number' && typeof bv === 'number' ? av - bv : String(av).localeCompare(String(bv));
     return sort.dir === 'asc' ? cmp : -cmp;
   });
+
+  const visibleVigilCols = visibleVigilCertColumns(visibleVigilColumnKeys);
 
   const expiringCount = vigilFlockCerts.filter((r) => r.daysLeft <= 30 && r.daysLeft > 0).length;
   const vigilCertCount = certEntries.filter((e) => e.assignment?.ca === 'vigil').length;
@@ -230,37 +241,30 @@ export default function VigilCA(): React.ReactElement {
           <div className="card-header">
             <span className="card-title">Vigil-Issued Certificates</span>
             <span className="card-subtitle">{vigilFlockCerts.length} active in fleet</span>
+            <ColumnMenu columns={VIGIL_CERT_COLUMNS} visible={visibleVigilColumnKeys} onToggle={toggleVigilColumn} />
           </div>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th className="th-sort" onClick={() => toggleSort('certName')}>Cert Name <span>{sortIndicator(sort.key === 'certName', sort.dir)}</span></th>
-                  <th className="th-sort" onClick={() => toggleSort('corgi')}>Corgi <span>{sortIndicator(sort.key === 'corgi', sort.dir)}</span></th>
-                  <th className="th-sort" onClick={() => toggleSort('domain')}>Domain <span>{sortIndicator(sort.key === 'domain', sort.dir)}</span></th>
-                  <th className="th-sort" onClick={() => toggleSort('daysLeft')}>Days Left <span>{sortIndicator(sort.key === 'daysLeft', sort.dir)}</span></th>
-                  <th className="th-sort" onClick={() => toggleSort('status')}>Status <span>{sortIndicator(sort.key === 'status', sort.dir)}</span></th>
+                  {visibleVigilCols.map((col) => (
+                    <th key={col.key} className="th-sort" onClick={() => toggleSort(col.key)}>
+                      {col.header} <span>{sortIndicator(sort.key === col.key, sort.dir)}</span>
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
                 {sortedVigilFlockCerts.length === 0 && (
-                  <tr><td colSpan={5} className="text-muted" style={{ textAlign: 'center', padding: 20 }}>No Vigil-issued certs found in fleet</td></tr>
+                  <tr><td colSpan={visibleVigilCols.length} className="text-muted" style={{ textAlign: 'center', padding: 20 }}>No Vigil-issued certs found in fleet</td></tr>
                 )}
-                {sortedVigilFlockCerts.map(({ corgi, cert, daysLeft }) => {
-                  const tone = certTone(cert.status, daysLeft);
-                  const label = tone === 'yellow' ? `Expiring ${daysLeft}d` : tone === 'red' ? 'Error' : 'Valid';
-                  return (
-                    <tr key={`${corgi}:${cert.name}`}>
-                      <td className="fw-500">{cert.name}</td>
-                      <td className="text-muted">{corgi}</td>
-                      <td className="text-muted">{cert.sanNames[0] ?? '—'}</td>
-                      <td className={tone === 'green' ? 'text-green' : tone === 'yellow' ? 'text-yellow' : 'text-red'}>
-                        {daysLeft > 0 && daysLeft < 999 ? daysLeft : '—'}
-                      </td>
-                      <td><StatusBadge label={label} tone={tone} /></td>
-                    </tr>
-                  );
-                })}
+                {sortedVigilFlockCerts.map(({ corgi, cert, daysLeft }) => (
+                  <tr key={`${corgi}:${cert.name}`}>
+                    {visibleVigilCols.map((col) => (
+                      <React.Fragment key={col.key}>{col.render({ corgi, cert, daysLeft })}</React.Fragment>
+                    ))}
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
