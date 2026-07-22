@@ -61,10 +61,16 @@ pub struct ManagedAssignment {
     pub days: Option<u32>,
     pub domain: Option<String>,
     pub identity_uri: Option<String>,
-    /// Endpoint to verify the installed cert against. Legacy payloads and
+    /// Endpoint(s) to verify the installed cert against. Legacy payloads and
     /// cached assignment files carried a boolean here; those parse as None.
-    #[serde(default, deserialize_with = "monitor_config_or_legacy_bool")]
-    pub monitor: Option<MonitorConfig>,
+    /// A single endpoint object and an array of endpoints (SAN certs) are
+    /// both accepted; see `credo_lib::types::parse_monitor_list`.
+    #[serde(
+        default,
+        deserialize_with = "credo_lib::types::deserialize_monitor_list",
+        serialize_with = "credo_lib::types::serialize_monitor_list"
+    )]
+    pub monitor: Option<Vec<MonitorConfig>>,
     #[serde(default)]
     pub hooks: Option<Vec<HookRef>>,
     pub csr_subject: Option<CsrSubjectWire>,
@@ -77,19 +83,6 @@ pub struct ManagedAssignment {
     pub cert_group: Option<String>,
     pub key_owner: Option<String>,
     pub key_group: Option<String>,
-}
-
-fn monitor_config_or_legacy_bool<'de, D>(d: D) -> Result<Option<MonitorConfig>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let v = Option::<serde_json::Value>::deserialize(d)?;
-    match v {
-        Some(obj @ serde_json::Value::Object(_)) => serde_json::from_value(obj)
-            .map(Some)
-            .map_err(serde::de::Error::custom),
-        _ => Ok(None),
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,20 +193,45 @@ mod tests {
         )
     }
 
+    fn endpoint(host: &str, port: u16) -> MonitorConfig {
+        MonitorConfig {
+            host: host.into(),
+            port,
+            protocol: MonitorProtocol::Https,
+            ca_path: None,
+            resolve_ip: None,
+        }
+    }
+
     #[test]
     fn assignment_monitor_accepts_endpoint_object() {
         let a: ManagedAssignment = serde_json::from_str(&assignment_json(
             r#"{"host":"api.example.com","port":8443}"#,
         ))
         .unwrap();
+        assert_eq!(a.monitor, Some(vec![endpoint("api.example.com", 8443)]));
+    }
+
+    #[test]
+    fn assignment_monitor_accepts_endpoint_array() {
+        // SAN cert: multiple endpoints to check for one assignment.
+        let a: ManagedAssignment = serde_json::from_str(&assignment_json(
+            r#"[{"host":"api.example.com","port":443},{"host":"api2.example.com","port":443}]"#,
+        ))
+        .unwrap();
         assert_eq!(
             a.monitor,
-            Some(MonitorConfig {
-                host: "api.example.com".into(),
-                port: 8443,
-                protocol: MonitorProtocol::Https,
-            })
+            Some(vec![
+                endpoint("api.example.com", 443),
+                endpoint("api2.example.com", 443),
+            ])
         );
+    }
+
+    #[test]
+    fn assignment_monitor_empty_array_is_none() {
+        let a: ManagedAssignment = serde_json::from_str(&assignment_json("[]")).unwrap();
+        assert_eq!(a.monitor, None);
     }
 
     #[test]
@@ -233,5 +251,28 @@ mod tests {
         assert_eq!(a.monitor, None);
         let a: ManagedAssignment = serde_json::from_str(&assignment_json("null")).unwrap();
         assert_eq!(a.monitor, None);
+    }
+
+    #[test]
+    fn assignment_monitor_single_endpoint_serializes_as_bare_object() {
+        // Wire back-compat: existing dashboard/API clients expect a single
+        // endpoint to round-trip as an object, not a one-element array.
+        let a: ManagedAssignment =
+            serde_json::from_str(&assignment_json(r#"{"host":"api.example.com","port":443}"#))
+                .unwrap();
+        let v = serde_json::to_value(&a).unwrap();
+        assert!(v["monitor"].is_object());
+        assert_eq!(v["monitor"]["host"], "api.example.com");
+    }
+
+    #[test]
+    fn assignment_monitor_multi_endpoint_serializes_as_array() {
+        let a: ManagedAssignment = serde_json::from_str(&assignment_json(
+            r#"[{"host":"api.example.com","port":443},{"host":"api2.example.com","port":443}]"#,
+        ))
+        .unwrap();
+        let v = serde_json::to_value(&a).unwrap();
+        assert!(v["monitor"].is_array());
+        assert_eq!(v["monitor"].as_array().unwrap().len(), 2);
     }
 }

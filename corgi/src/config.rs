@@ -85,8 +85,10 @@ pub struct FlockEntry {
     pub fullchain_path: Option<PathBuf>,
     pub csr_path: Option<PathBuf>,
     pub domain: Option<String>,
-    /// Endpoint to verify the installed cert against (TLS handshake check).
-    pub monitor: Option<credo_lib::types::MonitorConfig>,
+    /// Endpoint(s) to verify the installed cert against (TLS handshake
+    /// check). More than one entry supports SAN certs served from several
+    /// hosts.
+    pub monitor: Option<Vec<credo_lib::types::MonitorConfig>>,
     /// None = inherit defaultHooks at runtime. Some([]) = no hooks. Some([refs]) = use exactly these.
     pub hooks: Option<Vec<HookRef>>,
     pub csr_subject: Option<CsrSubjectWire>,
@@ -506,13 +508,12 @@ fn parse_flock_entry(
         csr_path: v["csrPath"].as_str().map(|s| resolve_path(base_dir, s)),
         domain: v["domain"].as_str().map(|s| s.trim().to_string()),
         // Legacy configs carried a boolean here (vestigial expiry-monitoring
-        // flag); only an endpoint object enables monitoring.
+        // flag); an endpoint object or an array of endpoints (SAN certs)
+        // enables monitoring.
         monitor: match v.get("monitor") {
-            Some(m) if m.is_object() => Some(
-                serde_json::from_value(m.clone())
-                    .with_context(|| format!("flock[{}].monitor is invalid", index))?,
-            ),
-            _ => None,
+            Some(m) => credo_lib::types::parse_monitor_list(m)
+                .with_context(|| format!("flock[{}].monitor is invalid", index))?,
+            None => None,
         },
         hooks,
         csr_subject,
@@ -959,12 +960,26 @@ mod tests {
         }));
         assert_eq!(
             entry.monitor,
-            Some(MonitorConfig {
+            Some(vec![MonitorConfig {
                 host: "127.0.0.1".into(),
                 port: 8443,
                 protocol: MonitorProtocol::Tls,
-            })
+                ca_path: None,
+                resolve_ip: None,
+            }])
         );
+    }
+
+    #[test]
+    fn flock_entry_monitor_array_parses() {
+        let entry = parse_entry(serde_json::json!({
+            "name": "api.example.com",
+            "monitor": [
+                { "host": "127.0.0.1", "port": 8443 },
+                { "host": "127.0.0.2", "port": 8443 },
+            ]
+        }));
+        assert_eq!(entry.monitor.unwrap().len(), 2);
     }
 
     #[test]

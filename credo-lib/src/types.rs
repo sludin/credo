@@ -74,10 +74,78 @@ pub struct MonitorConfig {
     pub port: u16,
     #[serde(default)]
     pub protocol: MonitorProtocol,
+    /// PEM CA bundle to additionally verify the served chain against (e.g.
+    /// Vigil's `credo-catrust.pem`, or any other private root). Diagnostic
+    /// only: chain trust never changes the ok/cert-mismatch/unreachable
+    /// status, which stays based purely on the fingerprint compare.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_path: Option<String>,
+    /// Connect to this address instead of resolving `host` via DNS. `host`
+    /// (or the flock entry's domain) is still sent as the TLS server name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolve_ip: Option<std::net::IpAddr>,
 }
 
 fn default_monitor_port() -> u16 {
     443
+}
+
+/// Parses a `monitor` JSON value: a single endpoint object (the historical
+/// wire shape), an array of endpoints (SAN certs / several checks per cert),
+/// or the vestigial legacy boolean / null — all of which mean "no endpoint
+/// configured". Shared by both the serde `deserialize_with` below and Corgi's
+/// hand-rolled `serde_json::Value` config parsing.
+pub fn parse_monitor_list(
+    v: &serde_json::Value,
+) -> Result<Option<Vec<MonitorConfig>>, serde_json::Error> {
+    match v {
+        serde_json::Value::Object(_) => {
+            serde_json::from_value(v.clone()).map(|cfg| Some(vec![cfg]))
+        }
+        serde_json::Value::Array(items) => {
+            if items.is_empty() {
+                return Ok(None);
+            }
+            items
+                .iter()
+                .cloned()
+                .map(serde_json::from_value)
+                .collect::<Result<Vec<_>, _>>()
+                .map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
+/// `deserialize_with` for a `monitor: Option<Vec<MonitorConfig>>` field —
+/// see `parse_monitor_list`.
+pub fn deserialize_monitor_list<'de, D>(d: D) -> Result<Option<Vec<MonitorConfig>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    match v {
+        Some(val) => parse_monitor_list(&val).map_err(serde::de::Error::custom),
+        None => Ok(None),
+    }
+}
+
+/// `serialize_with` for a `monitor: Option<Vec<MonitorConfig>>` field: a
+/// single endpoint serializes as a bare object (so existing dashboard/API
+/// clients built for the single-endpoint wire shape keep working unchanged);
+/// more than one serializes as an array.
+pub fn serialize_monitor_list<S>(
+    value: &Option<Vec<MonitorConfig>>,
+    s: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match value {
+        Some(list) if list.len() == 1 => list[0].serialize(s),
+        Some(list) => list.serialize(s),
+        None => s.serialize_none(),
+    }
 }
 
 /// How to reach the certificate. Both variants are a direct TLS handshake in
@@ -101,6 +169,34 @@ pub enum MonitorStatus {
     Unmonitored,
     /// Endpoint configured but not checked yet (e.g. right after startup).
     Pending,
+    /// Multiple endpoints configured (e.g. a SAN cert): some checked ok,
+    /// others did not.
+    PartialSuccess,
+}
+
+/// Diagnostic detail for a single monitored endpoint: what was dialed, what
+/// was seen. Kept even on failure so a false "mismatch" caused by DNS drift
+/// or a wrong port is distinguishable from a real fingerprint change.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EndpointCheckResult {
+    pub host: String,
+    pub port: u16,
+    pub sni: String,
+    /// The concrete address actually dialed (post DNS resolution or
+    /// `resolve_ip` override), e.g. "203.0.113.5:443".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_addr: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen_fingerprint: Option<String>,
+    /// Whether the served chain verified against `MonitorConfig::ca_path`.
+    /// `None` when no CA was configured for this endpoint. Diagnostic only —
+    /// never affects `status`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain_trusted: Option<bool>,
+    pub status: MonitorStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -110,10 +206,17 @@ pub struct MonitorResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checked_at: Option<String>,
     /// Leaf fingerprint the endpoint actually served (set on ok/mismatch).
+    /// Mirrors the single endpoint's fingerprint; left `None` when several
+    /// endpoints are configured, since it would be ambiguous — see `endpoints`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seen_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Per-endpoint breakdown; always populated once checked, even for the
+    /// single-endpoint case, so the exact address/SNI/fingerprint dialed is
+    /// always visible.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endpoints: Vec<EndpointCheckResult>,
 }
 
 impl MonitorResult {
@@ -123,6 +226,7 @@ impl MonitorResult {
             checked_at: None,
             seen_fingerprint: None,
             error: None,
+            endpoints: Vec::new(),
         }
     }
 
@@ -132,6 +236,7 @@ impl MonitorResult {
             checked_at: None,
             seen_fingerprint: None,
             error: None,
+            endpoints: Vec::new(),
         }
     }
 }
@@ -202,6 +307,10 @@ mod tests {
             serde_json::to_value(MonitorStatus::Pending).unwrap(),
             "pending"
         );
+        assert_eq!(
+            serde_json::to_value(MonitorStatus::PartialSuccess).unwrap(),
+            "partial-success"
+        );
     }
 
     #[test]
@@ -211,11 +320,36 @@ mod tests {
             checked_at: Some("2026-07-18T00:00:00Z".into()),
             seen_fingerprint: None,
             error: None,
+            endpoints: Vec::new(),
         };
         let v = serde_json::to_value(&res).unwrap();
         assert_eq!(v["status"], "ok");
         assert_eq!(v["checkedAt"], "2026-07-18T00:00:00Z");
         assert!(v.get("seenFingerprint").is_none());
         assert!(v.get("error").is_none());
+        assert!(v.get("endpoints").is_none());
+    }
+
+    #[test]
+    fn monitor_config_accepts_ca_path_and_resolve_ip() {
+        let cfg: MonitorConfig = serde_json::from_str(
+            r#"{"host":"corgi-01.vigilcert.com","caPath":"/etc/credo/credo-catrust.pem","resolveIp":"203.0.113.5"}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.ca_path.as_deref(), Some("/etc/credo/credo-catrust.pem"));
+        assert_eq!(
+            cfg.resolve_ip,
+            Some("203.0.113.5".parse::<std::net::IpAddr>().unwrap())
+        );
+    }
+
+    #[test]
+    fn monitor_config_omits_ca_path_and_resolve_ip_when_absent() {
+        let cfg: MonitorConfig = serde_json::from_str(r#"{"host":"api.example.com"}"#).unwrap();
+        assert_eq!(cfg.ca_path, None);
+        assert_eq!(cfg.resolve_ip, None);
+        let v = serde_json::to_value(&cfg).unwrap();
+        assert!(v.get("caPath").is_none());
+        assert!(v.get("resolveIp").is_none());
     }
 }

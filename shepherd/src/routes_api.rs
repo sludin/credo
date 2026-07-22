@@ -921,12 +921,15 @@ pub async fn reload_corgis(
     ))
 }
 
-/// Validate that all hook names in an assignment exist on the target corgi.
-/// Skipped when the assignment has no hooks or no corgi assigned.
+/// Validate the assignment's monitor endpoint(s): non-empty host and
+/// non-zero port on every entry (a SAN cert may configure several).
 fn validate_assignment_monitor(
     assignment: &crate::types::ManagedAssignment,
 ) -> Result<(), AppError> {
-    if let Some(monitor) = &assignment.monitor {
+    let Some(endpoints) = &assignment.monitor else {
+        return Ok(());
+    };
+    for monitor in endpoints {
         if monitor.host.trim().is_empty() {
             return Err(AppError::BadRequest(
                 "monitor.host must be a non-empty hostname or IP".into(),

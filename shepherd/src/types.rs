@@ -159,9 +159,18 @@ pub struct ManagedAssignment {
     /// None/absent = inherit corgi's defaultHooks. Some([]) = explicitly no hooks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hooks: Option<Vec<HookRef>>,
-    /// Endpoint the corgi verifies the installed cert against (TLS handshake).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub monitor: Option<credo_lib::types::MonitorConfig>,
+    /// Endpoint(s) the corgi verifies the installed cert against (TLS
+    /// handshake). More than one entry supports SAN certs served from
+    /// several hosts. A single endpoint round-trips on the wire as a bare
+    /// object for backward compatibility; see
+    /// `credo_lib::types::{deserialize_monitor_list, serialize_monitor_list}`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "credo_lib::types::deserialize_monitor_list",
+        serialize_with = "credo_lib::types::serialize_monitor_list"
+    )]
+    pub monitor: Option<Vec<credo_lib::types::MonitorConfig>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -394,11 +403,28 @@ mod tests {
         )
         .unwrap();
         let monitor = a.monitor.as_ref().expect("monitor block must parse");
-        assert_eq!(monitor.host, "api.example.com");
-        assert_eq!(monitor.port, 443);
+        assert_eq!(monitor.len(), 1);
+        assert_eq!(monitor[0].host, "api.example.com");
+        assert_eq!(monitor[0].port, 443);
+
+        // Wire back-compat: a single endpoint round-trips as a bare object,
+        // not a one-element array.
+        let v = serde_json::to_value(&a).unwrap();
+        assert!(v["monitor"].is_object());
+        assert_eq!(v["monitor"]["host"], "api.example.com");
+    }
+
+    #[test]
+    fn assignment_monitor_array_parses_multiple_endpoints() {
+        let a: ManagedAssignment = serde_json::from_str(
+            r#"{"certName":"api","ca":"vigil","monitor":[{"host":"a.example.com"},{"host":"b.example.com"}]}"#,
+        )
+        .unwrap();
+        let monitor = a.monitor.as_ref().expect("monitor block must parse");
+        assert_eq!(monitor.len(), 2);
 
         let v = serde_json::to_value(&a).unwrap();
-        assert_eq!(v["monitor"]["host"], "api.example.com");
+        assert!(v["monitor"].is_array());
     }
 
     #[test]

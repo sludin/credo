@@ -304,29 +304,41 @@ fn monitor_endpoint_falls_back_to_config_entry() {
     let dir = TempDir::new().unwrap();
     let config = make_config(&dir);
     let mut local = base_entry("webapp", &dir);
-    local.monitor = Some(MonitorConfig {
+    local.monitor = Some(vec![MonitorConfig {
         host: "127.0.0.1".to_string(),
         port: 8443,
         protocol: MonitorProtocol::Https,
-    });
+        ca_path: None,
+        resolve_ip: None,
+    }]);
     let config_flock = vec![local];
 
     let merged = merge_assignments(&config_flock, &[assignment("webapp")], &config);
     assert_eq!(
-        merged[0].monitor.as_ref().map(|m| m.port),
+        merged[0]
+            .monitor
+            .as_ref()
+            .and_then(|m| m.first())
+            .map(|m| m.port),
         Some(8443),
         "local monitor config must survive an assignment without one"
     );
 
     let mut a = assignment("webapp");
-    a.monitor = Some(MonitorConfig {
+    a.monitor = Some(vec![MonitorConfig {
         host: "webapp.credo.test".to_string(),
         port: 443,
         protocol: MonitorProtocol::Https,
-    });
+        ca_path: None,
+        resolve_ip: None,
+    }]);
     let merged = merge_assignments(&config_flock, &[a], &config);
     assert_eq!(
-        merged[0].monitor.as_ref().map(|m| m.port),
+        merged[0]
+            .monitor
+            .as_ref()
+            .and_then(|m| m.first())
+            .map(|m| m.port),
         Some(443),
         "assignment monitor config must win when present"
     );

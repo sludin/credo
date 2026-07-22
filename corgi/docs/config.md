@@ -127,7 +127,7 @@ Hooks and file ownership are now handled by `certHooks` / `defaultHooks` and `fi
 | `csrPath` | no | — | Path to write the CSR |
 | `domain` | no | — | Primary domain override for ACME ordering |
 | `sans` | no | `[]` | Additional SANs beyond the primary domain |
-| `monitor` | no | — | Endpoint monitor block: `{ "host": "...", "port": 443, "protocol": "https" }`. Corgi periodically TLS-handshakes the endpoint and reports `cert-mismatch` when the served leaf differs from the installed cert. Usually set on the Shepherd assignment instead; a local block is the fallback when the assignment has none. Legacy boolean values are accepted and ignored |
+| `monitor` | no | — | Endpoint monitor endpoint(s): a single object `{ "host": "...", "port": 443, "protocol": "https" }`, or an array of such objects to check several endpoints (e.g. a SAN cert served from multiple hosts). Corgi periodically TLS-handshakes each and reports `cert-mismatch` when the served leaf differs from the installed cert. Optional per-endpoint fields: `caPath` (a PEM CA bundle to additionally verify the served chain against — diagnostic only, reported as `chainTrusted`, never itself changes ok/cert-mismatch/unreachable) and `resolveIp` (pin the connection to a specific address instead of resolving `host` via DNS). Usually set on the Shepherd assignment instead; a local block is the fallback when the assignment has none. Legacy boolean values are accepted and ignored |
 | `certMode` | no | from `filePolicy` | Octal file mode for cert files (e.g. `"0644"`) |
 | `keyMode` | no | from `filePolicy` | Octal file mode for key files (e.g. `"0600"`) |
 | `certOwner` / `certGroup` | no | from `filePolicy` | Per-cert file ownership |
@@ -164,14 +164,24 @@ primary sync path. Corgi still reconciles immediately at startup.
 
 ## Endpoint Monitor
 
-Corgi periodically TLS-handshakes each flock entry that has a `monitor` block
-(from the Shepherd assignment or local config) and compares the served leaf
-fingerprint against the locally installed cert. Results (`ok`,
-`cert-mismatch`, `unreachable`, `pending`, `unmonitored`) ride the `/flock`
-response, so Shepherd picks them up on its normal reconcile probe. The checker
-deliberately does not verify the peer chain — an expired or untrusted cert is
-mismatch data, not a connection error. Cert installs additionally trigger a
-one-shot check ~5s after hooks run.
+Corgi periodically TLS-handshakes each endpoint configured on a flock entry's
+`monitor` block (from the Shepherd assignment or local config — one endpoint,
+or an array of several for a SAN cert served from multiple hosts) and
+compares the served leaf fingerprint against the locally installed cert.
+Results (`ok`, `cert-mismatch`, `unreachable`, `pending`, `unmonitored`,
+`partial-success`) ride the `/flock` response, so Shepherd picks them up on
+its normal reconcile probe. With multiple endpoints, `partial-success` means
+some matched and some didn't; overall `ok` requires every endpoint to match.
+Each result also carries a per-endpoint breakdown (`endpoints`: the resolved
+address actually dialed, the SNI sent, the fingerprint seen, and — if
+`caPath` was configured for that endpoint — whether the served chain
+verified against it) for diagnosing a mismatch caused by DNS drift or a
+misconfigured vhost versus a real fingerprint change. The checker
+deliberately does not require the peer chain to verify for the handshake
+itself — an expired or untrusted cert is mismatch data, not a connection
+error; `caPath` verification is an additional diagnostic signal only and
+never itself changes ok/cert-mismatch/unreachable. Cert installs additionally
+trigger a one-shot check ~5s after hooks run.
 
 | Field | Type | Default | Env override | Description |
 |-------|------|---------|--------------|-------------|
