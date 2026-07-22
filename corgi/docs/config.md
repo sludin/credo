@@ -173,8 +173,9 @@ Results (`ok`, `cert-mismatch`, `unreachable`, `pending`, `unmonitored`,
 its normal reconcile probe. With multiple endpoints, `partial-success` means
 some matched and some didn't; overall `ok` requires every endpoint to match.
 Each result also carries a per-endpoint breakdown (`endpoints`: the resolved
-address actually dialed, the SNI sent, the fingerprint seen, and — if
-`caPath` was configured for that endpoint — whether the served chain
+address actually dialed, the SNI sent, the fingerprint seen, the served
+leaf's common name (`seenCommonName`) and SAN entries (`seenSanNames`), and —
+if `caPath` was configured for that endpoint — whether the served chain
 verified against it) for diagnosing a mismatch caused by DNS drift or a
 misconfigured vhost versus a real fingerprint change. The checker
 deliberately does not require the peer chain to verify for the handshake

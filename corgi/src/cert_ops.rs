@@ -52,6 +52,42 @@ fn fingerprint_der(der: &[u8]) -> String {
     hex::encode(Sha256::digest(der))
 }
 
+/// Extract a leaf cert's CN and SAN entries (DNS/URI/IPv4) for diagnostics —
+/// e.g. showing what cert an endpoint actually served on a monitor mismatch,
+/// distinct from the locally installed cert it was expected to match.
+pub fn common_name_and_sans(der: &[u8]) -> (Option<String>, Vec<String>) {
+    use x509_parser::extensions::{GeneralName, ParsedExtension};
+    use x509_parser::prelude::*;
+
+    let Ok((_, cert)) = X509Certificate::from_der(der) else {
+        return (None, Vec::new());
+    };
+
+    let common_name = cert
+        .subject()
+        .iter_common_name()
+        .next()
+        .and_then(|cn| cn.as_str().ok())
+        .map(|s| s.to_string());
+
+    let mut sans = Vec::new();
+    for ext in cert.extensions() {
+        if let ParsedExtension::SubjectAlternativeName(san) = ext.parsed_extension() {
+            for name in &san.general_names {
+                match name {
+                    GeneralName::DNSName(dns) => sans.push(dns.trim().to_string()),
+                    GeneralName::URI(uri) => sans.push(uri.trim().to_string()),
+                    GeneralName::IPAddress(ip) if ip.len() == 4 => {
+                        sans.push(format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    (common_name, sans)
+}
+
 /// Returns days remaining until the cert at `cert_path` expires, or None if unreadable.
 pub fn cert_days_remaining(cert_path: &Path) -> Option<i64> {
     use x509_parser::prelude::*;

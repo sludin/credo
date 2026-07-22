@@ -189,6 +189,13 @@ pub struct EndpointCheckResult {
     pub resolved_addr: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seen_fingerprint: Option<String>,
+    /// Common name of the served leaf, e.g. to tell at a glance which cert
+    /// an endpoint is actually presenting on a mismatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen_common_name: Option<String>,
+    /// SAN entries (DNS/URI/IPv4) of the served leaf.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seen_san_names: Vec<String>,
     /// Whether the served chain verified against `MonitorConfig::ca_path`.
     /// `None` when no CA was configured for this endpoint. Diagnostic only —
     /// never affects `status`.

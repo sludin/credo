@@ -1,6 +1,8 @@
 /// Certificate operations tests — direct function calls, no HTTP.
 /// Ports the deprecated cert-ops.test.ts (collectSans) and adds install + CSR round-trips.
-use corgi::cert_ops::{collect_sans, generate_key_and_csr, install_certificate, pem_cert_to_der};
+use corgi::cert_ops::{
+    collect_sans, common_name_and_sans, generate_key_and_csr, install_certificate, pem_cert_to_der,
+};
 use corgi::config::FlockEntry;
 use corgi::types::{CsrRequest, InstallRequest};
 use rcgen::{Certificate, CertificateParams, SanType};
@@ -499,4 +501,62 @@ fn pem_cert_to_der_returns_non_empty_der() {
     let der = pem_cert_to_der(&cert_pem).unwrap();
     assert!(!der.is_empty(), "DER must not be empty");
     assert_eq!(der[0], 0x30, "DER must start with SEQUENCE tag (0x30)");
+}
+
+// ---------------------------------------------------------------------------
+// common_name_and_sans — used by the endpoint monitor to describe a
+// mismatched cert (what an endpoint actually served) alongside its fingerprint
+// ---------------------------------------------------------------------------
+
+/// Extracts the CN and DNS SAN entries from a leaf certificate's DER bytes.
+#[test]
+fn common_name_and_sans_extracts_cn_and_dns_sans() {
+    let (cert_pem, _) = signed_cert_pem("mismatch.credo.test");
+    let der = pem_cert_to_der(&cert_pem).unwrap();
+
+    let (cn, sans) = common_name_and_sans(&der);
+
+    assert_eq!(cn.as_deref(), Some("mismatch.credo.test"));
+    assert_eq!(sans, vec!["mismatch.credo.test".to_string()]);
+}
+
+/// A URI SAN (e.g. a corgi node identity) is included alongside DNS SANs.
+#[test]
+fn common_name_and_sans_includes_uri_sans() {
+    use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType, SanType};
+
+    let mut params = CertificateParams::new(vec!["node.credo.test".to_string()]);
+    let mut dn = DistinguishedName::new();
+    dn.push(DnType::CommonName, "node.credo.test");
+    params.distinguished_name = dn;
+    params.subject_alt_names = vec![
+        SanType::DnsName("node.credo.test".to_string()),
+        SanType::URI("vigil://credo/node/corgi-01".to_string()),
+    ];
+    let cert = Certificate::from_params(params).unwrap();
+    let der = pem_cert_to_der(&cert.serialize_pem().unwrap()).unwrap();
+
+    let (cn, sans) = common_name_and_sans(&der);
+
+    assert_eq!(cn.as_deref(), Some("node.credo.test"));
+    assert!(sans.contains(&"node.credo.test".to_string()));
+    assert!(sans.contains(&"vigil://credo/node/corgi-01".to_string()));
+}
+
+/// A cert with no SAN extension returns an empty list, not an error.
+#[test]
+fn common_name_and_sans_handles_no_sans() {
+    use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType};
+
+    let mut params = CertificateParams::new(Vec::<String>::new());
+    let mut dn = DistinguishedName::new();
+    dn.push(DnType::CommonName, "no-sans.credo.test");
+    params.distinguished_name = dn;
+    let cert = Certificate::from_params(params).unwrap();
+    let der = pem_cert_to_der(&cert.serialize_pem().unwrap()).unwrap();
+
+    let (cn, sans) = common_name_and_sans(&der);
+
+    assert_eq!(cn.as_deref(), Some("no-sans.credo.test"));
+    assert!(sans.is_empty());
 }

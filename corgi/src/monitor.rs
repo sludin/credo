@@ -85,6 +85,8 @@ pub async fn check_one(state: &crate::state::AppState, entry: &crate::config::Fl
                     sni = %result.sni,
                     resolved_addr = result.resolved_addr.as_deref().unwrap_or(""),
                     seen_fingerprint = result.seen_fingerprint.as_deref().unwrap_or(""),
+                    seen_common_name = result.seen_common_name.as_deref().unwrap_or(""),
+                    seen_san_names = %result.seen_san_names.join(","),
                     expected_fingerprint = expected.as_deref().unwrap_or(""),
                     status = ?result.status,
                     error = result.error.as_deref().unwrap_or(""),
@@ -119,6 +121,8 @@ pub fn schedule_post_install_check(state: &crate::state::AppState, cert_name: St
 struct EndpointProbe {
     resolved_addr: SocketAddr,
     seen_fingerprint: String,
+    seen_common_name: Option<String>,
+    seen_san_names: Vec<String>,
     /// `None` when the endpoint has no `ca_path` configured.
     chain_trusted: Option<bool>,
 }
@@ -193,6 +197,8 @@ async fn probe_endpoint(cfg: &MonitorConfig, sni: &str) -> anyhow::Result<Endpoi
             .first()
             .with_context(|| format!("no peer certificate from {}", resolved_addr))?;
         let seen_fingerprint = fingerprint_display(leaf.as_ref());
+        let (seen_common_name, seen_san_names) =
+            crate::cert_ops::common_name_and_sans(leaf.as_ref());
         let chain_trusted = cfg
             .ca_path
             .as_deref()
@@ -200,6 +206,8 @@ async fn probe_endpoint(cfg: &MonitorConfig, sni: &str) -> anyhow::Result<Endpoi
         Ok(EndpointProbe {
             resolved_addr,
             seen_fingerprint,
+            seen_common_name,
+            seen_san_names,
             chain_trusted,
         })
     };
@@ -283,6 +291,8 @@ pub async fn check_one_endpoint(
                 sni: sni.to_string(),
                 resolved_addr: Some(p.resolved_addr.to_string()),
                 seen_fingerprint: Some(p.seen_fingerprint),
+                seen_common_name: p.seen_common_name,
+                seen_san_names: p.seen_san_names,
                 chain_trusted: p.chain_trusted,
                 status,
                 error: None,
@@ -294,6 +304,8 @@ pub async fn check_one_endpoint(
             sni: sni.to_string(),
             resolved_addr: None,
             seen_fingerprint: None,
+            seen_common_name: None,
+            seen_san_names: Vec::new(),
             chain_trusted: None,
             status: MonitorStatus::Unreachable,
             error: Some(e),
@@ -529,6 +541,11 @@ mod tests {
         );
         assert_eq!(result.sni, "localhost");
         assert!(result.chain_trusted.is_none(), "no ca_path configured");
+        assert!(
+            result.seen_common_name.is_some(),
+            "common name must be captured from the served leaf"
+        );
+        assert_eq!(result.seen_san_names, vec!["localhost".to_string()]);
     }
 
     #[tokio::test]
@@ -638,6 +655,8 @@ mod tests {
                 sni: "api.example.com".into(),
                 resolved_addr: Some("203.0.113.1:443".into()),
                 seen_fingerprint: Some("AA:BB".into()),
+                seen_common_name: Some("api.example.com".into()),
+                seen_san_names: vec!["api.example.com".into()],
                 chain_trusted: None,
                 status: MonitorStatus::Ok,
                 error: None,
@@ -665,6 +684,8 @@ mod tests {
             sni: "api.example.com".into(),
             resolved_addr: Some("203.0.113.1:443".into()),
             seen_fingerprint: seen.map(str::to_string),
+            seen_common_name: None,
+            seen_san_names: Vec::new(),
             chain_trusted: None,
             status,
             error: error.map(str::to_string),
