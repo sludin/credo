@@ -57,6 +57,7 @@ pub fn init_logging(level: LogLevel) {
 /// Returned by `init_logging_with_config`. Keep this alive for the process
 /// lifetime (e.g. bind it in `main()`) - dropping it flushes and stops the
 /// non-blocking file writer.
+#[must_use = "dropping the handle stops file logging and the live tail"]
 pub struct LoggingHandle {
     _guard: Option<tracing_appender::non_blocking::WorkerGuard>,
     writer: Option<RotatingFileWriter>,
@@ -79,20 +80,16 @@ pub fn init_logging_with_config(
     config: &LoggingConfig,
     service_name: &str,
 ) -> LoggingHandle {
-    let filter_str =
-        std::env::var("RUST_LOG").unwrap_or_else(|_| level.as_tracing_filter().to_string());
-
     if !config.enabled {
-        tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::new(filter_str))
-            .with_target(false)
-            .compact()
-            .init();
+        init_logging(level);
         return LoggingHandle {
             _guard: None,
             writer: None,
         };
     }
+
+    let filter_str =
+        std::env::var("RUST_LOG").unwrap_or_else(|_| level.as_tracing_filter().to_string());
 
     let writer = RotatingFileWriter::new(
         std::path::Path::new(&config.dir),
