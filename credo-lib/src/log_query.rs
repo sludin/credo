@@ -14,7 +14,8 @@ use crate::log::{LogLevel, LoggingHandle};
 /// ("error"/"warn"/"info"/"debug"), matching `LogLevel`'s existing mental
 /// model (parsed via `parse_level_filter`, not `LogLevel::from_str` directly
 /// — see that function's doc for why). `q` is a case-insensitive substring
-/// filter.
+/// filter. `follow` requests a live-tailing SSE stream instead of a
+/// historical JSON array (see `respond_to_log_query`).
 #[derive(Debug, Deserialize, Default, PartialEq)]
 pub struct LogQueryParams {
     pub since: Option<String>,
@@ -23,6 +24,10 @@ pub struct LogQueryParams {
     pub level: Option<String>,
     pub q: Option<String>,
     pub limit: Option<usize>,
+    /// When true, respond with a live-tailing SSE stream instead of a
+    /// historical JSON array (see `respond_to_log_query`/`follow_logs`).
+    #[serde(default)]
+    pub follow: bool,
 }
 
 /// Cap on returned lines when `limit` isn't specified.
@@ -267,6 +272,37 @@ pub async fn historical_logs(
     let lines = read_historical_lines(dir, basename, params, Utc::now())
         .map_err(|e| AppError::Internal(anyhow::anyhow!("reading log file: {e}")))?;
     Ok(axum::Json(lines))
+}
+
+/// How many of the most recent historical lines count as "the tail" when
+/// deduping the live-broadcast buffer against them (see
+/// `dedup_buffered_against_tail`).
+pub const DEDUP_TAIL_WINDOW: usize = 50;
+
+/// Filters `buffered` (lines that arrived on the live broadcast while the
+/// historical backlog was being read) down to genuinely new lines: drops
+/// any exact match against the last `tail_window` lines of `historical`,
+/// since a line that shows up both on disk and on the live broadcast in
+/// the same narrow window is far more likely double-counted (read once
+/// from the file, delivered again live) than a real repeat. Order is
+/// preserved; this is a heuristic, not a guarantee — two genuinely
+/// identical log lines within the window are indistinguishable from a
+/// double-count and one of them is dropped either way.
+pub fn dedup_buffered_against_tail(
+    historical: &[String],
+    buffered: Vec<String>,
+    tail_window: usize,
+) -> Vec<String> {
+    let recent: std::collections::HashSet<&str> = historical
+        .iter()
+        .rev()
+        .take(tail_window)
+        .map(|s| s.as_str())
+        .collect();
+    buffered
+        .into_iter()
+        .filter(|line| !recent.contains(line.as_str()))
+        .collect()
 }
 
 #[cfg(test)]
@@ -653,5 +689,71 @@ mod tests {
         let lines = read_historical_lines(missing, "svc", &LogQueryParams::default(), now)
             .expect("missing dir must not error");
         assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn dedup_buffered_against_tail_drops_exact_matches_in_window() {
+        let historical = vec![
+            "2024-01-15T10:00:00Z  INFO line a".to_string(),
+            "2024-01-15T10:00:01Z  INFO line b".to_string(),
+            "2024-01-15T10:00:02Z  INFO line c".to_string(),
+        ];
+        let buffered = vec![
+            "2024-01-15T10:00:02Z  INFO line c".to_string(), // duplicate of tail
+            "2024-01-15T10:00:03Z  INFO line d".to_string(), // genuinely new
+        ];
+        let result = dedup_buffered_against_tail(&historical, buffered, 50);
+        assert_eq!(
+            result,
+            vec!["2024-01-15T10:00:03Z  INFO line d".to_string()]
+        );
+    }
+
+    #[test]
+    fn dedup_buffered_against_tail_keeps_everything_when_no_overlap() {
+        let historical = vec!["2024-01-15T10:00:00Z  INFO line a".to_string()];
+        let buffered = vec![
+            "2024-01-15T10:00:01Z  INFO line b".to_string(),
+            "2024-01-15T10:00:02Z  INFO line c".to_string(),
+        ];
+        let result = dedup_buffered_against_tail(&historical, buffered.clone(), 50);
+        assert_eq!(result, buffered);
+    }
+
+    #[test]
+    fn dedup_buffered_against_tail_drops_everything_on_full_overlap() {
+        let historical = vec![
+            "2024-01-15T10:00:00Z  INFO line a".to_string(),
+            "2024-01-15T10:00:01Z  INFO line b".to_string(),
+        ];
+        let buffered = historical.clone();
+        let result = dedup_buffered_against_tail(&historical, buffered, 50);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn dedup_buffered_against_tail_only_checks_within_window() {
+        // "line a" is outside the 1-line tail window, so it's treated as
+        // not-recent and a buffered duplicate of it is kept, not dropped -
+        // the window bounds how far back "this is probably the same line"
+        // is a reasonable assumption.
+        let historical = vec![
+            "2024-01-15T10:00:00Z  INFO line a".to_string(),
+            "2024-01-15T10:00:01Z  INFO line b".to_string(),
+        ];
+        let buffered = vec!["2024-01-15T10:00:00Z  INFO line a".to_string()];
+        let result = dedup_buffered_against_tail(&historical, buffered.clone(), 1);
+        assert_eq!(result, buffered);
+    }
+
+    #[test]
+    fn dedup_buffered_against_tail_empty_inputs() {
+        assert!(dedup_buffered_against_tail(&[], vec![], 50).is_empty());
+        assert!(dedup_buffered_against_tail(&["x".to_string()], vec![], 50).is_empty());
+        let buffered = vec!["x".to_string()];
+        assert_eq!(
+            dedup_buffered_against_tail(&[], buffered.clone(), 50),
+            buffered
+        );
     }
 }
