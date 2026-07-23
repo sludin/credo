@@ -23,6 +23,9 @@ async fn init_logging_with_config_writes_file_and_broadcasts_live() {
         .subscribe()
         .expect("logging enabled, subscribe must succeed");
 
+    assert_eq!(handle.log_dir(), Some(dir.path()));
+    assert_eq!(handle.log_basename(), Some("testsvc"));
+
     tracing::info!("hello from log_init test");
 
     let received = tokio::time::timeout(Duration::from_secs(2), rx.recv())

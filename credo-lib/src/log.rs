@@ -61,6 +61,8 @@ pub fn init_logging(level: LogLevel) {
 pub struct LoggingHandle {
     _guard: Option<tracing_appender::non_blocking::WorkerGuard>,
     writer: Option<RotatingFileWriter>,
+    log_dir: Option<std::path::PathBuf>,
+    log_basename: Option<String>,
 }
 
 impl LoggingHandle {
@@ -68,6 +70,18 @@ impl LoggingHandle {
     /// if rotating-file logging is not enabled in `config`.
     pub fn subscribe(&self) -> Option<tokio::sync::broadcast::Receiver<String>> {
         self.writer.as_ref().map(|w| w.subscribe())
+    }
+
+    /// Directory containing this service's rotating log file, if file
+    /// logging is enabled.
+    pub fn log_dir(&self) -> Option<&std::path::Path> {
+        self.log_dir.as_deref()
+    }
+
+    /// Basename (without extension) of this service's rotating log file,
+    /// if file logging is enabled.
+    pub fn log_basename(&self) -> Option<&str> {
+        self.log_basename.as_deref()
     }
 }
 
@@ -85,6 +99,8 @@ pub fn init_logging_with_config(
         return LoggingHandle {
             _guard: None,
             writer: None,
+            log_dir: None,
+            log_basename: None,
         };
     }
 
@@ -119,14 +135,23 @@ pub fn init_logging_with_config(
             .with_filter(EnvFilter::new(filter_str))
     });
 
-    tracing_subscriber::registry()
+    // `try_init` rather than `init`: a real process only ever calls this
+    // once (identical behavior to `init` there), but multiple `#[test]`
+    // functions in the same integration-test binary each construct their
+    // own `LoggingHandle` in the same process - `init` would panic on the
+    // second call ("global default subscriber already set"). Losing the
+    // race just means that test's own tracing output isn't captured by its
+    // own file layer, which none of today's tests depend on.
+    let _ = tracing_subscriber::registry()
         .with(stdout_layer)
         .with(file_layer)
-        .init();
+        .try_init();
 
     LoggingHandle {
         _guard: Some(guard),
         writer: Some(writer),
+        log_dir: Some(std::path::Path::new(&config.dir).to_path_buf()),
+        log_basename: Some(service_name.to_string()),
     }
 }
 

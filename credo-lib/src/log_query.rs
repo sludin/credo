@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-use crate::log::LogLevel;
+use crate::error::AppError;
+use crate::log::{LogLevel, LoggingHandle};
 
 /// Query parameters for historical log retrieval. `since`/`until` are RFC
 /// 3339 strings, parsed via `parse_rfc3339` (not axum's Query-level chrono
@@ -231,6 +232,24 @@ pub fn read_historical_lines(
         }
     }
     Ok(kept.into_iter().collect())
+}
+
+/// Historical log query: reads and filters lines from `handle`'s rotating
+/// log file. Returns `AppError::BadRequest` if `handle` has no file
+/// logging enabled (nothing to read).
+pub async fn historical_logs(
+    handle: &LoggingHandle,
+    params: &LogQueryParams,
+) -> Result<axum::Json<Vec<String>>, AppError> {
+    let dir = handle
+        .log_dir()
+        .ok_or_else(|| AppError::BadRequest("file logging is not enabled".to_string()))?;
+    let basename = handle
+        .log_basename()
+        .ok_or_else(|| AppError::BadRequest("file logging is not enabled".to_string()))?;
+    let lines = read_historical_lines(dir, basename, params, Utc::now())
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("reading log file: {e}")))?;
+    Ok(axum::Json(lines))
 }
 
 #[cfg(test)]
