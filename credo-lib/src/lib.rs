@@ -5,6 +5,7 @@ pub mod error;
 pub mod file_policy;
 pub mod log;
 pub mod pid;
+pub mod rotating_log;
 pub mod timing;
 pub mod tls;
 pub mod types;
