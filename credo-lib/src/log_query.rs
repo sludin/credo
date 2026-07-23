@@ -134,6 +134,22 @@ fn min_level_rank(level: LogLevel) -> u8 {
     }
 }
 
+/// Parses a `level` query value into the minimum severity to include.
+/// Same vocabulary as `LogLevel::from_str`, plus `"error"` as a synonym
+/// for `LogLevel::Fatal` — `LogLevel::from_str` alone maps `"error"` to
+/// `Info` like any other unrecognized string, which silently returns far
+/// more than an error-only filter should. `"error"` is the vocabulary
+/// this module's own docs promise callers, so it needs to actually mean
+/// error-and-above here, not fall through to `from_str`'s generic default.
+fn parse_level_filter(s: &str) -> LogLevel {
+    match s.trim().to_lowercase().as_str() {
+        "error" | "fatal" => LogLevel::Fatal,
+        "warn" => LogLevel::Warn,
+        "debug" => LogLevel::Debug,
+        _ => LogLevel::Info,
+    }
+}
+
 /// Whether a line passes the level (minimum severity) and free-text
 /// filters. `level: None` means no level filter; `q: None` or `Some("")`
 /// means no text filter.
@@ -198,7 +214,7 @@ pub fn read_historical_lines(
     now: DateTime<Utc>,
 ) -> std::io::Result<Vec<String>> {
     let (since, until) = resolve_window(params, now);
-    let level = params.level.as_deref().map(LogLevel::from_str);
+    let level = params.level.as_deref().map(parse_level_filter);
     let q = params.q.as_deref();
     let limit = params.limit.unwrap_or(DEFAULT_LOG_LIMIT).max(1);
 
@@ -404,6 +420,44 @@ mod tests {
         // level=fatal (maps to "error" threshold) only includes error lines.
         assert!(line_passes_filter(error_line, Some(LogLevel::Fatal), None));
         assert!(!line_passes_filter(warn_line, Some(LogLevel::Fatal), None));
+    }
+
+    #[test]
+    fn parse_level_filter_error_means_error_only() {
+        let error_line = "2024-01-15T10:00:00Z ERROR bad thing";
+        let warn_line = "2024-01-15T10:00:00Z  WARN risky thing";
+        assert!(line_passes_filter(
+            error_line,
+            Some(parse_level_filter("error")),
+            None
+        ));
+        assert!(!line_passes_filter(
+            warn_line,
+            Some(parse_level_filter("error")),
+            None
+        ));
+    }
+
+    #[test]
+    fn read_historical_lines_level_error_returns_error_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_log_file(
+            dir.path(),
+            "svc.log",
+            "2024-01-15T10:00:00Z ERROR failure\n\
+             2024-01-15T10:00:01Z  WARN risky\n\
+             2024-01-15T10:00:02Z  INFO normal\n",
+        );
+        let params = LogQueryParams {
+            level: Some("error".to_string()),
+            ..Default::default()
+        };
+        let now = dt("2024-01-15T12:00:00Z");
+        let lines = read_historical_lines(dir.path(), "svc", &params, now).expect("read");
+        assert_eq!(
+            lines,
+            vec!["2024-01-15T10:00:00Z ERROR failure".to_string()]
+        );
     }
 
     #[test]
