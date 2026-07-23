@@ -204,7 +204,16 @@ pub fn read_historical_lines(
     let mut kept: std::collections::VecDeque<String> =
         std::collections::VecDeque::with_capacity(limit.min(1024));
     for path in historical_file_paths(dir, basename) {
-        let contents = std::fs::read_to_string(&path)?;
+        // Best-effort per file: a log directory is actively written and
+        // rotated concurrently with queries, so a file that existed when
+        // `historical_file_paths` listed it can vanish (or otherwise fail
+        // to read) before this loop reaches it. Skip that one file rather
+        // than discarding every line already gathered from the others -
+        // "give me what's available" is the whole point of this query.
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
         for line in contents.lines() {
             if line.is_empty() {
                 continue;
@@ -536,6 +545,30 @@ mod tests {
                 "2024-01-15T10:01:00Z  INFO line two".to_string(),
                 "2024-01-15T10:02:00Z  INFO line three".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn read_historical_lines_skips_unreadable_file_instead_of_failing_whole_query() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_log_file(
+            dir.path(),
+            "svc.log",
+            "2024-01-15T10:00:00Z  INFO current line\n",
+        );
+        // A directory matching the rotated-file naming pattern reliably
+        // fails `fs::read_to_string` with a real IO error on all platforms,
+        // deterministically standing in for a file that vanished (or
+        // otherwise became unreadable) between listing and read time -
+        // without relying on a timing race.
+        std::fs::create_dir(dir.path().join("svc.1.log")).expect("create dir stand-in");
+
+        let now = dt("2024-01-15T12:00:00Z");
+        let lines = read_historical_lines(dir.path(), "svc", &LogQueryParams::default(), now)
+            .expect("must not fail whole query because one file is unreadable");
+        assert_eq!(
+            lines,
+            vec!["2024-01-15T10:00:00Z  INFO current line".to_string()]
         );
     }
 
