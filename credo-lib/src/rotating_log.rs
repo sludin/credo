@@ -165,7 +165,6 @@ impl Write for RotatingFileWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
 
     fn rotate_on(size_mb: u64, keep_files: usize) -> RotationConfig {
         RotationConfig {
