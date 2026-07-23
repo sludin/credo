@@ -135,17 +135,10 @@ pub fn init_logging_with_config(
             .with_filter(EnvFilter::new(filter_str))
     });
 
-    // `try_init` rather than `init`: a real process only ever calls this
-    // once (identical behavior to `init` there), but multiple `#[test]`
-    // functions in the same integration-test binary each construct their
-    // own `LoggingHandle` in the same process - `init` would panic on the
-    // second call ("global default subscriber already set"). Losing the
-    // race just means that test's own tracing output isn't captured by its
-    // own file layer, which none of today's tests depend on.
-    let _ = tracing_subscriber::registry()
+    tracing_subscriber::registry()
         .with(stdout_layer)
         .with(file_layer)
-        .try_init();
+        .init();
 
     LoggingHandle {
         _guard: Some(guard),
