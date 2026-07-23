@@ -4,6 +4,7 @@ pub mod config;
 pub mod error;
 pub mod file_policy;
 pub mod log;
+pub mod log_query;
 pub mod pid;
 pub mod rotating_log;
 pub mod timing;
