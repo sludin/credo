@@ -5,6 +5,11 @@ use std::net::SocketAddr;
 use std::time::Instant;
 use tracing_subscriber::EnvFilter;
 
+use crate::rotating_log::{LoggingConfig, RotatingFileWriter};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
+
 /// Carries the authenticated identity from auth middleware to the log middleware
 /// via response extensions. Auth layers insert it; log middleware reads it.
 #[derive(Clone)]
@@ -47,6 +52,85 @@ pub fn init_logging(level: LogLevel) {
         .with_target(false)
         .compact()
         .init();
+}
+
+/// Returned by `init_logging_with_config`. Keep this alive for the process
+/// lifetime (e.g. bind it in `main()`) - dropping it flushes and stops the
+/// non-blocking file writer.
+pub struct LoggingHandle {
+    _guard: Option<tracing_appender::non_blocking::WorkerGuard>,
+    writer: Option<RotatingFileWriter>,
+}
+
+impl LoggingHandle {
+    /// Subscribe to a live feed of this service's log lines. Returns `None`
+    /// if rotating-file logging is not enabled in `config`.
+    pub fn subscribe(&self) -> Option<tokio::sync::broadcast::Receiver<String>> {
+        self.writer.as_ref().map(|w| w.subscribe())
+    }
+}
+
+/// Like `init_logging`, but config-driven: when `config.enabled` is true,
+/// also writes to a size-rotated file and exposes a live broadcast of
+/// completed lines via the returned `LoggingHandle`. When `config.enabled`
+/// is false, behavior is identical to `init_logging` (stdout only).
+pub fn init_logging_with_config(
+    level: LogLevel,
+    config: &LoggingConfig,
+    service_name: &str,
+) -> LoggingHandle {
+    let filter_str =
+        std::env::var("RUST_LOG").unwrap_or_else(|_| level.as_tracing_filter().to_string());
+
+    if !config.enabled {
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::new(filter_str))
+            .with_target(false)
+            .compact()
+            .init();
+        return LoggingHandle {
+            _guard: None,
+            writer: None,
+        };
+    }
+
+    let writer = RotatingFileWriter::new(
+        std::path::Path::new(&config.dir),
+        service_name,
+        &config.rotate_on,
+    )
+    .expect("failed to open rotating log file");
+    let (non_blocking, guard) = tracing_appender::non_blocking(writer.clone());
+
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_target(false)
+        .with_ansi(false)
+        .compact()
+        .with_writer(non_blocking)
+        .with_filter(EnvFilter::new(filter_str.clone()));
+
+    // `config.also_stdout` selects whether the stdout layer is present, but
+    // both arms must produce the same registry type for `.init()` to type
+    // check. `Option<Layer>` itself implements `Layer` (a no-op when `None`),
+    // so folding the condition into an `Option` keeps this to one `.with()`
+    // chain instead of two differently-shaped ones.
+    let stdout_layer = config.also_stdout.then(|| {
+        tracing_subscriber::fmt::layer()
+            .with_target(false)
+            .compact()
+            .with_writer(std::io::stdout)
+            .with_filter(EnvFilter::new(filter_str))
+    });
+
+    tracing_subscriber::registry()
+        .with(stdout_layer)
+        .with(file_layer)
+        .init();
+
+    LoggingHandle {
+        _guard: Some(guard),
+        writer: Some(writer),
+    }
 }
 
 // ---------------------------------------------------------------------------
