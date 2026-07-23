@@ -381,6 +381,8 @@ pub async fn build_follow_stream(
 
 fn build_sse_event(line: &str, source: &str) -> axum::response::sse::Event {
     let payload = serde_json::json!({ "line": line, "source": source });
+    // Serializing two plain strings cannot fail; this fallback is
+    // defensive only, not a real degradation path this code expects to hit.
     let data = serde_json::to_string(&payload).unwrap_or_else(|_| line.to_string());
     axum::response::sse::Event::default().data(data)
 }
