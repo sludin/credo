@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
+use futures_util::StreamExt;
 use serde::Deserialize;
 
 use crate::error::AppError;
@@ -303,6 +304,79 @@ pub fn dedup_buffered_against_tail(
         .into_iter()
         .filter(|line| !recent.contains(line.as_str()))
         .collect()
+}
+
+/// Turns a live broadcast receiver into a `Stream` of lines that already
+/// pass the level/text filter, skipping non-matching lines and recovering
+/// from `Lagged` (falling behind the broadcast buffer) by simply resuming
+/// from wherever the channel now stands, rather than erroring the whole
+/// stream.
+fn tail_stream(
+    rx: tokio::sync::broadcast::Receiver<String>,
+    level: Option<LogLevel>,
+    q: Option<String>,
+) -> impl futures_util::Stream<Item = String> {
+    futures_util::stream::unfold((rx, level, q), move |(mut rx, level, q)| async move {
+        loop {
+            match rx.recv().await {
+                Ok(line) => {
+                    if line_passes_filter(&line, level, q.as_deref()) {
+                        return Some((line, (rx, level, q)));
+                    }
+                    // Didn't pass the filter - keep waiting, don't yield.
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    })
+}
+
+/// Builds the full replay-then-continue line stream for live tail: the
+/// historical backlog matching `params`, then anything that arrived on
+/// the broadcast while that backlog was being read (deduped against the
+/// backlog's tail), then an unbounded live feed of new matching lines.
+/// Subscribes to the broadcast *before* reading the backlog specifically
+/// so no line can be missed in the gap between "finish reading the file"
+/// and "start tailing new lines."
+pub async fn build_follow_stream(
+    handle: &LoggingHandle,
+    params: &LogQueryParams,
+) -> Result<impl futures_util::Stream<Item = String>, AppError> {
+    let mut live_rx = handle
+        .subscribe()
+        .ok_or_else(|| AppError::BadRequest("file logging is not enabled".to_string()))?;
+    let dir = handle
+        .log_dir()
+        .ok_or_else(|| AppError::BadRequest("file logging is not enabled".to_string()))?;
+    let basename = handle
+        .log_basename()
+        .ok_or_else(|| AppError::BadRequest("file logging is not enabled".to_string()))?;
+
+    let historical = read_historical_lines(dir, basename, params, Utc::now())
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("reading log file: {e}")))?;
+
+    let level = params.level.as_deref().map(parse_level_filter);
+    let q = params.q.clone();
+
+    let mut buffered = Vec::new();
+    loop {
+        match live_rx.try_recv() {
+            Ok(line) => {
+                if line_passes_filter(&line, level, q.as_deref()) {
+                    buffered.push(line);
+                }
+            }
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+        }
+    }
+    let buffered = dedup_buffered_against_tail(&historical, buffered, DEDUP_TAIL_WINDOW);
+
+    let replay = futures_util::stream::iter(historical.into_iter().chain(buffered));
+    let tail = tail_stream(live_rx, level, q);
+    Ok(replay.chain(tail))
 }
 
 #[cfg(test)]
@@ -755,5 +829,35 @@ mod tests {
             dedup_buffered_against_tail(&[], buffered.clone(), 50),
             buffered
         );
+    }
+
+    #[tokio::test]
+    async fn tail_stream_yields_only_lines_passing_filter_in_order() {
+        let (tx, rx) = tokio::sync::broadcast::channel(16);
+        let mut stream = Box::pin(tail_stream(rx, Some(LogLevel::Warn), None));
+
+        tx.send("2024-01-15T10:00:00Z ERROR bad".to_string())
+            .expect("send");
+        tx.send("2024-01-15T10:00:01Z  INFO ignored".to_string())
+            .expect("send");
+        tx.send("2024-01-15T10:00:02Z  WARN risky".to_string())
+            .expect("send");
+
+        assert_eq!(
+            stream.next().await,
+            Some("2024-01-15T10:00:00Z ERROR bad".to_string())
+        );
+        assert_eq!(
+            stream.next().await,
+            Some("2024-01-15T10:00:02Z  WARN risky".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn tail_stream_ends_when_sender_dropped() {
+        let (tx, rx) = tokio::sync::broadcast::channel::<String>(16);
+        let mut stream = Box::pin(tail_stream(rx, None, None));
+        drop(tx);
+        assert_eq!(stream.next().await, None);
     }
 }
