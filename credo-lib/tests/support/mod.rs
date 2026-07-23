@@ -1,8 +1,8 @@
 use axum::extract::{Query, State};
-use axum::response::Json;
+use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
-use credo_lib::log_query::{historical_logs, LogQueryParams};
+use credo_lib::log_query::{respond_to_log_query, LogQueryParams};
 use credo_lib::{
     init_logging_with_config, AppError, LogLevel, LoggingConfig, LoggingHandle, RotationConfig,
 };
@@ -11,8 +11,8 @@ use std::sync::Arc;
 pub async fn logs_handler(
     State(handle): State<Arc<LoggingHandle>>,
     Query(params): Query<LogQueryParams>,
-) -> Result<Json<Vec<String>>, AppError> {
-    historical_logs(&handle, &params).await
+) -> Result<Response, AppError> {
+    respond_to_log_query(&handle, &params).await
 }
 
 pub async fn start_test_server(handle: LoggingHandle) -> (std::net::SocketAddr, reqwest::Client) {

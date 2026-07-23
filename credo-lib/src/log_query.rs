@@ -379,6 +379,56 @@ pub async fn build_follow_stream(
     Ok(replay.chain(tail))
 }
 
+fn build_sse_event(line: &str, source: &str) -> axum::response::sse::Event {
+    let payload = serde_json::json!({ "line": line, "source": source });
+    let data = serde_json::to_string(&payload).unwrap_or_else(|_| line.to_string());
+    axum::response::sse::Event::default().data(data)
+}
+
+/// Live tail as Server-Sent Events: replays the matching historical
+/// backlog, then streams new matching lines indefinitely. Each event's
+/// data is a JSON object `{"line": "...", "source": "<service>"}` -
+/// `source` is this handle's own log basename. It isn't needed until a
+/// future plan has shepherd re-stream another service's `/logs?follow`
+/// response, but adding it now costs nothing and means the wire format
+/// never has to change once a real client depends on it.
+pub async fn follow_logs(
+    handle: &LoggingHandle,
+    params: &LogQueryParams,
+) -> Result<
+    axum::response::sse::Sse<
+        impl futures_util::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
+    >,
+    AppError,
+> {
+    let source = handle
+        .log_basename()
+        .ok_or_else(|| AppError::BadRequest("file logging is not enabled".to_string()))?
+        .to_string();
+    let lines = build_follow_stream(handle, params).await?;
+    let events = lines.map(
+        move |line| -> Result<axum::response::sse::Event, std::convert::Infallible> {
+            Ok(build_sse_event(&line, &source))
+        },
+    );
+    Ok(axum::response::sse::Sse::new(events).keep_alive(axum::response::sse::KeepAlive::default()))
+}
+
+/// Single entry point for a service's `/logs` route to call after its own
+/// auth check: historical JSON when `params.follow` is false, a
+/// live-tailing SSE stream when true.
+pub async fn respond_to_log_query(
+    handle: &LoggingHandle,
+    params: &LogQueryParams,
+) -> Result<axum::response::Response, AppError> {
+    use axum::response::IntoResponse;
+    if params.follow {
+        Ok(follow_logs(handle, params).await?.into_response())
+    } else {
+        Ok(historical_logs(handle, params).await?.into_response())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
