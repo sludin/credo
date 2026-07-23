@@ -36,19 +36,27 @@ pub fn parse_rfc3339(s: &str) -> Option<DateTime<Utc>> {
 /// negative).
 pub fn parse_last_duration(s: &str) -> Option<chrono::Duration> {
     let s = s.trim();
-    if s.len() < 2 {
+    // Split on the last *character*, not the last byte: a multi-byte unit
+    // char (e.g. "5µ") would otherwise land `split_at` mid-codepoint and
+    // panic with "byte index is not a char boundary".
+    let last_char = s.chars().last()?;
+    let split_at = s.len() - last_char.len_utf8();
+    if split_at == 0 {
         return None;
     }
-    let (digits, unit) = s.split_at(s.len() - 1);
+    let (digits, unit) = s.split_at(split_at);
     let n: i64 = digits.parse().ok()?;
     if n <= 0 {
         return None;
     }
+    // Use chrono's fallible constructors: `digits.parse::<i64>()` accepts
+    // values far larger than chrono's internal bound, and the panicking
+    // constructors (`Duration::seconds`/etc.) would abort on oversized input.
     match unit {
-        "s" => Some(chrono::Duration::seconds(n)),
-        "m" => Some(chrono::Duration::minutes(n)),
-        "h" => Some(chrono::Duration::hours(n)),
-        "d" => Some(chrono::Duration::days(n)),
+        "s" => chrono::Duration::try_seconds(n),
+        "m" => chrono::Duration::try_minutes(n),
+        "h" => chrono::Duration::try_hours(n),
+        "d" => chrono::Duration::try_days(n),
         _ => None,
     }
 }
@@ -182,6 +190,16 @@ mod tests {
         assert_eq!(parse_last_duration("5x"), None);
         assert_eq!(parse_last_duration("0m"), None);
         assert_eq!(parse_last_duration("-5m"), None);
+    }
+
+    #[test]
+    fn parse_last_duration_rejects_non_ascii_unit_without_panicking() {
+        assert_eq!(parse_last_duration("5µ"), None);
+    }
+
+    #[test]
+    fn parse_last_duration_rejects_oversized_duration_without_panicking() {
+        assert_eq!(parse_last_duration("999999999999d"), None);
     }
 
     #[test]
