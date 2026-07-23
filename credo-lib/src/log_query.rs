@@ -12,8 +12,9 @@ use crate::log::{LogLevel, LoggingHandle};
 /// is a duration shorthand ("5m", "1h", "24h") that overrides
 /// `since`/`until` when present and valid. `level` is a minimum severity
 /// ("error"/"warn"/"info"/"debug"), matching `LogLevel`'s existing mental
-/// model (parsed via `LogLevel::from_str`). `q` is a case-insensitive
-/// substring filter.
+/// model (parsed via `parse_level_filter`, not `LogLevel::from_str` directly
+/// — see that function's doc for why). `q` is a case-insensitive substring
+/// filter.
 #[derive(Debug, Deserialize, Default, PartialEq)]
 pub struct LogQueryParams {
     pub since: Option<String>,
