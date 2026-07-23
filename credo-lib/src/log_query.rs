@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
@@ -147,6 +149,79 @@ pub fn line_passes_filter(line: &str, level: Option<LogLevel>, q: Option<&str>) 
         }
     }
     true
+}
+
+/// Lists this basename's log files in chronological order (oldest first,
+/// current file last). Only includes files that actually exist - a
+/// freshly started service may have no rotated backups yet. A missing
+/// directory yields an empty list rather than an error.
+pub fn historical_file_paths(dir: &Path, basename: &str) -> Vec<PathBuf> {
+    let mut rotated: Vec<(u32, PathBuf)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        let prefix = format!("{basename}.");
+        let suffix = ".log";
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if let Some(middle) = name
+                .strip_prefix(&prefix)
+                .and_then(|s| s.strip_suffix(suffix))
+            {
+                if let Ok(n) = middle.parse::<u32>() {
+                    rotated.push((n, entry.path()));
+                }
+            }
+        }
+    }
+    rotated.sort_by_key(|(n, _)| std::cmp::Reverse(*n)); // oldest (highest N) first
+    let mut paths: Vec<PathBuf> = rotated.into_iter().map(|(_, p)| p).collect();
+    let current = dir.join(format!("{basename}.log"));
+    if current.exists() {
+        paths.push(current);
+    }
+    paths
+}
+
+/// Reads matching lines across all of this basename's log files (oldest to
+/// newest), applying the time window, level, and text filters, keeping at
+/// most the most recent `limit` matching lines - memory-bounded regardless
+/// of total log volume on disk. `now` anchors `last`-shorthand windows;
+/// callers pass `chrono::Utc::now()` in production and a fixed value in
+/// tests for determinism.
+pub fn read_historical_lines(
+    dir: &Path,
+    basename: &str,
+    params: &LogQueryParams,
+    now: DateTime<Utc>,
+) -> std::io::Result<Vec<String>> {
+    let (since, until) = resolve_window(params, now);
+    let level = params.level.as_deref().map(LogLevel::from_str);
+    let q = params.q.as_deref();
+    let limit = params.limit.unwrap_or(DEFAULT_LOG_LIMIT).max(1);
+
+    let mut kept: std::collections::VecDeque<String> =
+        std::collections::VecDeque::with_capacity(limit.min(1024));
+    for path in historical_file_paths(dir, basename) {
+        let contents = std::fs::read_to_string(&path)?;
+        for line in contents.lines() {
+            if line.is_empty() {
+                continue;
+            }
+            if !line_in_window(line, since, until) {
+                continue;
+            }
+            if !line_passes_filter(line, level, q) {
+                continue;
+            }
+            if kept.len() == limit {
+                kept.pop_front();
+            }
+            kept.push_back(line.to_string());
+        }
+    }
+    Ok(kept.into_iter().collect())
 }
 
 #[cfg(test)]
@@ -328,5 +403,148 @@ mod tests {
             Some(LogLevel::Warn),
             Some("corgi")
         ));
+    }
+
+    fn write_log_file(dir: &std::path::Path, name: &str, contents: &str) {
+        std::fs::write(dir.join(name), contents).expect("write test log file");
+    }
+
+    #[test]
+    fn historical_file_paths_orders_oldest_first_then_current() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_log_file(dir.path(), "svc.log", "current\n");
+        write_log_file(dir.path(), "svc.1.log", "newest backup\n");
+        write_log_file(dir.path(), "svc.2.log", "oldest backup\n");
+
+        let paths = historical_file_paths(dir.path(), "svc");
+        let names: Vec<String> = paths
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, vec!["svc.2.log", "svc.1.log", "svc.log"]);
+    }
+
+    #[test]
+    fn historical_file_paths_skips_missing_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_log_file(dir.path(), "svc.log", "current\n");
+        // No .1.log or .2.log written - fresh service, no rotations yet.
+        let paths = historical_file_paths(dir.path(), "svc");
+        let names: Vec<String> = paths
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, vec!["svc.log"]);
+    }
+
+    #[test]
+    fn historical_file_paths_empty_dir_returns_empty() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(historical_file_paths(dir.path(), "svc").is_empty());
+    }
+
+    #[test]
+    fn read_historical_lines_reads_in_chronological_order_across_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_log_file(
+            dir.path(),
+            "svc.1.log",
+            "2024-01-15T10:00:00Z  INFO older line\n",
+        );
+        write_log_file(
+            dir.path(),
+            "svc.log",
+            "2024-01-15T10:05:00Z  INFO newer line\n",
+        );
+        let now = dt("2024-01-15T12:00:00Z");
+        let lines = read_historical_lines(dir.path(), "svc", &LogQueryParams::default(), now)
+            .expect("read");
+        assert_eq!(
+            lines,
+            vec![
+                "2024-01-15T10:00:00Z  INFO older line".to_string(),
+                "2024-01-15T10:05:00Z  INFO newer line".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn read_historical_lines_applies_time_window() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_log_file(
+            dir.path(),
+            "svc.log",
+            "2024-01-15T09:00:00Z  INFO too early\n\
+             2024-01-15T10:00:00Z  INFO in window\n\
+             2024-01-15T11:00:00Z  INFO too late\n",
+        );
+        let params = LogQueryParams {
+            since: Some("2024-01-15T09:30:00Z".to_string()),
+            until: Some("2024-01-15T10:30:00Z".to_string()),
+            ..Default::default()
+        };
+        let now = dt("2024-01-15T12:00:00Z");
+        let lines = read_historical_lines(dir.path(), "svc", &params, now).expect("read");
+        assert_eq!(
+            lines,
+            vec!["2024-01-15T10:00:00Z  INFO in window".to_string()]
+        );
+    }
+
+    #[test]
+    fn read_historical_lines_applies_level_and_text_filters() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_log_file(
+            dir.path(),
+            "svc.log",
+            "2024-01-15T10:00:00Z  INFO corgi synced\n\
+             2024-01-15T10:01:00Z  WARN corgi unreachable\n\
+             2024-01-15T10:02:00Z  WARN vigil unreachable\n",
+        );
+        let params = LogQueryParams {
+            level: Some("warn".to_string()),
+            q: Some("corgi".to_string()),
+            ..Default::default()
+        };
+        let now = dt("2024-01-15T12:00:00Z");
+        let lines = read_historical_lines(dir.path(), "svc", &params, now).expect("read");
+        assert_eq!(
+            lines,
+            vec!["2024-01-15T10:01:00Z  WARN corgi unreachable".to_string()]
+        );
+    }
+
+    #[test]
+    fn read_historical_lines_caps_at_limit_keeping_most_recent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_log_file(
+            dir.path(),
+            "svc.log",
+            "2024-01-15T10:00:00Z  INFO line one\n\
+             2024-01-15T10:01:00Z  INFO line two\n\
+             2024-01-15T10:02:00Z  INFO line three\n",
+        );
+        let params = LogQueryParams {
+            limit: Some(2),
+            ..Default::default()
+        };
+        let now = dt("2024-01-15T12:00:00Z");
+        let lines = read_historical_lines(dir.path(), "svc", &params, now).expect("read");
+        assert_eq!(
+            lines,
+            vec![
+                "2024-01-15T10:01:00Z  INFO line two".to_string(),
+                "2024-01-15T10:02:00Z  INFO line three".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn read_historical_lines_missing_dir_returns_empty_not_error() {
+        let missing = std::path::Path::new("/nonexistent/credo-log-query-test-dir");
+        let now = dt("2024-01-15T12:00:00Z");
+        let lines = read_historical_lines(missing, "svc", &LogQueryParams::default(), now)
+            .expect("missing dir must not error");
+        assert!(lines.is_empty());
     }
 }
