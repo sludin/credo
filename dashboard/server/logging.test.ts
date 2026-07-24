@@ -183,9 +183,21 @@ describe('createRequestLogMiddleware', () => {
     // <timestamp> INFO D > 200 GET /api/flock dashboard.example.com 10.0.0.5 alice <ms>
     expect(fields).toHaveLength(11);
     expect(() => new Date(fields[0]).toISOString()).not.toThrow();
-    expect(fields.slice(1)).toEqual(
-      expect.arrayContaining(['INFO', 'D', '>', '200', 'GET', '/api/flock', 'dashboard.example.com', '10.0.0.5', 'alice']),
-    );
+    // Exact positional match, not arrayContaining: the /api/logs query
+    // slice will parse these lines with credo-lib's conventions (leading
+    // timestamp token, standalone level token), so field ORDER is the
+    // contract, not just field presence.
+    expect(fields.slice(1, 10)).toEqual([
+      'INFO',
+      'D',
+      '>',
+      '200',
+      'GET',
+      '/api/flock',
+      'dashboard.example.com',
+      '10.0.0.5',
+      'alice',
+    ]);
     expect(Number(fields[10])).toBeGreaterThanOrEqual(0);
   });
 
