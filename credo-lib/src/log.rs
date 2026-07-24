@@ -66,6 +66,23 @@ pub struct LoggingHandle {
 }
 
 impl LoggingHandle {
+    /// A handle representing "file logging is not enabled and never was" -
+    /// for callers that need a `LoggingHandle` to satisfy an API but must
+    /// not trigger `init_logging_with_config`'s global tracing-subscriber
+    /// install, which can only happen once per process (test harnesses that
+    /// build many service instances in one test binary are the main case).
+    /// `log_dir()`, `log_basename()`, and `subscribe()` all return `None`,
+    /// identical to what a real handle looks like when
+    /// `LoggingConfig.enabled` is false.
+    pub fn disabled() -> Self {
+        LoggingHandle {
+            _guard: None,
+            writer: None,
+            log_dir: None,
+            log_basename: None,
+        }
+    }
+
     /// Subscribe to a live feed of this service's log lines. Returns `None`
     /// if rotating-file logging is not enabled in `config`.
     pub fn subscribe(&self) -> Option<tokio::sync::broadcast::Receiver<String>> {
@@ -227,5 +244,18 @@ impl<'a> RequestLogEntry<'a> {
             self.identity.unwrap_or("-"),
             self.duration_ms,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disabled_handle_has_no_dir_basename_or_subscription() {
+        let handle = LoggingHandle::disabled();
+        assert!(handle.log_dir().is_none());
+        assert!(handle.log_basename().is_none());
+        assert!(handle.subscribe().is_none());
     }
 }
