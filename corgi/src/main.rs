@@ -155,7 +155,11 @@ async fn cmd_server_start() -> Result<()> {
     let _pid_guard = credo_lib::pid::PidGuard::new(pid_path)?;
 
     let config = load_config().context("Loading config")?;
-    credo_lib::log::init_logging(config.log_level);
+    let logging_handle = std::sync::Arc::new(credo_lib::log::init_logging_with_config(
+        config.log_level,
+        &config.logging,
+        "corgi",
+    ));
 
     tracing::info!(
         node_id = %config.node_id,
@@ -166,7 +170,7 @@ async fn cmd_server_start() -> Result<()> {
 
     corgi::hooks::validate_hooks(&config);
 
-    let state = AppState::new(config).context("Building AppState")?;
+    let state = AppState::new(config, logging_handle).context("Building AppState")?;
 
     tokio::spawn(corgi::sync::run_sync_loop(state.clone()));
     tokio::spawn(corgi::monitor::run_monitor_loop(state.clone()));

@@ -84,5 +84,13 @@
 
   "defaultHooks": [],
 
-  "logLevel": "info"
+  "logLevel": "info",
+
+  "_logging": "Opt-in rotating log file + live tail for the /logs endpoint; omit entirely for stdout-only (current behavior)",
+  "logging": {
+    "enabled": false,
+    "dir": "logs",
+    "rotateOn": { "sizeMb": 100, "keepFiles": 12 },
+    "alsoStdout": true
+  }
 }

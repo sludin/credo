@@ -1,4 +1,4 @@
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -61,6 +61,19 @@ pub async fn control_health(
         "shepherdUrl": state.config.load().shepherd_url,
         "flockSize": flock_size,
     })))
+}
+
+/// Historical or live-tailing (`?follow=true`) log retrieval for this
+/// corgi's own log file. Shares its implementation with vigil and shepherd
+/// via `credo_lib::log_query` - this handler only does the auth check and
+/// hands off.
+pub async fn logs_get(
+    State(state): State<AppState>,
+    role: Option<Extension<Role>>,
+    Query(params): Query<credo_lib::log_query::LogQueryParams>,
+) -> Result<axum::response::Response, AppError> {
+    check_min_role(role.as_ref().map(|e| &e.0), &Role::Readonly)?;
+    credo_lib::log_query::respond_to_log_query(&state.logging_handle, &params).await
 }
 
 pub async fn flock_list(

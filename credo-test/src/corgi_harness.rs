@@ -165,7 +165,10 @@ impl TestCorgi {
         let cert_store = tmp.join("certstore");
 
         let config = build_corgi_config(&tmp, &cert_store);
-        let state = AppState::new(config)?;
+        let state = AppState::new(
+            config,
+            std::sync::Arc::new(credo_lib::LoggingHandle::disabled()),
+        )?;
 
         let base_control_router = corgi::server::build_control_router(state.clone());
         let control_router = if inject_admin {
@@ -265,6 +268,7 @@ fn build_corgi_config(tmp: &Path, cert_store_dir: &Path) -> CorgiConfig {
         service_hooks: HashMap::new(),
         default_hooks: vec![],
         log_level: LogLevel::Warn,
+        logging: credo_lib::LoggingConfig::default(),
         auth: AuthConfig {
             mode: AuthMode::Mtls,
         },

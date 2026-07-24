@@ -42,6 +42,7 @@ fn make_config(dir: &TempDir) -> corgi::config::CorgiConfig {
         service_hooks: HashMap::new(),
         default_hooks: vec![],
         log_level: LogLevel::Warn,
+        logging: credo_lib::LoggingConfig::default(),
         auth: AuthConfig {
             mode: AuthMode::Mtls,
         },

@@ -160,6 +160,7 @@ pub struct CorgiConfig {
     pub service_hooks: HashMap<String, ServiceHookDef>,
     pub default_hooks: Vec<HookRef>,
     pub log_level: credo_lib::LogLevel,
+    pub logging: credo_lib::LoggingConfig,
     pub auth: AuthConfig,
     pub rbac_identities: Vec<RbacIdentity>,
     pub proxy_auth: ProxyAuthConfig,
@@ -262,6 +263,7 @@ struct RawConfig {
 
     #[serde(rename = "logLevel")]
     log_level: Option<String>,
+    logging: Option<credo_lib::LoggingConfig>,
 
     auth: Option<RawAuth>,
     #[serde(rename = "authMode")]
@@ -833,6 +835,7 @@ pub fn load_config() -> Result<CorgiConfig> {
         raw.log_level.as_deref().unwrap_or("info"),
     );
     let log_level = credo_lib::LogLevel::from_str(&log_level_str);
+    let logging = raw.logging.unwrap_or_default();
 
     // Ports
     let mtls_port = env::var("CORGI_MTLS_PORT")
@@ -922,6 +925,7 @@ pub fn load_config() -> Result<CorgiConfig> {
         service_hooks,
         default_hooks,
         log_level,
+        logging,
         auth: AuthConfig { mode: auth_mode },
         rbac_identities,
         proxy_auth,

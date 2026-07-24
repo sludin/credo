@@ -27,10 +27,19 @@ pub struct AppState {
     pub sync_lock: Arc<tokio::sync::Mutex<()>>,
     /// Latest endpoint-monitor result per cert name (reported via /flock).
     pub monitor_results: Arc<RwLock<HashMap<String, credo_lib::types::MonitorResult>>>,
+    /// Handle to this service's rotating log file + live broadcast, used by
+    /// the `/logs` route. `credo_lib::LoggingHandle::disabled()` in tests,
+    /// since the test harness can't call `init_logging_with_config` (it
+    /// installs a process-global tracing subscriber, only allowed once per
+    /// process, and the harness builds many instances in one test binary).
+    pub logging_handle: Arc<credo_lib::LoggingHandle>,
 }
 
 impl AppState {
-    pub fn new(config: CorgiConfig) -> anyhow::Result<Self> {
+    pub fn new(
+        config: CorgiConfig,
+        logging_handle: Arc<credo_lib::LoggingHandle>,
+    ) -> anyhow::Result<Self> {
         let flock = config.flock.clone();
         let shepherd_client = match build_shepherd_client(&config) {
             Ok(c) => c,
@@ -48,6 +57,7 @@ impl AppState {
             last_sync_at: Arc::new(RwLock::new(None)),
             sync_lock: Arc::new(tokio::sync::Mutex::new(())),
             monitor_results: Arc::new(RwLock::new(HashMap::new())),
+            logging_handle,
         })
     }
 }
