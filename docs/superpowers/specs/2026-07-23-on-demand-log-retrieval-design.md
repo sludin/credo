@@ -154,6 +154,14 @@ Original design text, still accurate as the *intent* (routes still pending):
 
 ## Phase 5 — Dashboard frontend: Logs tab
 
+**Status: done** (`docs/superpowers/plans/2026-07-24-dashboard-logs-tab.md`, merged into `monitor-diagnostics-multi-endpoint`) — **this completes the whole feature; all five phases are shipped.** Implementation notes where it diverged from the original sketch below:
+- Pure logic (URL building, SSE parsing, bounded buffer, reconnect trimming, autoscroll predicate, datetime conversion) lives in `dashboard/src/lib/logs.ts` with full vitest coverage, following the `lib/columns` precedent — the page component is untested wiring by design (this repo has no jsdom/testing-library infra, and adding it would have been a new dependency).
+- Viewer lines carry a monotonic id for React keys (final-review catch): index keys on a buffer that drops from the front at the 5000-line cap would re-diff every row per arrival — O(n²) DOM churn over a sustained tail.
+- The reconnect loop is bounded (final-review catch): EventSource can't see response statuses, so a session dying mid-tail originally looked like a transient outage and reconnect-cycled every 2s forever with no signal. Each stream error now fires a `fetchHealth()` probe through `requestJson` (whose 401 handling performs the standard `/login` redirect), and 5 consecutive failures stop the loop with a visible "stream lost — toggle Live tail to retry" error.
+- Accepted limitations, deliberate: a failed flock fetch silently leaves only the three base sources in the picker (no corgi entries, no warning); control changes — including unchecking Live tail — take effect on the 500ms debounced apply, so the stream (and its incoming lines) can lag a control flip by up to half a second; no connect-timeout if a proxy stalls without firing open or error.
+
+Original design text, all implemented as specified:
+
 - `dashboard/src/components/Shell.tsx`: new top-level nav section "Logs" (spans all 4 sources, doesn't fit the existing per-service groupings).
 - `dashboard/src/App.tsx`: lazy route `/logs` → new `dashboard/src/pages/Logs.tsx`.
 - `dashboard/src/pages/Logs.tsx`:
