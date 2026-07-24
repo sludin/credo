@@ -2,7 +2,8 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { LoggingHandle, type LoggingConfig } from './logging';
+import { EventEmitter } from 'events';
+import { LoggingHandle, createRequestLogMiddleware, type LoggingConfig } from './logging';
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-logging-test-'));
@@ -151,5 +152,57 @@ describe('LoggingHandle rotation', () => {
     expect(fs.existsSync(path.join(dir, 'dashboard.1.log'))).toBe(true);
     expect(fs.existsSync(path.join(dir, 'dashboard.2.log'))).toBe(true);
     expect(fs.existsSync(path.join(dir, 'dashboard.3.log'))).toBe(false);
+  });
+});
+
+describe('createRequestLogMiddleware', () => {
+  it('logs one line on response finish, in the credo field order, with the "D" service code', () => {
+    const handle = LoggingHandle.disabled();
+    const writeSpy = vi.spyOn(handle, 'write');
+    const middleware = createRequestLogMiddleware(handle);
+
+    const res = new EventEmitter() as EventEmitter & { statusCode: number };
+    res.statusCode = 200;
+    const req = {
+      method: 'GET',
+      path: '/api/flock',
+      hostname: 'dashboard.example.com',
+      ip: '10.0.0.5',
+      session: { user: { userId: 'alice' } },
+    };
+    const next = vi.fn();
+
+    middleware(req as never, res as never, next);
+    expect(next).toHaveBeenCalledOnce();
+
+    res.emit('finish');
+
+    expect(writeSpy).toHaveBeenCalledOnce();
+    const line = writeSpy.mock.calls[0][0];
+    const fields = line.split(' ');
+    // <timestamp> INFO D > 200 GET /api/flock dashboard.example.com 10.0.0.5 alice <ms>
+    expect(fields).toHaveLength(11);
+    expect(() => new Date(fields[0]).toISOString()).not.toThrow();
+    expect(fields.slice(1)).toEqual(
+      expect.arrayContaining(['INFO', 'D', '>', '200', 'GET', '/api/flock', 'dashboard.example.com', '10.0.0.5', 'alice']),
+    );
+    expect(Number(fields[10])).toBeGreaterThanOrEqual(0);
+  });
+
+  it("uses '-' for identity when there is no session user", () => {
+    const handle = LoggingHandle.disabled();
+    const writeSpy = vi.spyOn(handle, 'write');
+    const middleware = createRequestLogMiddleware(handle);
+
+    const res = new EventEmitter() as EventEmitter & { statusCode: number };
+    res.statusCode = 401;
+    const req = { method: 'GET', path: '/api/certs', hostname: 'dashboard.example.com', ip: '10.0.0.6', session: {} };
+    const next = vi.fn();
+
+    middleware(req as never, res as never, next);
+    res.emit('finish');
+
+    const line = writeSpy.mock.calls[0][0];
+    expect(line).toContain(' - '); // identity field
   });
 });

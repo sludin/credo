@@ -16,6 +16,7 @@ import { createSessionMiddleware } from './auth/session';
 import { initUsersStore, loadUsers, saveUsers, findUserById } from './auth/users';
 import { requireAuth, makeRoleRefresh } from './auth/middleware';
 import { createAuthRouter } from './routes-auth';
+import { LoggingHandle, createRequestLogMiddleware } from './logging';
 
 type Assignment = {
   corgi: string;
@@ -282,6 +283,7 @@ async function getValidShepherdToken(
 async function main(): Promise<void> {
   const config = loadConfig();
   const clients = createShepherdClients(config);
+  const loggingHandle = LoggingHandle.init(config.logging, 'dashboard');
 
   initUsersStore(config.auth.usersPath);
 
@@ -298,6 +300,7 @@ async function main(): Promise<void> {
 
   const app = express();
   app.use(express.json());
+  app.use(createRequestLogMiddleware(loggingHandle));
   app.use(createSessionMiddleware(config.auth));
 
   const serviceCert = { certPath: clients.certPath, certFingerprint: clients.certFingerprint };

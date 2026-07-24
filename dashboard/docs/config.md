@@ -63,6 +63,18 @@ Controls the in-memory DNS TXT polling jobs used by the DNS checker tool. Jobs a
 | `dnsJobTimeoutSeconds` | number | `600` | `DASHBOARD_DNS_JOB_TIMEOUT_SECONDS` | How long a DNS polling job runs before expiring |
 | `dnsPublicResolvers` | array | `[]` | — | Public DNS resolvers to query in addition to authoritative nameservers. Each entry: `{ "name": "Google", "ip": "8.8.8.8" }` |
 
+## Logging
+
+Opt-in rotating log file + live tail, backing `GET /api/logs` (see a later plan for the routes themselves). Omit entirely for stdout-only (current behavior). Requires a BFF restart to pick up changes.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `logging.enabled` | bool | `false` | Enable file logging + live tail |
+| `logging.dir` | string | `"logs"` | Directory for the rotating log file, resolved relative to `baseDir` |
+| `logging.rotateOn.sizeMb` | number | `100` | Rotate when the current log file reaches this size |
+| `logging.rotateOn.keepFiles` | number | `12` | Number of rotated backups to retain |
+| `logging.alsoStdout` | bool | `true` | Also write log lines to stdout when file logging is enabled (stdout-only always happens when `enabled` is `false`, regardless of this field) |
+
 ## Auth
 
 All `auth.*` fields live under the `auth` key.
@@ -111,6 +123,13 @@ All `auth.*` fields live under the `auth` key.
     { "name": "Google",     "ip": "8.8.8.8" },
     { "name": "Cloudflare", "ip": "1.1.1.1" }
   ],
+
+  "logging": {
+    "enabled": false,
+    "dir": "logs",
+    "rotateOn": { "sizeMb": 100, "keepFiles": 12 },
+    "alsoStdout": true
+  },
 
   "auth": {
     "usersPath":                 "/var/apps/dashboard/dashboard.users.json",

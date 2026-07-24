@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { EventEmitter } from 'events';
+import type { NextFunction, Request, Response } from 'express';
 
 export type RotationConfig = {
   sizeMb: number;
@@ -119,4 +120,41 @@ export class LoggingHandle {
   logBasename(): string {
     return this.basename;
   }
+}
+
+/**
+ * Express middleware that logs one line per inbound request, in the same
+ * field order as credo's RequestLogEntry (code, direction, status, method,
+ * path, host, peer_ip, identity, duration_ms) - service code "D" for
+ * dashboard, direction always ">" (the BFF only logs its own inbound
+ * requests here, not its outbound calls to Shepherd). Logging on the
+ * 'finish' event (not before calling next()) matches how the Rust services
+ * log after next.run(req).await completes, so status and duration are
+ * accurate.
+ */
+export function createRequestLogMiddleware(handle: LoggingHandle) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const start = Date.now();
+    res.on('finish', () => {
+      const durationMs = Date.now() - start;
+      const identity = req.session?.user?.userId ?? '-';
+      const host = req.hostname || '-';
+      const peerIp = req.ip || '-';
+      const line = [
+        new Date().toISOString(),
+        'INFO',
+        'D',
+        '>',
+        String(res.statusCode),
+        req.method,
+        req.path,
+        host,
+        peerIp,
+        identity,
+        durationMs.toFixed(2),
+      ].join(' ');
+      handle.write(line);
+    });
+    next();
+  };
 }

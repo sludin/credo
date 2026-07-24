@@ -36,6 +36,12 @@ export type DashboardConfig = {
   dnsPollingIntervalSeconds: number;
   dnsJobTimeoutSeconds: number;
   dnsPublicResolvers: Array<{ name: string; ip: string }>;
+  logging: {
+    enabled: boolean;
+    dir: string;
+    rotateOn: { sizeMb: number; keepFiles: number };
+    alsoStdout: boolean;
+  };
   auth: DashboardAuthConfig;
   configPath: string;
 };
@@ -64,6 +70,15 @@ type RawDashboardConfig = {
   dnsPollingIntervalSeconds?: unknown;
   dnsJobTimeoutSeconds?: unknown;
   dnsPublicResolvers?: unknown;
+  logging?: {
+    enabled?: unknown;
+    dir?: unknown;
+    rotateOn?: {
+      sizeMb?: unknown;
+      keepFiles?: unknown;
+    };
+    alsoStdout?: unknown;
+  };
   auth?: {
     usersPath?: unknown;
     sessionSecret?: unknown;
@@ -182,6 +197,21 @@ export function loadConfig(options?: { skipTlsCheck?: boolean }): DashboardConfi
       .filter(e => e.name && e.ip);
   })();
 
+  // Opt-in rotating log file + live tail for GET /api/logs (a later plan
+  // adds the routes); omit entirely for stdout-only (current behavior).
+  const rawLogging = raw.logging ?? {};
+  const loggingEnabled = typeof rawLogging.enabled === 'boolean' ? rawLogging.enabled : false;
+  const loggingDir = path.resolve(baseDir, optionalString(rawLogging.dir) ?? 'logs');
+  const loggingSizeMb =
+    typeof rawLogging.rotateOn?.sizeMb === 'number' && rawLogging.rotateOn.sizeMb > 0
+      ? rawLogging.rotateOn.sizeMb
+      : 100;
+  const loggingKeepFiles =
+    typeof rawLogging.rotateOn?.keepFiles === 'number' && rawLogging.rotateOn.keepFiles > 0
+      ? Math.floor(rawLogging.rotateOn.keepFiles)
+      : 12;
+  const loggingAlsoStdout = typeof rawLogging.alsoStdout === 'boolean' ? rawLogging.alsoStdout : true;
+
   if (!options?.skipTlsCheck) {
     for (const tlsPath of [tlsCertPath, tlsKeyPath, mtlsCertPath, mtlsKeyPath, mtlsCaPath]) {
       if (!tlsPath) {
@@ -263,6 +293,12 @@ export function loadConfig(options?: { skipTlsCheck?: boolean }): DashboardConfi
     dnsPollingIntervalSeconds,
     dnsJobTimeoutSeconds,
     dnsPublicResolvers,
+    logging: {
+      enabled: loggingEnabled,
+      dir: loggingDir,
+      rotateOn: { sizeMb: loggingSizeMb, keepFiles: loggingKeepFiles },
+      alsoStdout: loggingAlsoStdout,
+    },
     auth: {
       usersPath: authUsersPath,
       sessionSecret: authSessionSecret,

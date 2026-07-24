@@ -48,3 +48,35 @@ describe('pollIntervalSeconds', () => {
     expect(config.pollIntervalSeconds).toBe(90);
   });
 });
+
+describe('logging', () => {
+  afterEach(() => {
+    delete process.env.DASHBOARD_CONFIG_PATH;
+  });
+
+  it('defaults to disabled with standard rotation settings', () => {
+    process.env.DASHBOARD_CONFIG_PATH = writeTempConfig();
+    const config = loadConfig({ skipTlsCheck: true });
+    expect(config.logging.enabled).toBe(false);
+    expect(config.logging.rotateOn).toEqual({ sizeMb: 100, keepFiles: 12 });
+    expect(config.logging.alsoStdout).toBe(true);
+  });
+
+  it('honors explicit logging config values', () => {
+    process.env.DASHBOARD_CONFIG_PATH = writeTempConfig({
+      logging: { enabled: true, dir: 'custom-logs', rotateOn: { sizeMb: 50, keepFiles: 5 }, alsoStdout: false },
+    });
+    const config = loadConfig({ skipTlsCheck: true });
+    expect(config.logging.enabled).toBe(true);
+    expect(config.logging.dir.endsWith('custom-logs')).toBe(true);
+    expect(config.logging.rotateOn).toEqual({ sizeMb: 50, keepFiles: 5 });
+    expect(config.logging.alsoStdout).toBe(false);
+  });
+
+  it('resolves logging.dir relative to baseDir', () => {
+    process.env.DASHBOARD_CONFIG_PATH = writeTempConfig({ logging: { enabled: true, dir: 'my-logs' } });
+    const config = loadConfig({ skipTlsCheck: true });
+    const configDir = path.dirname(config.configPath);
+    expect(config.logging.dir).toBe(path.join(configDir, 'my-logs'));
+  });
+});
