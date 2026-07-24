@@ -25,24 +25,39 @@ export const DEFAULT_LOG_LIMIT = 5000;
 export const DEDUP_TAIL_WINDOW = 50;
 
 // new Date() accepts far too much ("2024", "2024-01-15"); require a full
-// RFC 3339 timestamp like chrono's parse_from_rfc3339 does on the Rust side.
-const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+// RFC 3339 timestamp like chrono's parse_from_rfc3339 does on the Rust
+// side - including the forms chrono documents beyond the uppercase-only
+// common case: 't' or ' ' as the date/time separator and 'z' for Zulu.
+const RFC3339 = /^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/;
 
 export function parseRfc3339(s: string): Date | null {
   const trimmed = s.trim();
   if (!RFC3339.test(trimmed)) return null;
-  const d = new Date(trimmed);
+  // new Date() itself only accepts the uppercase-T ISO form; normalize the
+  // separator (Date handles lowercase 'z' fine, but not ' ' or 't').
+  const d = new Date(trimmed[10] === 'T' ? trimmed : `${trimmed.slice(0, 10)}T${trimmed.slice(11)}`);
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/** Duration shorthand (digits + s/m/h/d) in milliseconds, or null. */
+// JS Date's representable range is +/-8.64e15 ms from the epoch; any
+// `last` window larger than that could never produce a valid `since`.
+const MAX_DURATION_MS = 8.64e15;
+
+/**
+ * Duration shorthand (digits + s/m/h/d) in milliseconds, or null. Rejects
+ * oversized values outright - mirroring chrono's try_seconds/etc. returning
+ * None on overflow - so an absurd `last=999999999999999d` falls back to an
+ * unbounded window instead of poisoning it with an Invalid Date, which
+ * would flip the fail-closed timestamp check to excluding everything.
+ */
 export function parseLastDuration(s: string): number | null {
   const m = /^(\d+)([smhd])$/.exec(s.trim());
   if (!m) return null;
   const n = Number(m[1]);
   if (!Number.isFinite(n) || n <= 0) return null;
   const unitMs = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as 's' | 'm' | 'h' | 'd'];
-  return n * unitMs;
+  const ms = n * unitMs;
+  return ms > MAX_DURATION_MS ? null : ms;
 }
 
 /** `last`, when present and valid, overrides `since`/`until`. */
@@ -159,7 +174,10 @@ export function readHistoricalLines(
   const { since, until } = resolveWindow(params, now);
   const minRank = params.level !== undefined ? parseLevelFilter(params.level) : null;
   const q = params.q ?? null;
-  const limit = Math.max(params.limit ?? DEFAULT_LOG_LIMIT, 1);
+  // NaN or non-finite limits fall back to the default rather than turning
+  // slice(-NaN) into a no-op; zero/negative clamp to 1 like Rust's .max(1).
+  const limitRaw = params.limit ?? DEFAULT_LOG_LIMIT;
+  const limit = Number.isFinite(limitRaw) ? Math.max(Math.floor(limitRaw), 1) : DEFAULT_LOG_LIMIT;
 
   let kept: string[] = [];
   for (const p of historicalFilePaths(dir, basename)) {
@@ -175,8 +193,10 @@ export function readHistoricalLines(
       if (!linePassesFilter(line, minRank, q)) continue;
       kept.push(line);
     }
-    // Re-cap after each file so memory stays bounded by limit, not by
-    // total matching volume on disk.
+    // Re-cap after each file so accumulation across files stays bounded
+    // by limit. (Within a single file, matches are buffered in full
+    // before this trim - a looser bound than the Rust side's per-line
+    // VecDeque eviction, but the returned lines are identical.)
     if (kept.length > limit) kept = kept.slice(-limit);
   }
   return kept;
@@ -194,6 +214,9 @@ export function dedupBufferedAgainstTail(
   buffered: string[],
   tailWindow: number,
 ): string[] {
-  const recent = new Set(historical.slice(-tailWindow));
+  // Guard tailWindow <= 0 explicitly: slice(-0) is slice(0) in JS (the
+  // WHOLE array), which would silently invert "check nothing" into
+  // "check everything" - Rust's .rev().take(0) correctly yields nothing.
+  const recent = tailWindow > 0 ? new Set(historical.slice(-tailWindow)) : new Set<string>();
   return buffered.filter((line) => !recent.has(line));
 }

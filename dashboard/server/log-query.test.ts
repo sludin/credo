@@ -33,6 +33,16 @@ describe('parseRfc3339', () => {
     expect(parseRfc3339('not-a-timestamp')).toBeNull();
     expect(parseRfc3339('')).toBeNull();
   });
+
+  it('accepts the documented RFC 3339 variants chrono accepts: space/t separator, lowercase z', () => {
+    // Parity with the Rust services' chrono parse_from_rfc3339 - a since=
+    // value a user types with a space must not silently become unbounded
+    // here while bounding correctly on shepherd/corgi/vigil.
+    expect(parseRfc3339('2024-01-15 10:00:00Z')?.toISOString()).toBe('2024-01-15T10:00:00.000Z');
+    expect(parseRfc3339('2024-01-15t10:00:00Z')?.toISOString()).toBe('2024-01-15T10:00:00.000Z');
+    expect(parseRfc3339('2024-01-15T10:00:00z')?.toISOString()).toBe('2024-01-15T10:00:00.000Z');
+    expect(parseRfc3339('2024-01-15 10:00:00+02:00')?.toISOString()).toBe('2024-01-15T08:00:00.000Z');
+  });
 });
 
 describe('parseLastDuration', () => {
@@ -51,6 +61,17 @@ describe('parseLastDuration', () => {
     expect(parseLastDuration('0m')).toBeNull();
     expect(parseLastDuration('-5m')).toBeNull();
     expect(parseLastDuration('5w')).toBeNull();
+  });
+
+  it('rejects oversized durations instead of producing an Invalid Date window', () => {
+    // Mirrors chrono's try_days returning None on overflow. Without this,
+    // last=999999999999999d yields since = Invalid Date, which is not null,
+    // so the fail-closed timestamp check would wrongly exclude everything -
+    // the opposite of the Rust side's unbounded-window fallback.
+    expect(parseLastDuration('999999999999999d')).toBeNull();
+    const w = resolveWindow({ last: '999999999999999d' }, NOW);
+    expect(w).toEqual({ since: null, until: null });
+    expect(lineInWindow('no timestamp here', w.since, w.until)).toBe(true);
   });
 });
 
@@ -193,5 +214,9 @@ describe('dedupBufferedAgainstTail', () => {
     const historical = ['a', 'b', 'c'];
     expect(dedupBufferedAgainstTail(historical, ['a'], 1)).toEqual(['a']);
     expect(dedupBufferedAgainstTail(historical, ['c'], 1)).toEqual([]);
+  });
+
+  it('a zero tail window checks nothing (slice(-0) must not mean the whole array)', () => {
+    expect(dedupBufferedAgainstTail(['a', 'b', 'c'], ['a', 'c', 'd'], 0)).toEqual(['a', 'c', 'd']);
   });
 });
