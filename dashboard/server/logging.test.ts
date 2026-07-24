@@ -99,6 +99,42 @@ describe('LoggingHandle.init (enabled)', () => {
     expect(handle.logDir()).toBe(dir);
     expect(handle.logBasename()).toBe('dashboard');
   });
+
+  it('degrades to stderr instead of throwing when the log dir vanishes', () => {
+    const dir = tmpDir();
+    const handle = LoggingHandle.init(enabledConfig(dir), 'dashboard');
+    handle.write('before removal');
+    fs.rmSync(dir, { recursive: true, force: true });
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    // write() runs inside a response 'finish' listener in production, so a
+    // throw here would crash the whole BFF via uncaughtException.
+    expect(() => handle.write('after removal')).not.toThrow();
+
+    expect(stderrSpy).toHaveBeenCalledOnce();
+    expect(stderrSpy.mock.calls[0][0]).toContain('log write failed');
+    expect(stderrSpy.mock.calls[0][0]).toContain('after removal');
+  });
+});
+
+describe('LoggingHandle restart', () => {
+  it('seeds currentSize from an existing log file so rotation thresholds survive a restart', () => {
+    const dir = tmpDir();
+    // 1000 pre-existing bytes, as if written before a BFF restart.
+    fs.writeFileSync(path.join(dir, 'dashboard.log'), 'y'.repeat(999) + '\n');
+
+    // Threshold ~1048.576 bytes: one 101-byte write on top of the seeded
+    // 1000 bytes crosses it - but only if init actually read the existing
+    // file's size instead of starting from zero.
+    const handle = LoggingHandle.init(
+      enabledConfig(dir, { rotateOn: { sizeMb: 0.001, keepFiles: 12 } }),
+      'dashboard',
+    );
+    handle.write('x'.repeat(100));
+
+    expect(fs.existsSync(path.join(dir, 'dashboard.1.log'))).toBe(true);
+    expect(fs.statSync(path.join(dir, 'dashboard.1.log')).size).toBe(1101);
+  });
 });
 
 describe('LoggingHandle rotation', () => {

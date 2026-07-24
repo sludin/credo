@@ -75,14 +75,25 @@ export class LoggingHandle {
       process.stdout.write(line + '\n');
       return;
     }
-    fs.appendFileSync(this.filePath(), line + '\n');
-    this.currentSize += Buffer.byteLength(line, 'utf8') + 1;
-    if (this.config.alsoStdout) {
-      process.stdout.write(line + '\n');
-    }
-    this.emitter.emit('line', line);
-    if (this.currentSize >= this.config.rotateOn.sizeMb * 1024 * 1024) {
-      this.rotate();
+    try {
+      fs.appendFileSync(this.filePath(), line + '\n');
+      this.currentSize += Buffer.byteLength(line, 'utf8') + 1;
+      if (this.config.alsoStdout) {
+        process.stdout.write(line + '\n');
+      }
+      this.emitter.emit('line', line);
+      if (this.currentSize >= this.config.rotateOn.sizeMb * 1024 * 1024) {
+        this.rotate();
+      }
+    } catch (err) {
+      // A logging fault (disk full, log dir removed, permission loss) must
+      // never take down request serving: the request-log middleware calls
+      // write() from a response 'finish' listener, where an uncaught throw
+      // becomes an uncaughtException and kills the whole process. Degrade
+      // to stderr and keep serving; the next write retries the file, so a
+      // transient fault (e.g. disk space freed) recovers on its own.
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[dashboard] log write failed (${msg}): ${line}\n`);
     }
   }
 
