@@ -643,8 +643,6 @@ fn build_query_string(pairs: &[(&str, String)]) -> String {
 /// upstream status/message isn't preserved through the proxy for now, the
 /// same known, already-accepted limitation as the non-follow proxy
 /// branches in `get_logs`.
-#[allow(dead_code)]
-// Task 2 wires this into get_logs and removes this allow.
 async fn stream_upstream_logs_response(
     upstream: reqwest::Response,
 ) -> Result<axum::response::Response, AppError> {
@@ -668,20 +666,21 @@ async fn stream_upstream_logs_response(
 /// (default) serves this shepherd's own logs; `target=vigil` and
 /// `target=corgi:<name>` proxy to that service's own `/logs` endpoint using
 /// the existing outbound clients (`state.vigil_client`, `state.corgi_client_pool`)
-/// already used for `/ca`, `/health`, and hook fetches. JSON-only for now -
-/// `?follow=true` live-tail proxying is a separate future endpoint.
+/// already used for `/ca`, `/health`, and hook fetches. `?follow=true`
+/// requests a live-tailing SSE stream instead, proxied through verbatim
+/// from whichever service actually produced it.
 pub async fn get_logs(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
     Query(query): Query<AdminLogsQuery>,
-) -> Result<Json<Vec<String>>, AppError> {
+) -> Result<axum::response::Response, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
 
     let target = query.target.as_deref().unwrap_or("shepherd");
 
     if target == "shepherd" {
         let params = query.to_log_query_params();
-        return credo_lib::log_query::historical_logs(&state.logging_handle, &params).await;
+        return credo_lib::log_query::respond_to_log_query(&state.logging_handle, &params).await;
     }
 
     if target == "vigil" {
@@ -696,6 +695,23 @@ pub async fn get_logs(
             .await
             .clone()
             .ok_or_else(|| AppError::BadRequest("Vigil client unavailable".to_string()))?;
+
+        if query.follow {
+            // Reusing corgi_client's timeout constant here too - it's just
+            // a shared "effectively unbounded for a live tail" value, not
+            // corgi-specific.
+            let upstream = client
+                .get(format!("{}/logs", url.trim_end_matches('/')))
+                .query(&query.forward_pairs())
+                .timeout(std::time::Duration::from_secs(
+                    crate::corgi_client::FOLLOW_TIMEOUT_SECS,
+                ))
+                .send()
+                .await
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("Vigil request failed: {}", e)))?;
+            return stream_upstream_logs_response(upstream).await;
+        }
+
         let body: Vec<String> = client
             .get(format!("{}/logs", url.trim_end_matches('/')))
             .query(&query.forward_pairs())
@@ -707,7 +723,7 @@ pub async fn get_logs(
             .map_err(|e| {
                 AppError::Internal(anyhow::anyhow!("Vigil response parse error: {}", e))
             })?;
-        return Ok(Json(body));
+        return Ok(Json(body).into_response());
     }
 
     if let Some(name) = target.strip_prefix("corgi:") {
@@ -719,11 +735,20 @@ pub async fn get_logs(
             .clone();
         drop(corgis);
         let path = format!("/logs{}", build_query_string(&query.forward_pairs()));
+
+        if query.follow {
+            let upstream =
+                crate::corgi_client::corgi_get_stream(&state.corgi_client_pool, &node, &path)
+                    .await
+                    .map_err(AppError::Internal)?;
+            return stream_upstream_logs_response(upstream).await;
+        }
+
         let body: Vec<String> =
             crate::corgi_client::corgi_get(&state.corgi_client_pool, &node, &path)
                 .await
                 .map_err(AppError::Internal)?;
-        return Ok(Json(body));
+        return Ok(Json(body).into_response());
     }
 
     Err(AppError::BadRequest(format!("unknown target '{target}'")))

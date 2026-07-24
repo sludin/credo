@@ -93,3 +93,62 @@ async fn admin_logs_target_unknown_corgi_returns_404() {
 
     assert_eq!(resp.status(), 404);
 }
+
+/// target=shepherd&follow=true reaches the same shared dispatch as the
+/// non-follow case - credo_lib::log_query::respond_to_log_query internally
+/// branches on follow. Against the test harness's disabled LoggingHandle,
+/// both paths get the same 400 ("file logging is not enabled"), proving
+/// follow is correctly threaded through rather than silently ignored.
+#[tokio::test]
+async fn admin_logs_target_shepherd_follow_reaches_handler() {
+    let shepherd = TestShepherd::start_authed().await.unwrap();
+
+    let resp = shepherd
+        .client
+        .get(format!("{}/admin/logs?follow=true", shepherd.dashboard_url))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+}
+
+/// target=vigil&follow=true hits the same "Vigil not configured" guard as
+/// the non-follow case - proving that guard runs before any follow-specific
+/// streaming logic, not after (i.e. the config/client checks aren't
+/// accidentally skipped on the follow path).
+#[tokio::test]
+async fn admin_logs_target_vigil_follow_not_configured_returns_400() {
+    let shepherd = TestShepherd::start_authed().await.unwrap();
+
+    let resp = shepherd
+        .client
+        .get(format!(
+            "{}/admin/logs?target=vigil&follow=true",
+            shepherd.dashboard_url
+        ))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+}
+
+/// target=corgi:<unknown>&follow=true still returns a clean 404 - the
+/// corgi-lookup guard runs before any follow-specific streaming logic.
+#[tokio::test]
+async fn admin_logs_target_unknown_corgi_follow_returns_404() {
+    let shepherd = TestShepherd::start_authed().await.unwrap();
+
+    let resp = shepherd
+        .client
+        .get(format!(
+            "{}/admin/logs?target=corgi:nonexistent&follow=true",
+            shepherd.dashboard_url
+        ))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 404);
+}
