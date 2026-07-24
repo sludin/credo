@@ -546,8 +546,7 @@ pub async fn get_cas(
 /// `#[serde(flatten)]`-ing it: axum's `Query` extractor uses
 /// `serde_urlencoded`, which doesn't support flatten reliably. `target`
 /// selects the log source: `"shepherd"` (default), `"vigil"`, or
-/// `"corgi:<name>"`. `follow` (live tail) is deliberately not a field here -
-/// this endpoint is JSON-only; live-tail proxying is a separate future plan.
+/// `"corgi:<name>"`. `follow` requests a live-tailing SSE stream instead of a historical JSON array.
 #[derive(Debug, serde::Deserialize, Default)]
 pub struct AdminLogsQuery {
     pub target: Option<String>,
@@ -557,6 +556,9 @@ pub struct AdminLogsQuery {
     pub level: Option<String>,
     pub q: Option<String>,
     pub limit: Option<usize>,
+    /// Live-tail via Server-Sent Events instead of a historical JSON array.
+    #[serde(default)]
+    pub follow: bool,
 }
 
 impl AdminLogsQuery {
@@ -571,7 +573,7 @@ impl AdminLogsQuery {
             level: self.level.clone(),
             q: self.q.clone(),
             limit: self.limit,
-            follow: false,
+            follow: self.follow,
         }
     }
 
@@ -598,6 +600,9 @@ impl AdminLogsQuery {
         if let Some(v) = self.limit {
             pairs.push(("limit", v.to_string()));
         }
+        if self.follow {
+            pairs.push(("follow", "true".to_string()));
+        }
         pairs
     }
 }
@@ -618,6 +623,41 @@ fn build_query_string(pairs: &[(&str, String)]) -> String {
         }
     }
     format!("?{}", url.query().unwrap_or_default())
+}
+
+/// Converts a successful upstream `follow=true` SSE response into an axum
+/// streaming Response, proxying the bytes through verbatim - not re-parsed
+/// into new SSE `Event`s. Only the innermost service's own `/logs` handler
+/// (`credo_lib::log_query::follow_logs`) should ever construct real SSE
+/// events; every proxy hop after that just forwards bytes, avoiding
+/// framing bugs. Headers match exactly what axum's own `Sse` type sets on
+/// success (`Content-Type: text/event-stream`, `Cache-Control: no-cache` -
+/// verified against the pinned axum 0.7.9 source, not guessed).
+///
+/// Returns `AppError::Internal` if the upstream response itself is an
+/// error (e.g. that service's own logging is disabled) - the specific
+/// upstream status/message isn't preserved through the proxy for now, the
+/// same known, already-accepted limitation as the non-follow proxy
+/// branches in `get_logs`.
+#[allow(dead_code)]
+// Task 2 wires this into get_logs and removes this allow.
+async fn stream_upstream_logs_response(
+    upstream: reqwest::Response,
+) -> Result<axum::response::Response, AppError> {
+    if !upstream.status().is_success() {
+        let status = upstream.status();
+        let body = upstream.text().await.unwrap_or_default();
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "upstream /logs?follow=true failed ({status}): {body}"
+        )));
+    }
+    let body = axum::body::Body::from_stream(upstream.bytes_stream());
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
+        .header(axum::http::header::CACHE_CONTROL, "no-cache")
+        .body(body)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("building streaming response: {e}")))
 }
 
 /// Historical log retrieval, aggregated across services. `target=shepherd`
@@ -1509,6 +1549,7 @@ mod tests {
             level: Some("warn".to_string()),
             q: Some("corgi".to_string()),
             limit: Some(100),
+            follow: false,
         };
         let params = query.to_log_query_params();
         assert_eq!(params.since, Some("2024-01-15T09:00:00Z".to_string()));
@@ -1526,6 +1567,7 @@ mod tests {
             target: Some("vigil".to_string()),
             level: Some("warn".to_string()),
             limit: Some(50),
+            follow: false,
             ..Default::default()
         };
         let pairs = query.forward_pairs();
@@ -1539,6 +1581,123 @@ mod tests {
     fn admin_logs_query_forward_pairs_empty_when_nothing_set() {
         let query = AdminLogsQuery::default();
         assert!(query.forward_pairs().is_empty());
+    }
+
+    #[test]
+    fn admin_logs_query_forward_pairs_includes_follow_when_true() {
+        let query = AdminLogsQuery {
+            follow: true,
+            ..Default::default()
+        };
+        assert_eq!(query.forward_pairs(), vec![("follow", "true".to_string())]);
+    }
+
+    #[test]
+    fn admin_logs_query_forward_pairs_omits_follow_when_false() {
+        let query = AdminLogsQuery::default();
+        assert!(query.forward_pairs().is_empty());
+    }
+
+    #[test]
+    fn admin_logs_query_to_log_query_params_passes_through_follow() {
+        let query = AdminLogsQuery {
+            follow: true,
+            ..Default::default()
+        };
+        assert!(query.to_log_query_params().follow);
+    }
+
+    #[tokio::test]
+    async fn stream_upstream_logs_response_passes_sse_bytes_through_verbatim() {
+        // Minimal mock server standing in for a real corgi/vigil
+        // /logs?follow=true SSE endpoint - proves the byte-passthrough and
+        // header-setting logic in isolation, without needing the corgi
+        // client pool's mTLS machinery or a full TestCorgi/TestVigil
+        // harness (no composable cross-service harness pattern exists in
+        // this codebase - confirmed before writing this plan).
+        let app = axum::Router::new().route(
+            "/logs",
+            axum::routing::get(|| async {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    "data: {\"line\":\"hello\",\"source\":\"mock\"}\n\n",
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+
+        let client = reqwest::Client::new();
+        let upstream = client
+            .get(format!("http://{addr}/logs"))
+            .send()
+            .await
+            .expect("request");
+
+        let response = stream_upstream_logs_response(upstream)
+            .await
+            .expect("stream response");
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .expect("content-type header"),
+            "text/event-stream"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .expect("cache-control header"),
+            "no-cache"
+        );
+
+        use http_body_util::BodyExt;
+        let body_bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect body")
+            .to_bytes();
+        assert_eq!(
+            body_bytes.as_ref(),
+            b"data: {\"line\":\"hello\",\"source\":\"mock\"}\n\n".as_slice()
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_upstream_logs_response_maps_upstream_error_to_internal() {
+        let app = axum::Router::new().route(
+            "/logs",
+            axum::routing::get(|| async {
+                (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    "file logging is not enabled",
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+
+        let client = reqwest::Client::new();
+        let upstream = client
+            .get(format!("http://{addr}/logs"))
+            .send()
+            .await
+            .expect("request");
+
+        let result = stream_upstream_logs_response(upstream).await;
+        assert!(result.is_err(), "non-2xx upstream must map to an error");
     }
 
     #[test]
