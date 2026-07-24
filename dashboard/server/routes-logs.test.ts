@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -12,11 +12,26 @@ function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-routes-logs-test-'));
 }
 
+// Safety net: every server pair startServers opens gets closed here even
+// when an assertion throws mid-test, so a failing expect can't leak
+// ephemeral-port listeners into the rest of the vitest worker's life.
+// (close() is idempotent, so tests that reach their own close() are fine.)
+const openServers: Array<() => Promise<void>> = [];
+
+afterEach(async () => {
+  while (openServers.length > 0) {
+    await openServers.pop()!();
+  }
+});
+
 /**
  * Boots a bare Express app with the logs router mounted at /api/logs (no
- * session/auth stack - the router itself is auth-agnostic by design) plus
- * the same error-shape the real BFF's app-level handler produces for
- * upstream failures, and a mock shepherd standing in for /admin/logs.
+ * session/auth stack - the router itself is auth-agnostic by design) and a
+ * mock shepherd standing in for /admin/logs. The error middleware is a
+ * minimal stand-in for the real BFF's app-level handler, matching it on
+ * the one dimension these tests assert (a defined upstream status is
+ * preserved, e.g. 404 stays 404) - not a faithful mirror of its full body
+ * shape or its 502 no-response fallback.
  */
 async function startServers(handle: LoggingHandle, mockShepherd: express.Express) {
   const upstream = http.createServer(mockShepherd);
@@ -34,13 +49,16 @@ async function startServers(handle: LoggingHandle, mockShepherd: express.Express
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = (server.address() as { port: number }).port;
 
-  return {
-    base: `http://127.0.0.1:${port}`,
-    close: async () => {
-      await new Promise((r) => server.close(r));
-      await new Promise((r) => upstream.close(r));
-    },
+  let closed = false;
+  const close = async () => {
+    if (closed) return;
+    closed = true;
+    await new Promise((r) => server.close(r));
+    await new Promise((r) => upstream.close(r));
   };
+  openServers.push(close);
+
+  return { base: `http://127.0.0.1:${port}`, close };
 }
 
 describe('GET /api/logs', () => {

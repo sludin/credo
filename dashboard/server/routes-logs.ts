@@ -53,6 +53,9 @@ function forwardParams(params: LogQueryParams): Record<string, string> {
 function resolveSource(req: Request): { kind: 'dashboard' } | { kind: 'proxy'; target: string } | null {
   const source = queryString(req, 'source') ?? 'dashboard';
   if (source === 'dashboard') return { kind: 'dashboard' };
+  // Bare "corgi:" (empty name) intentionally passes through as-is:
+  // shepherd owns corgi-name validation and 404s unknown (including
+  // empty) names, so validating here would just duplicate its rules.
   if (source === 'shepherd' || source === 'vigil' || source.startsWith('corgi:')) {
     return { kind: 'proxy', target: source };
   }
