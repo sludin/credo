@@ -17,6 +17,7 @@ import { initUsersStore, loadUsers, saveUsers, findUserById } from './auth/users
 import { requireAuth, makeRoleRefresh } from './auth/middleware';
 import { createAuthRouter } from './routes-auth';
 import { LoggingHandle, createRequestLogMiddleware } from './logging';
+import { createLogsRouter } from './routes-logs';
 
 type Assignment = {
   corgi: string;
@@ -348,6 +349,10 @@ async function main(): Promise<void> {
     const response = await clients.api.get('/flock');
     res.json(response.data);
   }));
+
+  // On-demand log retrieval: source=dashboard is served locally from
+  // loggingHandle; other sources proxy through shepherd's /admin/logs.
+  app.use('/api/logs', createLogsRouter({ handle: loggingHandle, shepherdApi: clients.api }));
 
   app.get('/api/certs', asyncHandler(async (_req: Request, res: Response) => {
     const [storeRes, assignRes] = await Promise.all([
