@@ -33,6 +33,10 @@ const sections: SidebarSection[] = [
     items: [{ to: '/vigil-ca', icon: '⊙', label: 'CA' }],
   },
   {
+    label: 'Logs',
+    items: [{ to: '/logs', icon: '≣', label: 'Logs' }],
+  },
+  {
     label: 'Tools',
     items: [
       { to: '/tools/dns-txt', icon: '⚙', label: 'DNS TXT Checker' },

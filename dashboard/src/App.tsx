@@ -10,6 +10,7 @@ const Certificates = lazy(() => import('./pages/Certificates'));
 const VigilCA      = lazy(() => import('./pages/VigilCA'));
 const ShepherdCAs  = lazy(() => import('./pages/ShepherdCAs'));
 const Tools        = lazy(() => import('./pages/Tools'));
+const Logs         = lazy(() => import('./pages/Logs'));
 const Login        = lazy(() => import('./pages/Login'));
 const Enroll       = lazy(() => import('./pages/Enroll'));
 const Profile      = lazy(() => import('./pages/Profile'));
@@ -40,6 +41,7 @@ export default function App(): React.ReactElement {
                       <Route path="/shepherd-cas" element={<ShepherdCAs />} />
                       <Route path="/vigil-ca"     element={<VigilCA />} />
                       <Route path="/tools/*"      element={<Tools />} />
+                      <Route path="/logs"         element={<Logs />} />
                       <Route path="/profile"      element={<Profile />} />
                       <Route path="/admin/users"  element={<AdminUsers />} />
                       <Route path="*"             element={<Navigate to="/" replace />} />
