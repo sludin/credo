@@ -1,6 +1,6 @@
 // src/pages/Logs.tsx
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { fetchFlock, fetchLogsHistorical, openLogsStream } from '../api';
+import { fetchFlock, fetchHealth, fetchLogsHistorical, openLogsStream } from '../api';
 import { Topbar } from '../components/Shell';
 import {
   RANGE_PRESETS,
@@ -15,6 +15,10 @@ import {
 
 const APPLY_DEBOUNCE_MS = 500;
 const RECONNECT_DELAY_MS = 2000;
+// Stop reconnecting after this many consecutive failures without a
+// successful open - a dead session or downed BFF must not become a
+// silent, unbounded background request loop.
+const MAX_CONSECUTIVE_RECONNECTS = 5;
 
 type StreamState = 'off' | 'connecting' | 'live' | 'reconnecting';
 
@@ -46,6 +50,7 @@ export default function Logs(): React.ReactElement {
   const generationRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nextLineIdRef = useRef(0);
+  const consecutiveFailuresRef = useRef(0);
 
   // Corgi list for the source picker - base sources stay usable if the
   // flock fetch fails.
@@ -88,7 +93,10 @@ export default function Logs(): React.ReactElement {
       const es = openLogsStream(params);
       esRef.current = es;
       es.onopen = () => {
-        if (generation === generationRef.current) setStreamState('live');
+        if (generation === generationRef.current) {
+          consecutiveFailuresRef.current = 0;
+          setStreamState('live');
+        }
       };
       es.onmessage = (event: MessageEvent<string>) => {
         if (generation !== generationRef.current) return;
@@ -102,6 +110,18 @@ export default function Logs(): React.ReactElement {
         // browser's built-in auto-reconnect replay the original range.
         es.close();
         if (esRef.current === es) esRef.current = null;
+        consecutiveFailuresRef.current += 1;
+        // EventSource can't see response statuses, so an expired session
+        // looks identical to a transient outage here. Probe through
+        // requestJson, whose 401 handling redirects to /login like every
+        // other page - otherwise a dead session would just cycle this
+        // reconnect loop with no signal to the user.
+        void fetchHealth().catch(() => {});
+        if (consecutiveFailuresRef.current >= MAX_CONSECUTIVE_RECONNECTS) {
+          setStreamState('off');
+          setError('Live stream lost after repeated reconnect attempts - toggle Live tail to retry.');
+          return;
+        }
         setStreamState('reconnecting');
         reconnectTimerRef.current = setTimeout(() => {
           if (generation === generationRef.current) {
@@ -124,6 +144,7 @@ export default function Logs(): React.ReactElement {
       setError(null);
       setLines([]);
       pinnedRef.current = true;
+      consecutiveFailuresRef.current = 0;
 
       if (live) {
         openStream(params, generation);
@@ -226,7 +247,17 @@ export default function Logs(): React.ReactElement {
           </label>
           {streamBadge}
           <div style={{ flex: 1 }} />
-          <button className="btn btn-ghost btn-sm" onClick={() => setLines([])}>Clear</button>
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => {
+              setLines([]);
+              // An emptied viewer should resume autoscrolling even if the
+              // user had scrolled up before clearing.
+              pinnedRef.current = true;
+            }}
+          >
+            Clear
+          </button>
         </div>
 
         {error && <div style={{ color: 'var(--danger, #f85149)' }}>{error}</div>}
