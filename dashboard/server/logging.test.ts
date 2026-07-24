@@ -13,7 +13,9 @@ function enabledConfig(dir: string, overrides: Partial<LoggingConfig> = {}): Log
     enabled: true,
     dir,
     rotateOn: { sizeMb: 100, keepFiles: 12 },
-    alsoStdout: true,
+    // Default off so tests that don't spy on stdout stay silent; the two
+    // stdout-behavior tests pass explicit overrides.
+    alsoStdout: false,
     ...overrides,
   };
 }
@@ -103,7 +105,11 @@ describe('LoggingHandle rotation', () => {
     const dir = tmpDir();
     // sizeMb is a plain multiplier on 1024*1024; a tiny fraction keeps the
     // test fast without needing megabytes of real writes.
-    const handle = LoggingHandle.init(enabledConfig(dir, { rotateOn: { sizeMb: 0.001, keepFiles: 12 } }), 'dashboard');
+    // alsoStdout: false keeps the bulk writes out of the test output.
+    const handle = LoggingHandle.init(
+      enabledConfig(dir, { rotateOn: { sizeMb: 0.001, keepFiles: 12 }, alsoStdout: false }),
+      'dashboard',
+    );
     const line = 'x'.repeat(100);
 
     // 0.001 MB = ~1048 bytes; each line + newline is 101 bytes, so the
@@ -128,7 +134,10 @@ describe('LoggingHandle rotation', () => {
 
   it('prunes rotated files beyond keepFiles', () => {
     const dir = tmpDir();
-    const handle = LoggingHandle.init(enabledConfig(dir, { rotateOn: { sizeMb: 0.001, keepFiles: 2 } }), 'dashboard');
+    const handle = LoggingHandle.init(
+      enabledConfig(dir, { rotateOn: { sizeMb: 0.001, keepFiles: 2 }, alsoStdout: false }),
+      'dashboard',
+    );
     const line = 'x'.repeat(100);
 
     // Cross the threshold three separate times (three rotations), each

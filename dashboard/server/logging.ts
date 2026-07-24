@@ -88,14 +88,13 @@ export class LoggingHandle {
   private rotate(): void {
     const dir = this.config.dir;
     const keepFiles = this.config.rotateOn.keepFiles;
+    // Shift .1 -> .2 -> ... up to .keepFiles; starting at keepFiles - 1
+    // means the oldest backup (.keepFiles) is simply overwritten by the
+    // rename from .keepFiles-1, which is what prunes history to keepFiles.
     for (let n = keepFiles - 1; n >= 1; n--) {
       const src = path.join(dir, `${this.basename}.${n}.log`);
       if (!fs.existsSync(src)) continue;
-      if (n + 1 > keepFiles) {
-        fs.unlinkSync(src);
-      } else {
-        fs.renameSync(src, path.join(dir, `${this.basename}.${n + 1}.log`));
-      }
+      fs.renameSync(src, path.join(dir, `${this.basename}.${n + 1}.log`));
     }
     fs.renameSync(this.filePath(), path.join(dir, `${this.basename}.1.log`));
     this.currentSize = 0;
