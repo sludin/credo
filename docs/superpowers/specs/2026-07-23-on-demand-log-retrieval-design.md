@@ -92,6 +92,16 @@ Mechanical once Phase 1 is generic — no new auth code, just mounting.
 
 ## Phase 3 — Mount in shepherd + aggregation/proxy
 
+**Status: JSON (non-streaming) half done** (`docs/superpowers/plans/2026-07-24-log-mount-shepherd.md`, merged into `monitor-diagnostics-multi-endpoint`). Live-tail (`?follow=true`) proxying — the streaming-client/timeout-override/verbatim-SSE-passthrough work below — is a separate, not-yet-done future plan. Implementation notes where the done part diverged from the original guess:
+- `shepherd/src/state.rs` had **no logging wiring at all** before this (corgi/vigil already did, from an earlier plan) — this plan's first commit added the same `LoggingConfig`/`LoggingHandle` wiring to shepherd as a prerequisite, not called out as a separate step in the original phase text.
+- No `HasRole` trait — `check_min_role` is called directly in `get_logs`, matching the plain-function-sharing pattern already settled in Phase 1/2 (not the trait design the very first draft of this doc proposed and later abandoned).
+- `AdminLogsQuery` does not `#[serde(flatten)]` `LogQueryParams` — axum's `Query` extractor uses `serde_urlencoded`, confirmed not to support flatten reliably against the pinned axum 0.7.9 source. Its fields are spelled out explicitly instead, with `to_log_query_params()`/`forward_pairs()` conversions.
+- The query string forwarded to vigil/corgi's own `/logs` is built via `reqwest::Url`'s (the `url` crate's) query-pair builder for correct percent-encoding, not `corgi_get<T>`'s bare `path: &str` with manual concatenation and not a new `corgi_get_stream`-style helper — `corgi_get`/`state.vigil_client` are reused completely unmodified.
+- No cross-service integration test exists proving the proxy-success path end-to-end (no `TestShepherd` + `TestCorgi`/`TestVigil` harness composition pattern exists anywhere in this codebase, confirmed by research before writing the plan) — the dispatch/auth/error-handling surface is thoroughly tested via the existing single-harness pattern; actual proxying was verified manually against a real local sandbox instead.
+- Found and left alone, unrelated: `cargo clippy -p shepherd --all-targets` has 5 pre-existing errors (confirmed twice, by stashing changes on two different branches) — not introduced by this or the corgi/vigil-mounting plan.
+
+Original design text, still accurate as the *intent*:
+
 Shepherd is both a source (`target=shepherd`) and a proxy (`target=vigil`, `target=corgi:<name>`).
 
 - `shepherd/src/server.rs`: `.route("/admin/logs", get(routes_api::get_logs))` in the authenticated dashboard-port router, gated `check_min_role(Some(&user.role), &Role::Readonly)` — matches the existing `/admin/*` convention (e.g. `get_vigil_ca`).
