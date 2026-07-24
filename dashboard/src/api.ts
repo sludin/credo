@@ -13,6 +13,7 @@ import type {
   VigilCAPayload,
   VigilCertsPayload,
 } from './types';
+import { logsUrl, logsStreamUrl, type LogsParams } from './lib/logs';
 
 async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -239,4 +240,19 @@ export type CorgiHooksPayload = {
 
 export function fetchCorgiHooks(corgiId: string): Promise<CorgiHooksPayload> {
   return requestJson<CorgiHooksPayload>(`/api/corgis/${encodeURIComponent(corgiId)}/hooks`);
+}
+
+// ── Logs ───────────────────────────────────────────────────────────────────
+export function fetchLogsHistorical(params: LogsParams): Promise<string[]> {
+  return requestJson<string[]>(logsUrl(params));
+}
+
+/**
+ * Opens the live-tail SSE stream. Same-origin, so the session cookie
+ * flows automatically. Callers own the returned EventSource's lifecycle -
+ * including closing it on unmount and managing reconnection manually
+ * (see lib/logs reconnectParams).
+ */
+export function openLogsStream(params: LogsParams): EventSource {
+  return new EventSource(logsStreamUrl(params));
 }
