@@ -72,11 +72,20 @@ New module `credo-lib/src/log_query.rs` (kept separate from the already-dense `l
 
 ## Phase 2 — Mount in corgi + vigil
 
+**Status: done.** Implementation notes where it diverged from the original guess below:
+- No `HasRole` trait was built — turned out unnecessary. Each service's route handler is a plain 3-line function: extract its own auth extension (`Option<Extension<Role>>` for corgi, `Extension<AuthUser>` for vigil), call `check_min_role`/an inline role check, then delegate to `credo_lib::log_query::respond_to_log_query`. This matches how `check_min_role`/`identity_from_der` were already shared via plain functions, not a generic trait.
+- Both services needed a `logging: credo_lib::LoggingConfig` field added to their config struct first (mirroring `log_level`'s migration-safe pattern — omit the block, get current stdout-only behavior), `init_logging_with_config` wired into their server-start path, and the resulting `LoggingHandle` stored on `AppState` (corgi) / `StateInner` (vigil) — this wasn't explicitly called out in the original phase text but was a prerequisite for the route to have anything to serve.
+- `credo_lib::LoggingHandle::disabled()` was added (a new, small, additive constructor) so test harnesses that build many service instances in one test binary — and therefore can't call `init_logging_with_config`'s process-global-subscriber-installing path more than once — can still satisfy `AppState`'s now-mandatory `LoggingHandle` field.
+- `log_query.rs` (~915 lines by the end of Phase 1) was split into a `log_query/` module (`filter.rs`, `historical.rs`, `follow.rs`, `mod.rs`) as a prerequisite, per the Phase 1 final review's recommendation, before this phase's changes landed on top of it.
+- Executed directly rather than via the subagent-driven-development pipeline used for Phase 0/0b/1 — the exact code needed was already fully known from two thorough research passes (corgi's and vigil's current config/state/routes/auth, read in full), so dispatching fresh implementers to reconstruct that same knowledge from a written brief wouldn't have added anything; verified via full build/test/clippy/fmt after each service instead of task-review cycles.
+- Found and left alone: a **pre-existing, unrelated** `cargo clippy --workspace --all-targets` failure in `shepherd/src/routes_api.rs` (clippy's `items_after_test_module` lint) — confirmed present with this phase's commits stashed out, so it predates this work and is out of scope here.
+
+Original design text, still accurate as the *intent*:
+
 Mechanical once Phase 1 is generic — no new auth code, just mounting.
 
 - `corgi/src/server.rs`: `.route("/logs", get(...))` inside `build_control_router` (existing `auth_middleware` + `log_request("C", ...)` already wrap this router).
 - `vigil/src/routes.rs`: same, inside the `protected` sub-router.
-- Implement `HasRole` for corgi's `Role` extension and vigil's `AuthUser(VigilUser)`.
 - Document the new endpoint + query params in each service's `docs/config.md`.
 
 **Verification:** `cargo test -p corgi -p vigil`; manual `curl` with a valid client cert against `GET /logs?last=5m` and `GET /logs?follow=true` on each, confirm role gating (sub-Readonly identity → 403).
