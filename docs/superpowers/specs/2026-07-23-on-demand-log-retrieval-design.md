@@ -126,6 +126,16 @@ Shepherd is both a source (`target=shepherd`) and a proxy (`target=vigil`, `targ
 
 ## Phase 4 — Dashboard BFF
 
+**Status: foundation half done** (`docs/superpowers/plans/2026-07-24-dashboard-bff-logging-foundation.md`, merged into `monitor-diagnostics-multi-endpoint`) — `logging.ts` (`LoggingHandle`: rotating file + live-tail broadcast), the request-log middleware, the `logging` config block, and docs. The `/api/logs` + `/api/logs/stream` routes are the remaining, not-yet-done half. Implementation notes where the done part diverged from the original sketch below:
+- No `rotating-file-stream` npm dependency — hand-rolled size-rotate-and-prune (mirroring Phase 0's own recorded decision to drop the `file-rotate` crate; the shift-rename loop is ~10 lines).
+- Synchronous `fs.appendFileSync`/`renameSync` rather than a stream writer — no fd lifecycle across rotation renames, and JS single-threading means a rotation can't interleave with a mid-line append. Acceptable at BFF volume; swappable later without changing the `LoggingHandle` interface.
+- No ring buffer — live tail is `EventEmitter` subscribe/unsubscribe only; the historical side of a future query reads the files, same as the Rust side (the "small ring buffer" idea below turned out to be unnecessary duplication of the file).
+- `write()` is wrapped in try/catch degrading to stderr — it runs inside a response `'finish'` listener, where an fs throw (disk full, dir removed) would otherwise crash the whole BFF via uncaughtException (caught by the final branch review).
+- Request lines are always level `INFO`, including 4xx/5xx responses — deliberate parity with the Rust services' `RequestLogEntry::log()` (`tracing::info!` unconditionally). If level-by-status filtering is ever wanted, that's cross-service design work, not a BFF-only change.
+- Client-aborted requests (socket closed before response completion) produce no log line (`'finish'` never fires) — accepted gap for an admin BFF.
+
+Original design text, still accurate as the *intent* (routes still pending):
+
 - New `dashboard/server/logging.ts`: Node-side mirror of the Rust logging module — structured one-line format (new code `"D"`, same field order as `RequestLogEntry`), backed by `rotating-file-stream` (npm) for rotation, a Node `EventEmitter`/small ring buffer for live tail. Export the same conceptual query surface (`since/until/last/level/q/follow/limit`) so Phase 5's frontend code doesn't need per-source special cases.
 - `dashboard/server/index.ts`: wire the request-log middleware early; add:
   - `GET /api/logs?source=...` — `source=dashboard` serves directly from `logging.ts`; anything else does a buffered `clients.api.get('/admin/logs', {params: {target: mapped, ...}})` passthrough, same shape as the existing `/api/flock` route (`index.ts:344-347`).
