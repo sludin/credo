@@ -546,7 +546,8 @@ pub async fn get_cas(
 /// `#[serde(flatten)]`-ing it: axum's `Query` extractor uses
 /// `serde_urlencoded`, which doesn't support flatten reliably. `target`
 /// selects the log source: `"shepherd"` (default), `"vigil"`, or
-/// `"corgi:<name>"`. `follow` requests a live-tailing SSE stream instead of a historical JSON array.
+/// `"corgi:<name>"`. `follow` requests a live-tailing SSE stream instead
+/// of a historical JSON array.
 #[derive(Debug, serde::Deserialize, Default)]
 pub struct AdminLogsQuery {
     pub target: Option<String>,
@@ -564,7 +565,8 @@ pub struct AdminLogsQuery {
 impl AdminLogsQuery {
     /// Converts to `LogQueryParams` for a direct, in-process call into
     /// `credo_lib::log_query` - used for `target=shepherd`. `follow` is
-    /// always `false`: this endpoint doesn't support live tail yet.
+    /// passed through as-is; `respond_to_log_query` branches on it
+    /// internally to decide between a historical read and a live tail.
     fn to_log_query_params(&self) -> credo_lib::log_query::LogQueryParams {
         credo_lib::log_query::LogQueryParams {
             since: self.since.clone(),
@@ -578,8 +580,10 @@ impl AdminLogsQuery {
     }
 
     /// Key/value pairs to forward to a proxied service's own `/logs`
-    /// endpoint - everything except `target` (shepherd-only) and `follow`
-    /// (omitted; the proxied endpoint defaults to `false` when absent).
+    /// endpoint - everything except `target`, which is shepherd-only and
+    /// never forwarded. Includes `follow=true` when set, so a proxied
+    /// `target=vigil`/`target=corgi:<name>` request can ask that service's
+    /// own `/logs` for a live tail too.
     fn forward_pairs(&self) -> Vec<(&'static str, String)> {
         let mut pairs = Vec::new();
         if let Some(v) = &self.since {
