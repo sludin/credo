@@ -51,6 +51,7 @@ pub struct VigilConfig {
     pub common_name: String,
     pub tls: TlsConfig,
     pub log_level: credo_lib::LogLevel,
+    pub logging: credo_lib::LoggingConfig,
     pub rbac_identities: Vec<RbacIdentityConfig>,
     pub issuance_policy: IssuancePolicyConfig,
     pub config_dir: PathBuf,
@@ -126,6 +127,7 @@ struct RawConfig {
     common_name: Option<String>,
     tls: Option<RawTlsBlock>,
     log_level: Option<String>,
+    logging: Option<credo_lib::LoggingConfig>,
     rbac_identities: Option<Vec<RawRbacIdentity>>,
     issuance_policy: Option<RawIssuancePolicy>,
     allow_none_validation: Option<bool>,
@@ -256,6 +258,7 @@ pub fn load_config() -> Result<VigilConfig> {
 
     let log_level =
         credo_lib::LogLevel::from_str(raw.log_level.as_deref().unwrap_or("info").trim());
+    let logging = raw.logging.unwrap_or_default();
 
     // Apply env-var overrides for CA paths (set by run-with-config-ca.sh)
     let ca_key_path = std::env::var("VIGIL_CA_KEY_PATH")
@@ -286,6 +289,7 @@ pub fn load_config() -> Result<VigilConfig> {
         common_name: raw.common_name.unwrap_or_default(),
         tls,
         log_level,
+        logging,
         rbac_identities,
         issuance_policy: policy,
         config_dir,

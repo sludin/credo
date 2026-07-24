@@ -114,7 +114,11 @@ pub async fn run_server_start(bootstrap: bool) -> Result<()> {
     let _pid_guard = credo_lib::pid::PidGuard::new(pid_path)?;
 
     let config = crate::config::load_config().context("Loading config")?;
-    credo_lib::log::init_logging(config.log_level);
+    let logging_handle = std::sync::Arc::new(credo_lib::log::init_logging_with_config(
+        config.log_level,
+        &config.logging,
+        "vigil",
+    ));
 
     // Ensure data directories exist
     crate::storage::ensure_users_db(&config.users_db_path)?;
@@ -176,7 +180,7 @@ pub async fn run_server_start(bootstrap: bool) -> Result<()> {
         crate::server::build_server_tls(&config)?
     };
 
-    let state = crate::state::AppState::new(config, ca_metadata, bootstrap_secret);
+    let state = crate::state::AppState::new(config, ca_metadata, bootstrap_secret, logging_handle);
 
     // Restore persisted ACME accounts
     crate::acme::restore_accounts(&state).await?;

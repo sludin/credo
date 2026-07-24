@@ -43,6 +43,7 @@ fn signing_config(tmp: &TempDir) -> VigilConfig {
             client_ca_path: f.join("catrust.pem"),
         },
         log_level: LogLevel::Warn,
+        logging: credo_lib::LoggingConfig::default(),
         rbac_identities: vec![],
         issuance_policy: IssuancePolicyConfig {
             allowed_dns_suffixes: vec!["credo.test".to_string()],

@@ -83,7 +83,12 @@ impl TestVigil {
         let ca_metadata =
             vigil::ca::load_ca_metadata(&config).context("loading test CA metadata")?;
 
-        let state = vigil::state::AppState::new(config, ca_metadata, bootstrap_secret);
+        let state = vigil::state::AppState::new(
+            config,
+            ca_metadata,
+            bootstrap_secret,
+            std::sync::Arc::new(credo_lib::LoggingHandle::disabled()),
+        );
         vigil::acme::restore_accounts(&state).await.ok();
 
         let base_router = vigil::routes::build_router(state);
@@ -162,6 +167,7 @@ pub fn build_vigil_config(tmp: &Path) -> VigilConfig {
             client_ca_path: crate::fixtures::catrust_pem(),
         },
         log_level: LogLevel::Warn,
+        logging: credo_lib::LoggingConfig::default(),
         rbac_identities: vec![],
         issuance_policy: IssuancePolicyConfig {
             allowed_dns_suffixes: vec!["credo.test".to_string()],

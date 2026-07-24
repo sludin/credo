@@ -39,6 +39,13 @@ pub struct StateInner {
 
     // Bootstrap mode: Some(secret_hex) while active, None after first use or when not in bootstrap
     pub bootstrap_secret: Mutex<Option<String>>,
+
+    /// Handle to this service's rotating log file + live broadcast, used by
+    /// the `/logs` route. `credo_lib::LoggingHandle::disabled()` in tests,
+    /// since the test harness can't call `init_logging_with_config` (it
+    /// installs a process-global tracing subscriber, only allowed once per
+    /// process, and the harness builds many instances in one test binary).
+    pub logging_handle: Arc<credo_lib::LoggingHandle>,
 }
 
 impl AppState {
@@ -46,6 +53,7 @@ impl AppState {
         config: VigilConfig,
         ca_metadata: RootCAMetadata,
         bootstrap_secret: Option<String>,
+        logging_handle: Arc<credo_lib::LoggingHandle>,
     ) -> Self {
         let dns_resolver = build_dns_resolver(&config.dns_resolver_addrs);
 
@@ -62,6 +70,7 @@ impl AppState {
                 nonces: Mutex::new(HashSet::new()),
                 acme_id_counter: Mutex::new(0),
                 bootstrap_secret: Mutex::new(bootstrap_secret),
+                logging_handle,
             }),
         }
     }

@@ -74,6 +74,7 @@ pub fn build_router(state: AppState) -> Router {
     // mTLS-protected routes
     let protected = Router::new()
         .route("/health", get(health))
+        .route("/logs", get(logs_get))
         .route("/ca", get(ca_info))
         .route("/ocsp/:id", get(ocsp_by_id))
         .route("/ocsp", get(ocsp_by_serial))
@@ -103,6 +104,19 @@ pub fn build_router(state: AppState) -> Router {
 // ---------------------------------------------------------------------------
 // mTLS route handlers
 // ---------------------------------------------------------------------------
+
+/// Historical or live-tailing (`?follow=true`) log retrieval for this
+/// vigil's own log file. Shares its implementation with corgi and shepherd
+/// via `credo_lib::log_query` - this handler only does the auth/role check
+/// and hands off.
+async fn logs_get(
+    State(state): State<AppState>,
+    axum::Extension(AuthUser(auth_user)): axum::Extension<AuthUser>,
+    Query(params): Query<credo_lib::log_query::LogQueryParams>,
+) -> Result<axum::response::Response, AppError> {
+    credo_lib::auth::check_min_role(Some(&auth_user.role), &credo_lib::Role::Readonly)?;
+    credo_lib::log_query::respond_to_log_query(&state.inner.logging_handle, &params).await
+}
 
 async fn health(
     State(state): State<AppState>,
