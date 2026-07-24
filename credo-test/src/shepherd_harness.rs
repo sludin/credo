@@ -83,7 +83,16 @@ impl TestShepherd {
             shepherd::accounts::load_accounts(&config.accounts_path).context("accounts")?;
         let cas = shepherd::cas::load_cas(&config.ca_config_path).context("CAs")?;
 
-        let state = AppState::new(config, jwt_keys, accounts, cas, None, None, None);
+        let state = AppState::new(
+            config,
+            jwt_keys,
+            accounts,
+            cas,
+            None,
+            None,
+            None,
+            std::sync::Arc::new(credo_lib::LoggingHandle::disabled()),
+        );
         let jwt_keys_arc = state.jwt_keys.clone();
 
         let base_agent_router = shepherd::server::build_agent_router(state.clone());
@@ -178,6 +187,7 @@ fn build_shepherd_config(tmp: &Path) -> ShepherdConfig {
         renewal_jobs_dir: None,
         issuance_ledger_path: tmp.join("shepherd.issuance-log.json"),
         log_level: LogLevel::Warn,
+        logging: credo_lib::LoggingConfig::default(),
         dns_override: HashMap::new(),
         common_name: None,
         identity_uri: None,

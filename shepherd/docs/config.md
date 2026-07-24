@@ -87,6 +87,11 @@ Deprecated aliases: `pollIntervalSeconds` is accepted as an alias for `reconcile
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `logLevel` | string | `"info"` | One of `"fatal"`, `"warn"`, `"info"`, `"debug"` |
+| `logging.enabled` | boolean | `false` | Enable a size-rotated log file (in addition to stdout) with a live broadcast, so the `/admin/logs` endpoint has historical + live-tail data to serve. Omit the whole `logging` block for current stdout-only behavior |
+| `logging.dir` | string | `"logs"` | Directory for the rotating log file, relative to the service's working directory |
+| `logging.rotateOn.sizeMb` | number | `100` | Rotate to a new file once the current one reaches this size |
+| `logging.rotateOn.keepFiles` | number | `12` | Number of rotated backups to retain |
+| `logging.alsoStdout` | boolean | `true` | Also emit to stdout when file logging is enabled (set `false` for file-only) |
 
 ---
 

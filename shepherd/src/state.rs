@@ -55,12 +55,19 @@ pub struct AppState {
     pub reconcile_tx: tokio::sync::mpsc::UnboundedSender<ReconcileRequest>,
     /// Receiver side, taken once by `run_reconcile_loop` at startup.
     pub reconcile_rx: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<ReconcileRequest>>>>,
+    /// Handle to this service's rotating log file + live broadcast, used by
+    /// the `/admin/logs` route. `credo_lib::LoggingHandle::disabled()` in
+    /// tests, since the test harness can't call `init_logging_with_config`
+    /// (it installs a process-global tracing subscriber, only allowed once
+    /// per process, and the harness builds many instances in one test binary).
+    pub logging_handle: Arc<credo_lib::LoggingHandle>,
 }
 
 impl AppState {
     /// `cert_pem` / `key_pem`: shepherd's own cert+key as in-memory PEM strings.
     /// Provided during bootstrap so the vigil client can be built without reading disk.
     /// `admin_token`: one-time bootstrap token stored for the bootstrap API endpoints.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: ShepherdConfig,
         jwt_keys: JwtKeys,
@@ -69,6 +76,7 @@ impl AppState {
         cert_pem: Option<String>,
         key_pem: Option<String>,
         admin_token: Option<String>,
+        logging_handle: Arc<credo_lib::LoggingHandle>,
     ) -> Self {
         let refresh_token_path = config
             .renewal_jobs_dir
@@ -170,6 +178,7 @@ impl AppState {
             renewal_jobs_history_path,
             reconcile_tx,
             reconcile_rx: Arc::new(Mutex::new(Some(reconcile_rx))),
+            logging_handle,
         }
     }
 }

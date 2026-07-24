@@ -328,7 +328,11 @@ async fn run_server_with_tls(
 ) -> Result<()> {
     use tokio::signal::unix::{signal, SignalKind};
 
-    credo_lib::log::init_logging(config.log_level);
+    let logging_handle = std::sync::Arc::new(credo_lib::log::init_logging_with_config(
+        config.log_level,
+        &config.logging,
+        "shepherd",
+    ));
 
     tracing::info!(
         agent_port = config.agent_port,
@@ -363,6 +367,7 @@ async fn run_server_with_tls(
         cert_pem,
         key_pem,
         admin_token,
+        logging_handle,
     );
     *state.corgis.write().await = corgi_list;
     *state.assignments.write().await = assignment_list;

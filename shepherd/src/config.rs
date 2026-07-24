@@ -49,6 +49,7 @@ pub struct ShepherdConfig {
 
     // Logging
     pub log_level: credo_lib::LogLevel,
+    pub logging: credo_lib::LoggingConfig,
 
     // DNS override for outbound Corgi connections.
     // TODO: not yet implemented — parsed from config but not applied to HTTP client resolution.
@@ -121,6 +122,7 @@ struct RawShepherdConfig {
 
     // Logging
     log_level: Option<String>,
+    logging: Option<credo_lib::LoggingConfig>,
 
     // DNS override
     dns_override: Option<HashMap<String, String>>,
@@ -262,6 +264,7 @@ fn build_config(
 
     // --- Log level ---
     let log_level = credo_lib::LogLevel::from_str(raw.log_level.as_deref().unwrap_or("info"));
+    let logging = raw.logging.unwrap_or_default();
 
     Ok(ShepherdConfig {
         config_path,
@@ -308,6 +311,7 @@ fn build_config(
             "shepherd.issuance-log.json",
         ),
         log_level,
+        logging,
         dns_override: raw.dns_override.unwrap_or_default(),
         common_name: raw.common_name,
         identity_uri: raw.identity_uri,
