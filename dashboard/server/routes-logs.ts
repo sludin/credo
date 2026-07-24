@@ -1,7 +1,14 @@
 import express, { NextFunction, Request, Response, Router } from 'express';
 import type { AxiosInstance } from 'axios';
 import { LoggingHandle } from './logging';
-import { readHistoricalLines, type LogQueryParams } from './log-query';
+import {
+  readHistoricalLines,
+  dedupBufferedAgainstTail,
+  linePassesFilter,
+  parseLevelFilter,
+  DEDUP_TAIL_WINDOW,
+  type LogQueryParams,
+} from './log-query';
 
 type LogsRouterDeps = {
   handle: LoggingHandle;
@@ -62,9 +69,20 @@ function resolveSource(req: Request): { kind: 'dashboard' } | { kind: 'proxy'; t
   return null;
 }
 
+/** Comment frames keep intermediaries from timing out an idle tail. */
+const SSE_KEEP_ALIVE_MS = 15_000;
+
+/**
+ * One SSE data frame in the shared wire shape every hop of this feature
+ * uses (credo-lib's build_sse_event): {"line": ..., "source": ...}.
+ */
+function sseFrame(line: string, source: string): string {
+  return `data: ${JSON.stringify({ line, source })}\n\n`;
+}
+
 /**
  * GET /        - historical JSON (array of raw log lines)
- * GET /stream  - live tail as SSE (added in the next task)
+ * GET /stream  - live tail as SSE, replay-then-continue
  *
  * Auth-agnostic by design: mounted under /api in index.ts, so the existing
  * session/role/token middlewares run first; shepherd additionally enforces
@@ -98,6 +116,98 @@ export function createLogsRouter(deps: LogsRouterDeps): Router {
         params: { target: source.target, ...forwardParams(params) },
       });
       res.json(response.data);
+    }),
+  );
+
+  router.get(
+    '/stream',
+    asyncHandler(async (req: Request, res: Response) => {
+      const source = resolveSource(req);
+      if (source === null) {
+        res.status(400).json({ error: `unknown source '${String(req.query.source)}'` });
+        return;
+      }
+      const params = filterParams(req);
+
+      if (source.kind === 'dashboard') {
+        if (!deps.handle.isEnabled()) {
+          res.status(400).json({ error: 'file logging is not enabled' });
+          return;
+        }
+
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.flushHeaders();
+
+        const minRank = params.level !== undefined ? parseLevelFilter(params.level) : null;
+        const q = params.q ?? null;
+        const basename = deps.handle.logBasename();
+
+        // Subscribe BEFORE reading the backlog so no line can be missed in
+        // the gap between "finish reading the file" and "start tailing" -
+        // same sequencing as credo-lib's build_follow_stream. Lines that
+        // arrive during the read are buffered, deduped against the
+        // backlog's tail, and replayed before going live. With today's
+        // synchronous readHistoricalLines nothing can actually interleave
+        // (single-threaded JS), so the buffer stays empty in practice -
+        // the sequencing exists so a future swap to async file reads
+        // can't silently open a lose-a-line gap.
+        let replaying = true;
+        const buffered: string[] = [];
+        const unsubscribe = deps.handle.subscribe((line) => {
+          if (!linePassesFilter(line, minRank, q)) return;
+          if (replaying) {
+            buffered.push(line);
+          } else {
+            res.write(sseFrame(line, basename));
+          }
+        });
+
+        const keepAlive = setInterval(() => {
+          res.write(':ka\n\n');
+        }, SSE_KEEP_ALIVE_MS);
+
+        req.on('close', () => {
+          unsubscribe();
+          clearInterval(keepAlive);
+        });
+
+        const historical = readHistoricalLines(deps.handle.logDir(), basename, params, new Date());
+        for (const line of historical) {
+          res.write(sseFrame(line, basename));
+        }
+        for (const line of dedupBufferedAgainstTail(historical, buffered, DEDUP_TAIL_WINDOW)) {
+          res.write(sseFrame(line, basename));
+        }
+        replaying = false;
+        return;
+      }
+
+      // Proxied live tail: shepherd's /admin/logs?follow=true is already
+      // SSE - pipe its bytes through verbatim (never re-framed; only the
+      // innermost service constructs SSE events). timeout: 0 overrides the
+      // client's default (a live tail must outlive requestTimeoutSeconds),
+      // and the AbortController tied to the client's 'close' event is what
+      // stops a closed browser tab from leaking an upstream connection.
+      const controller = new AbortController();
+      req.on('close', () => controller.abort());
+
+      const upstream = await deps.shepherdApi.get('/admin/logs', {
+        params: { target: source.target, ...forwardParams(params), follow: 'true' },
+        responseType: 'stream',
+        timeout: 0,
+        signal: controller.signal,
+      });
+
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.flushHeaders();
+
+      const body = upstream.data as NodeJS.ReadableStream & { destroy?: () => void };
+      body.pipe(res);
+      req.on('close', () => {
+        body.destroy?.();
+      });
     }),
   );
 

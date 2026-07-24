@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -140,6 +140,144 @@ describe('GET /api/logs', () => {
     const resp = await axios.get(`${servers.base}/api/logs?source=bogus`, { validateStatus: () => true });
     expect(resp.status).toBe(400);
     expect(resp.data.error).toContain('unknown source');
+    await servers.close();
+  });
+});
+
+/**
+ * Minimal SSE reader: collects raw bytes from an open HTTP response until
+ * `count` data events have arrived (ignoring comment/keep-alive frames),
+ * then destroys the connection and returns the parsed event payloads.
+ */
+function readSseEvents(url: string, count: number, onOpen?: () => void): Promise<Array<{ line: string; source: string }>> {
+  return new Promise((resolve, reject) => {
+    const req = http.get(url, (res) => {
+      if (res.statusCode !== 200) {
+        reject(new Error(`unexpected status ${res.statusCode}`));
+        return;
+      }
+      onOpen?.();
+      let buf = '';
+      const events: Array<{ line: string; source: string }> = [];
+      res.on('data', (chunk: Buffer) => {
+        buf += chunk.toString('utf8');
+        let idx: number;
+        while ((idx = buf.indexOf('\n\n')) !== -1) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          if (frame.startsWith('data: ')) {
+            events.push(JSON.parse(frame.slice('data: '.length)));
+            if (events.length >= count) {
+              req.destroy();
+              resolve(events);
+              return;
+            }
+          }
+        }
+      });
+      res.on('error', () => resolve(events));
+    });
+    req.on('error', reject);
+  });
+}
+
+describe('GET /api/logs/stream', () => {
+  it('replays the historical backlog then continues with live lines, in the shared SSE shape', async () => {
+    const dir = tmpDir();
+    fs.writeFileSync(path.join(dir, 'dashboard.log'), '2024-01-15T10:00:00Z INFO historical line\n');
+    const handle = LoggingHandle.init(
+      { enabled: true, dir, rotateOn: { sizeMb: 100, keepFiles: 12 }, alsoStdout: false },
+      'dashboard',
+    );
+    const servers = await startServers(handle, express());
+
+    const events = await readSseEvents(
+      `${servers.base}/api/logs/stream?source=dashboard`,
+      2,
+      // Fires once the response is open - the live write must land after
+      // the subscription exists, proving replay-then-continue end to end.
+      () => setTimeout(() => handle.write('2024-01-15T10:00:01Z INFO live line'), 20),
+    );
+
+    expect(events).toEqual([
+      { line: '2024-01-15T10:00:00Z INFO historical line', source: 'dashboard' },
+      { line: '2024-01-15T10:00:01Z INFO live line', source: 'dashboard' },
+    ]);
+
+    await servers.close();
+  });
+
+  it('applies the level filter to live lines, not just the backlog', async () => {
+    const dir = tmpDir();
+    fs.writeFileSync(path.join(dir, 'dashboard.log'), '2024-01-15T10:00:00Z ERROR old failure\n');
+    const handle = LoggingHandle.init(
+      { enabled: true, dir, rotateOn: { sizeMb: 100, keepFiles: 12 }, alsoStdout: false },
+      'dashboard',
+    );
+    const servers = await startServers(handle, express());
+
+    const events = await readSseEvents(
+      `${servers.base}/api/logs/stream?source=dashboard&level=error`,
+      2,
+      () =>
+        setTimeout(() => {
+          handle.write('2024-01-15T10:00:01Z INFO filtered out');
+          handle.write('2024-01-15T10:00:02Z ERROR new failure');
+        }, 20),
+    );
+
+    expect(events.map((e) => e.line)).toEqual([
+      '2024-01-15T10:00:00Z ERROR old failure',
+      '2024-01-15T10:00:02Z ERROR new failure',
+    ]);
+
+    await servers.close();
+  });
+
+  it('returns 400 for source=dashboard when file logging is not enabled', async () => {
+    const servers = await startServers(LoggingHandle.disabled(), express());
+    const resp = await axios.get(`${servers.base}/api/logs/stream?source=dashboard`, { validateStatus: () => true });
+    expect(resp.status).toBe(400);
+    await servers.close();
+  });
+
+  it('pipes a proxied stream through verbatim and forwards follow=true', async () => {
+    const mock = express();
+    let seenQuery: Record<string, unknown> = {};
+    mock.get('/admin/logs', (req, res) => {
+      seenQuery = req.query;
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.write('data: {"line":"upstream live","source":"vigil"}\n\n');
+      res.end();
+    });
+    const servers = await startServers(LoggingHandle.disabled(), mock);
+
+    const events = await readSseEvents(`${servers.base}/api/logs/stream?source=vigil&last=5m`, 1);
+    expect(events).toEqual([{ line: 'upstream live', source: 'vigil' }]);
+    expect(seenQuery).toEqual({ target: 'vigil', last: '5m', follow: 'true' });
+
+    await servers.close();
+  });
+
+  it('aborts the upstream request when the client disconnects', async () => {
+    const mock = express();
+    let upstreamClosed = false;
+    mock.get('/admin/logs', (req, res) => {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.write('data: {"line":"first","source":"vigil"}\n\n');
+      // Hold the connection open; only the client abort should end it.
+      req.on('close', () => {
+        upstreamClosed = true;
+      });
+    });
+    const servers = await startServers(LoggingHandle.disabled(), mock);
+
+    // readSseEvents destroys the client connection after the first event.
+    await readSseEvents(`${servers.base}/api/logs/stream?source=vigil`, 1);
+    await vi.waitFor(() => {
+      expect(upstreamClosed).toBe(true);
+    });
+
     await servers.close();
   });
 });

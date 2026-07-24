@@ -65,7 +65,7 @@ Controls the in-memory DNS TXT polling jobs used by the DNS checker tool. Jobs a
 
 ## Logging
 
-Opt-in rotating log file + live tail, backing `GET /api/logs` (see a later plan for the routes themselves). Omit entirely for stdout-only (current behavior). Requires a BFF restart to pick up changes.
+Opt-in rotating log file + live tail, backing `GET /api/logs?source=dashboard` (historical JSON) and `GET /api/logs/stream?source=dashboard` (live-tail SSE). Other `source` values (`shepherd`, `vigil`, `corgi:<name>`) proxy through Shepherd's `/admin/logs` and work regardless of this block. Omit entirely for stdout-only (current behavior). Requires a BFF restart to pick up changes.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
