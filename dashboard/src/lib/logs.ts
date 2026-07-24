@@ -74,8 +74,14 @@ export function parseSseEvent(data: string): { line: string; source: string } | 
   }
 }
 
-/** Appends keeping at most `max` lines, dropping the oldest first. */
-export function appendLines(existing: string[], incoming: string[], max = LOG_BUFFER_MAX): string[] {
+/**
+ * Appends keeping at most `max` lines, dropping the oldest first. Generic
+ * so the page can buffer `{id, text}` entries - stable ids matter for
+ * React keys: with index keys, every drop-from-the-front at the cap would
+ * shift all indices and force React to re-diff the entire viewer per
+ * incoming line.
+ */
+export function appendLines<T>(existing: T[], incoming: T[], max = LOG_BUFFER_MAX): T[] {
   const combined = existing.concat(incoming);
   return combined.length > max ? combined.slice(-max) : combined;
 }

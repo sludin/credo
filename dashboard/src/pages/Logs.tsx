@@ -18,6 +18,11 @@ const RECONNECT_DELAY_MS = 2000;
 
 type StreamState = 'off' | 'connecting' | 'live' | 'reconnecting';
 
+// Viewer entries carry a monotonic id for React keys: index keys on a
+// buffer that drops from the front at the cap would shift every index per
+// incoming line, forcing React to re-diff all ~5000 rows each arrival.
+type LogLine = { id: number; text: string };
+
 export default function Logs(): React.ReactElement {
   const [sources, setSources] = useState<string[]>(sourceOptionsFromFlock([]));
   const [source, setSource] = useState('shepherd');
@@ -27,7 +32,7 @@ export default function Logs(): React.ReactElement {
   const [level, setLevel] = useState('');
   const [q, setQ] = useState('');
   const [live, setLive] = useState(false);
-  const [lines, setLines] = useState<string[]>([]);
+  const [lines, setLines] = useState<LogLine[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [streamState, setStreamState] = useState<StreamState>('off');
@@ -40,6 +45,7 @@ export default function Logs(): React.ReactElement {
   // or fetch can never write into a newer view.
   const generationRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const nextLineIdRef = useRef(0);
 
   // Corgi list for the source picker - base sources stay usable if the
   // flock fetch fails.
@@ -88,7 +94,7 @@ export default function Logs(): React.ReactElement {
         if (generation !== generationRef.current) return;
         const parsed = parseSseEvent(event.data);
         if (parsed === null) return;
-        setLines((prev) => appendLines(prev, [parsed.line]));
+        setLines((prev) => appendLines(prev, [{ id: nextLineIdRef.current++, text: parsed.line }]));
       };
       es.onerror = () => {
         if (generation !== generationRef.current) return;
@@ -127,7 +133,9 @@ export default function Logs(): React.ReactElement {
         setLoading(true);
         fetchLogsHistorical(params)
           .then((result) => {
-            if (generation === generationRef.current) setLines(result);
+            if (generation === generationRef.current) {
+              setLines(result.map((text) => ({ id: nextLineIdRef.current++, text })));
+            }
           })
           .catch((e: unknown) => {
             if (generation === generationRef.current) {
@@ -246,8 +254,8 @@ export default function Logs(): React.ReactElement {
               {live ? 'Waiting for log lines…' : 'No log lines in the selected window.'}
             </div>
           )}
-          {lines.map((line, i) => (
-            <div key={i}>{line}</div>
+          {lines.map((line) => (
+            <div key={line.id}>{line.text}</div>
           ))}
         </div>
       </div>
