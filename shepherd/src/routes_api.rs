@@ -541,6 +541,97 @@ pub async fn get_cas(
     Ok(Json(json!({ "cas": cas })))
 }
 
+/// Query parameters for `GET /admin/logs`. Reuses the field set of
+/// `credo_lib::log_query::LogQueryParams` directly rather than
+/// `#[serde(flatten)]`-ing it: axum's `Query` extractor uses
+/// `serde_urlencoded`, which doesn't support flatten reliably. `target`
+/// selects the log source: `"shepherd"` (default), `"vigil"`, or
+/// `"corgi:<name>"`. `follow` (live tail) is deliberately not a field here -
+/// this endpoint is JSON-only; live-tail proxying is a separate future plan.
+#[derive(Debug, serde::Deserialize, Default)]
+pub struct AdminLogsQuery {
+    pub target: Option<String>,
+    pub since: Option<String>,
+    pub until: Option<String>,
+    pub last: Option<String>,
+    pub level: Option<String>,
+    pub q: Option<String>,
+    pub limit: Option<usize>,
+}
+
+impl AdminLogsQuery {
+    /// Converts to `LogQueryParams` for a direct, in-process call into
+    /// `credo_lib::log_query` - used for `target=shepherd`. `follow` is
+    /// always `false`: this endpoint doesn't support live tail yet.
+    ///
+    /// Not yet called outside tests: the `/admin/logs` handler that wires
+    /// this in is added in the next task.
+    #[allow(dead_code)]
+    fn to_log_query_params(&self) -> credo_lib::log_query::LogQueryParams {
+        credo_lib::log_query::LogQueryParams {
+            since: self.since.clone(),
+            until: self.until.clone(),
+            last: self.last.clone(),
+            level: self.level.clone(),
+            q: self.q.clone(),
+            limit: self.limit,
+            follow: false,
+        }
+    }
+
+    /// Key/value pairs to forward to a proxied service's own `/logs`
+    /// endpoint - everything except `target` (shepherd-only) and `follow`
+    /// (omitted; the proxied endpoint defaults to `false` when absent).
+    ///
+    /// Not yet called outside tests: the `/admin/logs` handler that wires
+    /// this in is added in the next task.
+    #[allow(dead_code)]
+    fn forward_pairs(&self) -> Vec<(&'static str, String)> {
+        let mut pairs = Vec::new();
+        if let Some(v) = &self.since {
+            pairs.push(("since", v.clone()));
+        }
+        if let Some(v) = &self.until {
+            pairs.push(("until", v.clone()));
+        }
+        if let Some(v) = &self.last {
+            pairs.push(("last", v.clone()));
+        }
+        if let Some(v) = &self.level {
+            pairs.push(("level", v.clone()));
+        }
+        if let Some(v) = &self.q {
+            pairs.push(("q", v.clone()));
+        }
+        if let Some(v) = self.limit {
+            pairs.push(("limit", v.to_string()));
+        }
+        pairs
+    }
+}
+
+/// Builds a `?key=value&...` query string (percent-encoded via `url`'s
+/// query-pair builder, re-exported as `reqwest::Url`) from `pairs`, or an
+/// empty string if `pairs` is empty.
+///
+/// Not yet called outside tests: the `/admin/logs` handler that wires this
+/// in is added in the next task.
+#[allow(dead_code)]
+fn build_query_string(pairs: &[(&str, String)]) -> String {
+    if pairs.is_empty() {
+        return String::new();
+    }
+    let mut url =
+        reqwest::Url::parse("http://placeholder.invalid/").expect("static URL must parse");
+    {
+        let mut qp = url.query_pairs_mut();
+        for (k, v) in pairs {
+            qp.append_pair(k, v);
+        }
+    }
+    format!("?{}", url.query().unwrap_or_default())
+}
+
 pub async fn get_vigil_ca(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<AuthenticatedUser>,
@@ -1353,6 +1444,78 @@ mod tests {
         };
         assert_eq!(q.cert_name.as_deref(), Some("foo.com"));
         assert_eq!(q.active.as_deref(), Some("true"));
+    }
+
+    #[test]
+    fn admin_logs_query_converts_to_log_query_params_with_follow_false() {
+        let query = AdminLogsQuery {
+            target: Some("shepherd".to_string()),
+            since: Some("2024-01-15T09:00:00Z".to_string()),
+            until: Some("2024-01-15T10:00:00Z".to_string()),
+            last: Some("5m".to_string()),
+            level: Some("warn".to_string()),
+            q: Some("corgi".to_string()),
+            limit: Some(100),
+        };
+        let params = query.to_log_query_params();
+        assert_eq!(params.since, Some("2024-01-15T09:00:00Z".to_string()));
+        assert_eq!(params.until, Some("2024-01-15T10:00:00Z".to_string()));
+        assert_eq!(params.last, Some("5m".to_string()));
+        assert_eq!(params.level, Some("warn".to_string()));
+        assert_eq!(params.q, Some("corgi".to_string()));
+        assert_eq!(params.limit, Some(100));
+        assert!(!params.follow);
+    }
+
+    #[test]
+    fn admin_logs_query_forward_pairs_only_includes_set_fields() {
+        let query = AdminLogsQuery {
+            target: Some("vigil".to_string()),
+            level: Some("warn".to_string()),
+            limit: Some(50),
+            ..Default::default()
+        };
+        let pairs = query.forward_pairs();
+        assert_eq!(
+            pairs,
+            vec![("level", "warn".to_string()), ("limit", "50".to_string())]
+        );
+    }
+
+    #[test]
+    fn admin_logs_query_forward_pairs_empty_when_nothing_set() {
+        let query = AdminLogsQuery::default();
+        assert!(query.forward_pairs().is_empty());
+    }
+
+    #[test]
+    fn build_query_string_empty_pairs_returns_empty_string() {
+        assert_eq!(build_query_string(&[]), "");
+    }
+
+    #[test]
+    fn build_query_string_round_trips_values_with_special_characters() {
+        let pairs = vec![
+            ("q", "hello world & more".to_string()),
+            ("level", "warn".to_string()),
+        ];
+        let qs = build_query_string(&pairs);
+        assert!(qs.starts_with('?'), "expected a leading '?', got {qs:?}");
+        // Round-trip through a real URL parse rather than asserting an exact
+        // percent-encoding scheme, since the specific encoding (e.g. spaces
+        // as '+' vs '%20') is an implementation detail of the `url` crate.
+        let url = reqwest::Url::parse(&format!("http://x.invalid/{qs}")).expect("parse url");
+        let collected: Vec<(String, String)> = url
+            .query_pairs()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        assert_eq!(
+            collected,
+            vec![
+                ("q".to_string(), "hello world & more".to_string()),
+                ("level".to_string(), "warn".to_string()),
+            ]
+        );
     }
 }
 
