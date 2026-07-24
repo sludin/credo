@@ -93,6 +93,8 @@ Deprecated aliases: `pollIntervalSeconds` is accepted as an alias for `reconcile
 | `logging.rotateOn.keepFiles` | number | `12` | Number of rotated backups to retain |
 | `logging.alsoStdout` | boolean | `true` | Also emit to stdout when file logging is enabled (set `false` for file-only) |
 
+`logLevel` and the `logging` block are both read once at startup and are **not** hot-reloaded on SIGHUP — changing either requires a restart, unlike most other config fields.
+
 ---
 
 ## GET /admin/logs
