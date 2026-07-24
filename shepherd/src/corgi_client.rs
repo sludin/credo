@@ -155,6 +155,68 @@ pub async fn evict(pool: &Arc<RwLock<CorgiClientPool>>, node_name: &str) {
 // Public request helpers
 // ---------------------------------------------------------------------------
 
+/// Effectively-unbounded timeout for a `follow=true` (live-tail) proxy
+/// request - the corgi client pool's normal per-client timeout (30s, see
+/// `build_client`) would otherwise kill a long-lived SSE connection well
+/// before the caller is done with it.
+pub(crate) const FOLLOW_TIMEOUT_SECS: u64 = 24 * 60 * 60;
+
+/// Like `corgi_get`, but for a streaming (SSE) response: returns the raw
+/// `reqwest::Response` instead of deserializing a JSON body, so the caller
+/// can proxy the bytes through verbatim, and overrides the per-request
+/// timeout to `FOLLOW_TIMEOUT_SECS` instead of the pool's 30s client-level
+/// default. Unlike `corgi_get`, this does not itself check
+/// `status.is_success()` - the caller needs to inspect the response (JSON
+/// error body vs. SSE stream) to decide how to handle a non-2xx status, so
+/// both cases are returned as `Ok` here.
+pub async fn corgi_get_stream(
+    pool: &Arc<RwLock<CorgiClientPool>>,
+    node: &CorgiNodeConfig,
+    path: &str,
+) -> Result<reqwest::Response> {
+    let client = get_or_create(pool, node).await?;
+    let url = format!("{}{}", node.url.trim_end_matches('/'), path);
+    let host = url_hostname(&url);
+    let start = Instant::now();
+    let resp = match client
+        .get(&url)
+        .timeout(Duration::from_secs(FOLLOW_TIMEOUT_SECS))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            RequestLogEntry {
+                code: "F",
+                direction: "<",
+                status: 0,
+                method: "GET",
+                path,
+                host: &host,
+                peer_ip: "-",
+                identity: Some(node.name.as_str()),
+                duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+            }
+            .log();
+            return Err(anyhow::anyhow!("GET {url}: {e}"));
+        }
+    };
+    let status = resp.status();
+    RequestLogEntry {
+        code: "F",
+        direction: "<",
+        status: status.as_u16(),
+        method: "GET",
+        path,
+        host: &host,
+        peer_ip: "-",
+        identity: Some(node.name.as_str()),
+        duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+    }
+    .log();
+    Ok(resp)
+}
+
 pub async fn corgi_get<T: DeserializeOwned>(
     pool: &Arc<RwLock<CorgiClientPool>>,
     node: &CorgiNodeConfig,
