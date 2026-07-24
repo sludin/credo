@@ -259,6 +259,34 @@ describe('GET /api/logs/stream', () => {
     await servers.close();
   });
 
+  it('ends the client connection when the upstream dies mid-stream', async () => {
+    const mock = express();
+    mock.get('/admin/logs', (_req, res) => {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.write('data: {"line":"first","source":"vigil"}\n\n');
+      // Abrupt socket destruction, not a clean res.end() - simulates the
+      // proxied service (or shepherd) restarting mid-tail. pipe() alone
+      // does NOT propagate this to the client response, which would hang
+      // open forever with no close event (this test times out pre-fix).
+      setTimeout(() => {
+        res.socket?.destroy();
+      }, 20);
+    });
+    const servers = await startServers(LoggingHandle.disabled(), mock);
+
+    await new Promise<void>((resolve, reject) => {
+      const streamReq = http.get(`${servers.base}/api/logs/stream?source=vigil`, (res) => {
+        res.on('data', () => {});
+        res.on('end', () => resolve());
+        res.on('close', () => resolve());
+        res.on('error', () => resolve());
+      });
+      streamReq.on('error', reject);
+    });
+
+    await servers.close();
+  });
+
   it('aborts the upstream request when the client disconnects', async () => {
     const mock = express();
     let upstreamClosed = false;

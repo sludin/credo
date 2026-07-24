@@ -205,7 +205,20 @@ export function createLogsRouter(deps: LogsRouterDeps): Router {
 
       const body = upstream.data as NodeJS.ReadableStream & { destroy?: () => void };
       body.pipe(res);
+      // pipe() propagates a normal upstream end to the client but NOT an
+      // error: without this handler, an upstream death mid-stream (service
+      // restart, RST, network blip) leaves the client connection hanging
+      // open forever with no close event - the browser's EventSource can't
+      // detect the death and reconnect, and the BFF leaks the connection.
+      body.on('error', () => {
+        res.end();
+      });
       req.on('close', () => {
+        body.destroy?.();
+      });
+      // Mirror teardown: if the response goes away for any reason other
+      // than the request 'close' above, drop the upstream too.
+      res.on('close', () => {
         body.destroy?.();
       });
     }),
