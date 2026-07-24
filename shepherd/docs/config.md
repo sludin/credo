@@ -95,6 +95,12 @@ Deprecated aliases: `pollIntervalSeconds` is accepted as an alias for `reconcile
 
 ---
 
+## GET /admin/logs
+
+Query params: `target` (`"shepherd"` default, `"vigil"`, or `"corgi:<name>"`), `since`, `until`, `last` (duration shorthand like `"5m"`/`"1h"`), `level` (`"error"`/`"warn"`/`"info"`/`"debug"`, minimum severity), `q` (case-insensitive substring), `limit`. Returns a JSON array of log lines. Requires Readonly role or higher. Live tail (`?follow=true`) is not yet supported on this endpoint.
+
+---
+
 ## Companion Files
 
 ### `shepherd.corgis.json`

@@ -563,10 +563,6 @@ impl AdminLogsQuery {
     /// Converts to `LogQueryParams` for a direct, in-process call into
     /// `credo_lib::log_query` - used for `target=shepherd`. `follow` is
     /// always `false`: this endpoint doesn't support live tail yet.
-    ///
-    /// Not yet called outside tests: the `/admin/logs` handler that wires
-    /// this in is added in the next task.
-    #[allow(dead_code)]
     fn to_log_query_params(&self) -> credo_lib::log_query::LogQueryParams {
         credo_lib::log_query::LogQueryParams {
             since: self.since.clone(),
@@ -582,10 +578,6 @@ impl AdminLogsQuery {
     /// Key/value pairs to forward to a proxied service's own `/logs`
     /// endpoint - everything except `target` (shepherd-only) and `follow`
     /// (omitted; the proxied endpoint defaults to `false` when absent).
-    ///
-    /// Not yet called outside tests: the `/admin/logs` handler that wires
-    /// this in is added in the next task.
-    #[allow(dead_code)]
     fn forward_pairs(&self) -> Vec<(&'static str, String)> {
         let mut pairs = Vec::new();
         if let Some(v) = &self.since {
@@ -613,10 +605,6 @@ impl AdminLogsQuery {
 /// Builds a `?key=value&...` query string (percent-encoded via `url`'s
 /// query-pair builder, re-exported as `reqwest::Url`) from `pairs`, or an
 /// empty string if `pairs` is empty.
-///
-/// Not yet called outside tests: the `/admin/logs` handler that wires this
-/// in is added in the next task.
-#[allow(dead_code)]
 fn build_query_string(pairs: &[(&str, String)]) -> String {
     if pairs.is_empty() {
         return String::new();
@@ -630,6 +618,71 @@ fn build_query_string(pairs: &[(&str, String)]) -> String {
         }
     }
     format!("?{}", url.query().unwrap_or_default())
+}
+
+/// Historical log retrieval, aggregated across services. `target=shepherd`
+/// (default) serves this shepherd's own logs; `target=vigil` and
+/// `target=corgi:<name>` proxy to that service's own `/logs` endpoint using
+/// the existing outbound clients (`state.vigil_client`, `state.corgi_client_pool`)
+/// already used for `/ca`, `/health`, and hook fetches. JSON-only for now -
+/// `?follow=true` live-tail proxying is a separate future endpoint.
+pub async fn get_logs(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Query(query): Query<AdminLogsQuery>,
+) -> Result<Json<Vec<String>>, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+
+    let target = query.target.as_deref().unwrap_or("shepherd");
+
+    if target == "shepherd" {
+        let params = query.to_log_query_params();
+        return credo_lib::log_query::historical_logs(&state.logging_handle, &params).await;
+    }
+
+    if target == "vigil" {
+        let config = state.config.load_full();
+        let url = config
+            .vigil_url
+            .as_ref()
+            .ok_or_else(|| AppError::BadRequest("Vigil not configured".to_string()))?;
+        let client = state
+            .vigil_client
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| AppError::BadRequest("Vigil client unavailable".to_string()))?;
+        let body: Vec<String> = client
+            .get(format!("{}/logs", url.trim_end_matches('/')))
+            .query(&query.forward_pairs())
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("Vigil request failed: {}", e)))?
+            .json()
+            .await
+            .map_err(|e| {
+                AppError::Internal(anyhow::anyhow!("Vigil response parse error: {}", e))
+            })?;
+        return Ok(Json(body));
+    }
+
+    if let Some(name) = target.strip_prefix("corgi:") {
+        let corgis = state.corgis.read().await;
+        let node = corgis
+            .iter()
+            .find(|c| c.name == name)
+            .ok_or_else(|| AppError::NotFound(format!("Corgi '{name}' not found")))?
+            .clone();
+        drop(corgis);
+        let path = format!("/logs{}", build_query_string(&query.forward_pairs()));
+        let body: Vec<String> =
+            crate::corgi_client::corgi_get(&state.corgi_client_pool, &node, &path)
+                .await
+                .map_err(AppError::Internal)?;
+        return Ok(Json(body));
+    }
+
+    Err(AppError::BadRequest(format!("unknown target '{target}'")))
 }
 
 pub async fn get_vigil_ca(

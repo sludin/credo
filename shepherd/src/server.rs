@@ -74,6 +74,7 @@ pub fn build_api_router(state: AppState) -> Router {
         .route("/admin/vigil/ca", get(api::get_vigil_ca))
         .route("/admin/vigil/status", get(api::get_vigil_status))
         .route("/admin/config-summary", get(api::config_summary))
+        .route("/admin/logs", get(api::get_logs))
         .route("/accounts", get(api::list_accounts))
         .route("/accounts/me", get(api::get_me))
         .route("/accounts/:id", get(api::get_account))
