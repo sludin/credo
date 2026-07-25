@@ -196,8 +196,44 @@ describe('highlightLevel', () => {
     ]);
   });
 
-  it('leaves lines with no level keyword - like the structured request-log format - as one segment', () => {
-    const line = 'S > 200 GET /flock shepherd.local 10.0.0.1 corgi-1 12ms';
+  it('leaves plain lines with no level keyword or status code as one segment', () => {
+    const line = 'shepherd starting up, config loaded';
+    expect(highlightLevel(line)).toEqual([{ text: line }]);
+  });
+
+  it('colors the numeric HTTP status in the structured request-log format, not the whole triplet', () => {
+    expect(highlightLevel('S > 200 GET /flock shepherd.local 10.0.0.1 corgi-1 12.34')).toEqual([
+      { text: 'S > ' },
+      { text: '200', className: 'text-green' },
+      { text: ' GET /flock shepherd.local 10.0.0.1 corgi-1 12.34' },
+    ]);
+    expect(highlightLevel('C > 401 GET /assignments corgi.local 10.0.0.2 - 0.01')).toEqual([
+      { text: 'C > ' },
+      { text: '401', className: 'text-yellow' },
+      { text: ' GET /assignments corgi.local 10.0.0.2 - 0.01' },
+    ]);
+    expect(highlightLevel('F < 500 POST /issue vigil.local 10.0.0.3 shepherd 2.00')).toEqual([
+      { text: 'F < ' },
+      { text: '500', className: 'text-red' },
+      { text: ' POST /issue vigil.local 10.0.0.3 shepherd 2.00' },
+    ]);
+    expect(highlightLevel('V > 301 GET /ca vigil.local 10.0.0.4 - 0.00')).toEqual([
+      { text: 'V > ' },
+      { text: '301', className: 'text-blue' },
+      { text: ' GET /ca vigil.local 10.0.0.4 - 0.00' },
+    ]);
+  });
+
+  it('colors the status in the dashboard BFF\'s own "D" service code lines', () => {
+    expect(highlightLevel('D > 200 GET /api/flock dashboard.example.com 10.0.0.5 alice 0.00')).toEqual([
+      { text: 'D > ' },
+      { text: '200', className: 'text-green' },
+      { text: ' GET /api/flock dashboard.example.com 10.0.0.5 alice 0.00' },
+    ]);
+  });
+
+  it('does not mistake an unrelated 3-digit number for a status code', () => {
+    const line = 'retrying in 500ms, no code/direction prefix present';
     expect(highlightLevel(line)).toEqual([{ text: line }]);
   });
 });

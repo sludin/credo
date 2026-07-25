@@ -159,11 +159,16 @@ export function formatLogLine(
   return { timestamp: formatTimestamp(utcMs, micros, timezone, format), rest };
 }
 
-// ── Log level highlighting ─────────────────────────────────────────────────
+// ── Level / status highlighting ─────────────────────────────────────────────
+// Two independent, non-overlapping things get colored in a line:
+//  - tracing's level word (ERROR/WARN/DEBUG/TRACE - INFO is the common case
+//    and stays uncolored to avoid visual noise)
+//  - the structured request-log format's numeric HTTP status, e.g.
+//    "S > 200 GET /flock ..." (see CLAUDE.md: "<code> <dir> <status> ...").
+//    Every request-log line logs at tracing::info!, so the two never
+//    collide within one line.
 
 export type LineSegment = { text: string; className?: string };
-
-const LEVEL_RE = /\b(ERROR|WARN|WARNING|DEBUG|TRACE)\b/;
 
 const LEVEL_CLASS: Record<string, string> = {
   ERROR: 'text-red',
@@ -173,23 +178,39 @@ const LEVEL_CLASS: Record<string, string> = {
   TRACE: 'text-muted',
 };
 
+function statusClassName(status: string): string {
+  const code = Number(status);
+  if (code >= 500) return 'text-red';
+  if (code >= 400) return 'text-yellow';
+  if (code >= 200 && code < 300) return 'text-green';
+  return 'text-blue'; // 1xx/3xx
+}
+
+// `status` only matches the 3 digits, via a lookbehind on the "<code> <dir> "
+// prefix - so just the status number gets colored, not the whole triplet.
+// Code letters: S=Shepherd, C=Corgi, F=outbound client call, V=Vigil (see
+// CLAUDE.md), plus D=dashboard BFF (server/logging.ts - not yet in that table).
+const HIGHLIGHT_RE =
+  /\b(?<level>ERROR|WARN|WARNING|DEBUG|TRACE)\b|(?<=\b[SCFVD] [<>] )(?<status>\d{3})\b/g;
+
 /**
- * Splits a line into segments so the renderer can color a level keyword
- * (tracing's default format emits e.g. "INFO"/"WARN"/"ERROR" as a standalone
- * word). Lines with no match - including the structured request-log format,
- * which has no textual level - come back as a single unstyled segment.
+ * Splits a line into segments so the renderer can color a level keyword and/or
+ * a structured-request-log status code. Lines with neither - most lines -
+ * come back as a single unstyled segment.
  */
 export function highlightLevel(text: string): LineSegment[] {
-  const match = LEVEL_RE.exec(text);
-  if (!match) return [{ text }];
-  const word = match[0];
-  const idx = match.index;
   const segments: LineSegment[] = [];
-  if (idx > 0) segments.push({ text: text.slice(0, idx) });
-  segments.push({ text: word, className: LEVEL_CLASS[word] });
-  const afterIdx = idx + word.length;
-  if (afterIdx < text.length) segments.push({ text: text.slice(afterIdx) });
-  return segments;
+  let lastIndex = 0;
+  for (const match of text.matchAll(HIGHLIGHT_RE)) {
+    const idx = match.index;
+    if (idx > lastIndex) segments.push({ text: text.slice(lastIndex, idx) });
+    const word = match[0];
+    const className = match.groups?.level ? LEVEL_CLASS[match.groups.level] : statusClassName(word);
+    segments.push({ text: word, className });
+    lastIndex = idx + word.length;
+  }
+  if (lastIndex < text.length) segments.push({ text: text.slice(lastIndex) });
+  return segments.length > 0 ? segments : [{ text }];
 }
 
 function buildQuery(params: LogsParams): string {
