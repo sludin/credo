@@ -3,15 +3,24 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchFlock, fetchHealth, fetchLogsHistorical, openLogsStream } from '../api';
 import { Topbar } from '../components/Shell';
 import {
+  DEFAULT_TIME_FORMAT,
+  DEFAULT_TIMEZONE,
   RANGE_PRESETS,
+  TIME_FORMAT_OPTIONS,
   appendLines,
+  formatLogLine,
+  highlightLevel,
   isPinnedToBottom,
   localInputToRfc3339,
   parseSseEvent,
   reconnectParams,
   sourceOptionsFromFlock,
+  timezoneOptions,
   type LogsParams,
 } from '../lib/logs';
+
+const TIMEZONE_STORAGE_KEY = 'credo.logs.timezone';
+const TIME_FORMAT_STORAGE_KEY = 'credo.logs.timeFormat';
 
 const APPLY_DEBOUNCE_MS = 500;
 const RECONNECT_DELAY_MS = 2000;
@@ -40,6 +49,12 @@ export default function Logs(): React.ReactElement {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [streamState, setStreamState] = useState<StreamState>('off');
+  const [timezone, setTimezone] = useState(
+    () => localStorage.getItem(TIMEZONE_STORAGE_KEY) || DEFAULT_TIMEZONE,
+  );
+  const [timeFormat, setTimeFormat] = useState(
+    () => localStorage.getItem(TIME_FORMAT_STORAGE_KEY) || DEFAULT_TIME_FORMAT,
+  );
 
   const esRef = useRef<EventSource | null>(null);
   const viewerRef = useRef<HTMLDivElement | null>(null);
@@ -65,6 +80,14 @@ export default function Logs(): React.ReactElement {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem(TIMEZONE_STORAGE_KEY, timezone);
+  }, [timezone]);
+
+  useEffect(() => {
+    localStorage.setItem(TIME_FORMAT_STORAGE_KEY, timeFormat);
+  }, [timeFormat]);
 
   const currentParams = useCallback((): LogsParams => {
     const params: LogsParams = { source, level: level || undefined, q: q || undefined };
@@ -206,7 +229,34 @@ export default function Logs(): React.ReactElement {
 
   return (
     <>
-      <Topbar title="Logs" subtitle="on-demand service log retrieval" />
+      <Topbar
+        title="Logs"
+        subtitle="on-demand service log retrieval"
+        actions={
+          <>
+            <select
+              className="form-select"
+              value={timezone}
+              onChange={(e) => setTimezone(e.target.value)}
+              title="Timestamp timezone"
+            >
+              {timezoneOptions().map((tz) => (
+                <option key={tz.value} value={tz.value}>{tz.label}</option>
+              ))}
+            </select>
+            <select
+              className="form-select"
+              value={timeFormat}
+              onChange={(e) => setTimeFormat(e.target.value)}
+              title="Timestamp format"
+            >
+              {TIME_FORMAT_OPTIONS.map((f) => (
+                <option key={f.value} value={f.value}>{f.label}</option>
+              ))}
+            </select>
+          </>
+        }
+      />
       <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12, height: 'calc(100vh - 64px)', boxSizing: 'border-box' }}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <select className="form-select" value={source} onChange={(e) => setSource(e.target.value)} title="Log source">
@@ -276,7 +326,7 @@ export default function Logs(): React.ReactElement {
             fontSize: 12,
             lineHeight: 1.5,
             whiteSpace: 'pre-wrap',
-            wordBreak: 'break-all',
+            overflowWrap: 'anywhere',
           }}
         >
           {loading && <div style={{ color: 'var(--muted)' }}>Loading…</div>}
@@ -285,9 +335,17 @@ export default function Logs(): React.ReactElement {
               {live ? 'Waiting for log lines…' : 'No log lines in the selected window.'}
             </div>
           )}
-          {lines.map((line) => (
-            <div key={line.id}>{line.text}</div>
-          ))}
+          {lines.map((line) => {
+            const { timestamp, rest } = formatLogLine(line.text, timezone, timeFormat);
+            return (
+              <div key={line.id} className="log-line">
+                {timestamp !== null && <span className="log-ts">{timestamp} </span>}
+                {highlightLevel(rest).map((seg, i) => (
+                  <span key={i} className={seg.className}>{seg.text}</span>
+                ))}
+              </div>
+            );
+          })}
         </div>
       </div>
     </>

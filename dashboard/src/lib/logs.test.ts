@@ -9,6 +9,13 @@ import {
   localInputToRfc3339,
   isPinnedToBottom,
   LOG_BUFFER_MAX,
+  formatTimestamp,
+  formatLogLine,
+  highlightLevel,
+  timezoneOptions,
+  resolveTimezone,
+  LOCAL_TIMEZONE_VALUE,
+  TIME_FORMAT_OPTIONS,
 } from './logs';
 
 describe('logsUrl / logsStreamUrl', () => {
@@ -117,6 +124,87 @@ describe('localInputToRfc3339', () => {
   it('returns undefined for empty or invalid input', () => {
     expect(localInputToRfc3339('')).toBeUndefined();
     expect(localInputToRfc3339('garbage')).toBeUndefined();
+  });
+});
+
+describe('timezoneOptions / resolveTimezone', () => {
+  it('lists UTC and Local first, then the curated named zones', () => {
+    const values = timezoneOptions().map((o) => o.value);
+    expect(values.slice(0, 2)).toEqual(['UTC', LOCAL_TIMEZONE_VALUE]);
+    expect(values).toContain('Europe/London');
+  });
+
+  it('resolves the "local" sentinel to a real IANA zone, and passes named zones through', () => {
+    expect(resolveTimezone('Europe/London')).toBe('Europe/London');
+    expect(resolveTimezone(LOCAL_TIMEZONE_VALUE)).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  });
+});
+
+describe('formatTimestamp', () => {
+  const utcMs = Date.UTC(2024, 0, 15, 10, 30, 45); // 2024-01-15T10:30:45Z
+  const micros = '128391';
+
+  it('formats in UTC across all four formats', () => {
+    expect(formatTimestamp(utcMs, micros, 'UTC', 'YYYY-MM-DD HH:MM:SS.UUUUUU')).toBe(
+      '2024-01-15 10:30:45.128391',
+    );
+    expect(formatTimestamp(utcMs, micros, 'UTC', 'HH:MM:SS.UUUUUU')).toBe('10:30:45.128391');
+    expect(formatTimestamp(utcMs, micros, 'UTC', 'HH:MM:SS')).toBe('10:30:45');
+    expect(formatTimestamp(utcMs, micros, 'UTC', 'YYYY-MM-DD HH:MM:SS')).toBe('2024-01-15 10:30:45');
+  });
+
+  it('converts into a named zone, keeping the microsecond fraction untouched', () => {
+    // 2024-01-15T10:30:45Z is 05:30:45 in America/New_York (EST, UTC-5) in January.
+    expect(formatTimestamp(utcMs, micros, 'America/New_York', 'YYYY-MM-DD HH:MM:SS.UUUUUU')).toBe(
+      '2024-01-15 05:30:45.128391',
+    );
+  });
+
+  it('handles a DST-crossing zone correctly (America/New_York in July is UTC-4)', () => {
+    const julyUtcMs = Date.UTC(2024, 6, 15, 10, 30, 45);
+    expect(formatTimestamp(julyUtcMs, micros, 'America/New_York', 'HH:MM:SS')).toBe('06:30:45');
+  });
+});
+
+describe('formatLogLine', () => {
+  it('splits and reformats the leading RFC3339 timestamp, leaving the rest untouched', () => {
+    const line = '2024-01-15T10:30:45.128391Z  INFO shepherd::routes: something happened';
+    const { timestamp, rest } = formatLogLine(line, 'UTC', 'HH:MM:SS');
+    expect(timestamp).toBe('10:30:45');
+    expect(rest).toBe('INFO shepherd::routes: something happened');
+  });
+
+  it('returns timestamp: null for a line with no parseable leading timestamp', () => {
+    const line = 'garbage line with no timestamp';
+    expect(formatLogLine(line, 'UTC', 'HH:MM:SS')).toEqual({ timestamp: null, rest: line });
+  });
+});
+
+describe('highlightLevel', () => {
+  it('highlights ERROR/WARN/DEBUG as their own segment', () => {
+    expect(highlightLevel('INFO shepherd::routes: something happened')).toEqual([
+      { text: 'INFO shepherd::routes: something happened' },
+    ]);
+    expect(highlightLevel('ERROR failed to renew cert')).toEqual([
+      { text: 'ERROR', className: 'text-red' },
+      { text: ' failed to renew cert' },
+    ]);
+    expect(highlightLevel('shepherd::poll: WARN retrying')).toEqual([
+      { text: 'shepherd::poll: ' },
+      { text: 'WARN', className: 'text-yellow' },
+      { text: ' retrying' },
+    ]);
+  });
+
+  it('leaves lines with no level keyword - like the structured request-log format - as one segment', () => {
+    const line = 'S > 200 GET /flock shepherd.local 10.0.0.1 corgi-1 12ms';
+    expect(highlightLevel(line)).toEqual([{ text: line }]);
+  });
+});
+
+describe('TIME_FORMAT_OPTIONS', () => {
+  it('defaults to the full date+microseconds format first', () => {
+    expect(TIME_FORMAT_OPTIONS[0].value).toBe('YYYY-MM-DD HH:MM:SS.UUUUUU');
   });
 });
 
