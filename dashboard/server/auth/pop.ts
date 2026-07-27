@@ -96,22 +96,30 @@ export function verifyPopToken(
     return { ok: false, error: 'Could not parse certificate PEM.' };
   }
 
-  // 4. Verify cert against Vigil CA trust chain.
+  // 4. Verify cert against Vigil CA trust chain. This step is mandatory: without
+  // it, step 6 below only proves the presenter holds *some* private key, not that
+  // Vigil ever issued this certificate — collapsing enrollment to "knows the
+  // invite token." Refuse to proceed if no CA bundle is configured, rather than
+  // silently skipping the check.
   // token.cert may be a full chain (leaf + intermediates); verifyCertChain
   // anchors intermediates to the CA bundle before checking the leaf.
-  if (config.mtls.caPath) {
-    try {
-      const caPem = fs.readFileSync(config.mtls.caPath, 'utf8');
-      const caCerts = parseCertsFromBundle(caPem);
-      if (caCerts.length === 0) {
-        return { ok: false, error: 'CA bundle contains no valid certificates.' };
-      }
-      if (!verifyCertChain(token.cert, caCerts)) {
-        return { ok: false, error: 'Certificate was not signed by the configured Vigil CA.' };
-      }
-    } catch (err) {
-      return { ok: false, error: `CA verification error: ${String(err)}` };
+  if (!config.mtls.caPath) {
+    return {
+      ok: false,
+      error: 'Server misconfiguration: mtls.caPath is not set; cannot verify certificate against the Vigil CA.',
+    };
+  }
+  try {
+    const caPem = fs.readFileSync(config.mtls.caPath, 'utf8');
+    const caCerts = parseCertsFromBundle(caPem);
+    if (caCerts.length === 0) {
+      return { ok: false, error: 'CA bundle contains no valid certificates.' };
     }
+    if (!verifyCertChain(token.cert, caCerts)) {
+      return { ok: false, error: 'Certificate was not signed by the configured Vigil CA.' };
+    }
+  } catch (err) {
+    return { ok: false, error: `CA verification error: ${String(err)}` };
   }
 
   // 5. Extract identity URI from cert SAN and compare to token's claimed identityUri.
