@@ -137,6 +137,42 @@ fn jwk_thumbprint(jwk: &AcmeRsaJwk) -> String {
     }
 }
 
+/// True iff `jwk`'s public key is the same key certified by `cert_pem`.
+///
+/// Used to enforce RFC 8555 §7.6 proof-of-possession on the jwk (certificate-key)
+/// revoke-cert path: a client presenting a certificate-key JWS must actually hold
+/// the private key for *that* certificate, not just any valid keypair. Vigil only
+/// ever issues EC P-256 leaf certificates, so a non-EC JWK can never match.
+fn jwk_matches_cert_public_key(jwk: &AcmeRsaJwk, cert_pem: &str) -> bool {
+    if jwk.kty != "EC" || jwk.x.is_empty() || jwk.y.is_empty() {
+        return false;
+    }
+    let (Ok(x), Ok(y)) = (B64.decode(&jwk.x), B64.decode(&jwk.y)) else {
+        return false;
+    };
+    if x.len() != 32 || y.len() != 32 {
+        return false;
+    }
+    let mut expected_point = Vec::with_capacity(65);
+    expected_point.push(0x04);
+    expected_point.extend_from_slice(&x);
+    expected_point.extend_from_slice(&y);
+
+    // `cert_pem` may be a full chain (leaf + intermediates); the leaf is always first.
+    let Ok(certs) = rustls_pemfile::certs(&mut std::io::BufReader::new(cert_pem.as_bytes()))
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        return false;
+    };
+    let Some(der) = certs.into_iter().next() else {
+        return false;
+    };
+    let Ok((_, cert)) = x509_parser::parse_x509_certificate(der.as_ref()) else {
+        return false;
+    };
+    cert.public_key().subject_public_key.data.as_ref() == expected_point.as_slice()
+}
+
 fn verify_ec_jws(protected_b64: &str, payload_b64: &str, sig_b64: &str, jwk: &AcmeRsaJwk) -> bool {
     use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
     use p256::elliptic_curve::sec1::FromEncodedPoint;
@@ -1685,6 +1721,27 @@ pub async fn revoke_cert(
                 StatusCode::FORBIDDEN,
                 "unauthorized",
                 "certificate does not belong to acme account",
+            );
+        }
+    } else {
+        // jwk (certificate-key) path: RFC 8555 §7.6 requires the requester prove
+        // possession of the certified private key, not just any valid keypair.
+        let Some(jwk) = jws.jwk.as_ref() else {
+            return acme_error(
+                StatusCode::FORBIDDEN,
+                "unauthorized",
+                "revocation requires either an account kid or the certificate's own key",
+            );
+        };
+        let cert_pem = storage::read_certificate_pem(&record.cert_path);
+        let proven = cert_pem
+            .as_deref()
+            .is_some_and(|pem| jwk_matches_cert_public_key(jwk, pem));
+        if !proven {
+            return acme_error(
+                StatusCode::FORBIDDEN,
+                "unauthorized",
+                "jwk does not match the certificate's public key",
             );
         }
     }
