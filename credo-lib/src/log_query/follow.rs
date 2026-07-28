@@ -81,13 +81,23 @@ pub async fn build_follow_stream(
         .ok_or_else(|| AppError::BadRequest("file logging is not enabled".to_string()))?;
     let dir = handle
         .log_dir()
-        .ok_or_else(|| AppError::BadRequest("file logging is not enabled".to_string()))?;
+        .ok_or_else(|| AppError::BadRequest("file logging is not enabled".to_string()))?
+        .to_path_buf();
     let basename = handle
         .log_basename()
-        .ok_or_else(|| AppError::BadRequest("file logging is not enabled".to_string()))?;
+        .ok_or_else(|| AppError::BadRequest("file logging is not enabled".to_string()))?
+        .to_string();
 
-    let historical = read_historical_lines(dir, basename, params, Utc::now())
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("reading log file: {e}")))?;
+    // Same rationale as historical_logs: don't block this connection's async
+    // task (and the worker thread under it) on synchronous file I/O that a
+    // large backlog could make slow.
+    let params_owned = params.clone();
+    let historical = tokio::task::spawn_blocking(move || {
+        read_historical_lines(&dir, &basename, &params_owned, Utc::now())
+    })
+    .await
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("log query task panicked: {e}")))?
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("reading log file: {e}")))?;
 
     let level = params.level.as_deref().map(parse_level_filter);
     let q = params.q.clone();

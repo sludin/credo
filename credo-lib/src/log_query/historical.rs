@@ -6,7 +6,7 @@ use crate::error::AppError;
 use crate::log::LoggingHandle;
 
 use super::filter::{line_in_window, line_passes_filter, parse_level_filter, resolve_window};
-use super::{LogQueryParams, DEFAULT_LOG_LIMIT};
+use super::{LogQueryParams, DEFAULT_LOG_LIMIT, MAX_LOG_LIMIT};
 
 /// Lists this basename's log files in chronological order (oldest first,
 /// current file last). Only includes files that actually exist - a
@@ -56,7 +56,10 @@ pub fn read_historical_lines(
     let (since, until) = resolve_window(params, now);
     let level = params.level.as_deref().map(parse_level_filter);
     let q = params.q.as_deref();
-    let limit = params.limit.unwrap_or(DEFAULT_LOG_LIMIT).max(1);
+    let limit = params
+        .limit
+        .unwrap_or(DEFAULT_LOG_LIMIT)
+        .clamp(1, MAX_LOG_LIMIT);
 
     let mut kept: std::collections::VecDeque<String> =
         std::collections::VecDeque::with_capacity(limit.min(1024));
@@ -99,12 +102,23 @@ pub async fn historical_logs(
 ) -> Result<axum::Json<Vec<String>>, AppError> {
     let dir = handle
         .log_dir()
-        .ok_or_else(|| AppError::BadRequest("file logging is not enabled".to_string()))?;
+        .ok_or_else(|| AppError::BadRequest("file logging is not enabled".to_string()))?
+        .to_path_buf();
     let basename = handle
         .log_basename()
-        .ok_or_else(|| AppError::BadRequest("file logging is not enabled".to_string()))?;
-    let lines = read_historical_lines(dir, basename, params, Utc::now())
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("reading log file: {e}")))?;
+        .ok_or_else(|| AppError::BadRequest("file logging is not enabled".to_string()))?
+        .to_string();
+    let params = params.clone();
+    // Reading (potentially many) log files is blocking I/O; run it on a
+    // blocking-pool thread instead of directly in this async fn, so a large
+    // or slow query can't stall the Tokio worker thread handling other
+    // concurrent requests.
+    let lines = tokio::task::spawn_blocking(move || {
+        read_historical_lines(&dir, &basename, &params, Utc::now())
+    })
+    .await
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("log query task panicked: {e}")))?
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("reading log file: {e}")))?;
     Ok(axum::Json(lines))
 }
 
@@ -282,6 +296,38 @@ mod tests {
         let lines = read_historical_lines(missing, "svc", &LogQueryParams::default(), now)
             .expect("missing dir must not error");
         assert!(lines.is_empty());
+    }
+
+    /// Regression test for a Medium finding: a caller-supplied `limit` had
+    /// no upper bound, so a huge `limit` could make one query read and hold
+    /// the service's entire retained log history in memory. `limit` must be
+    /// clamped to `MAX_LOG_LIMIT` regardless of what's requested — verified
+    /// here by writing more lines than the cap and requesting far more than
+    /// that, then checking only `MAX_LOG_LIMIT` (the most recent) come back.
+    #[test]
+    fn read_historical_lines_clamps_limit_to_max() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let total = MAX_LOG_LIMIT + 5;
+        let mut contents = String::with_capacity(total * 40);
+        for i in 0..total {
+            contents.push_str(&format!("2024-01-15T10:00:00Z  INFO line {i}\n"));
+        }
+        write_log_file(dir.path(), "svc.log", &contents);
+
+        let params = LogQueryParams {
+            limit: Some(MAX_LOG_LIMIT * 100),
+            ..Default::default()
+        };
+        let now = dt("2024-01-15T12:00:00Z");
+        let lines = read_historical_lines(dir.path(), "svc", &params, now).expect("read");
+        assert_eq!(
+            lines.len(),
+            MAX_LOG_LIMIT,
+            "requested limit far above MAX_LOG_LIMIT must still be clamped"
+        );
+        // Kept the most recent MAX_LOG_LIMIT lines, not the oldest.
+        assert!(lines[0].contains(&format!("line {}", total - MAX_LOG_LIMIT)));
+        assert!(lines[lines.len() - 1].contains(&format!("line {}", total - 1)));
     }
 
     #[test]

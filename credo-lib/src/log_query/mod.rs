@@ -35,7 +35,7 @@ use crate::log::LoggingHandle;
 /// — see that function's doc for why). `q` is a case-insensitive substring
 /// filter. `follow` requests a live-tailing SSE stream instead of a
 /// historical JSON array (see `respond_to_log_query`).
-#[derive(Debug, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
 pub struct LogQueryParams {
     pub since: Option<String>,
     pub until: Option<String>,
@@ -51,6 +51,12 @@ pub struct LogQueryParams {
 
 /// Cap on returned lines when `limit` isn't specified.
 pub const DEFAULT_LOG_LIMIT: usize = 5000;
+
+/// Hard ceiling on `limit`, regardless of what a caller requests — without
+/// this, a large `limit` query would read and hold the service's entire
+/// retained log history in memory in one response, a resource-exhaustion
+/// vector on `/admin/logs`, `/logs`.
+pub const MAX_LOG_LIMIT: usize = 20_000;
 
 /// Single entry point for a service's `/logs` route to call after its own
 /// auth check: historical JSON when `params.follow` is false, a
