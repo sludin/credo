@@ -137,6 +137,91 @@ async fn get_certstore_entry_404_for_unknown() {
     assert_eq!(resp.status(), 404);
 }
 
+/// Regression test for a Medium finding: axum's `Path<String>` extractor
+/// percent-decodes the *entire* captured segment (including `%2F`) after
+/// route matching has already treated it as one opaque segment — so a name
+/// containing percent-encoded `..%2F` sequences reintroduces a literal `..`
+/// path component right before it's joined into a filesystem path, letting
+/// an authenticated readonly account read files outside the certstore tree.
+#[tokio::test]
+async fn get_certstore_pem_rejects_path_traversal() {
+    let shepherd = TestShepherd::start_authed().await.unwrap();
+    let cert_store_dir = shepherd.state.config.load().cert_store_dir.clone();
+
+    // The traversal only resolves through a `live/` dir that actually exists
+    // (the OS must be able to walk into it before backing out via `..`) — any
+    // real instance with at least one issued cert has this directory.
+    std::fs::create_dir_all(cert_store_dir.join("live")).unwrap();
+
+    // A file just outside the certstore dir that traversal would reach:
+    // cert_store_dir/live/<name>/cert.pem with name="../../marker" resolves
+    // to <tmp>/marker/cert.pem (certstore/live -> certstore -> tmp -> marker).
+    let marker_dir = shepherd.dir.path().join("marker");
+    std::fs::create_dir_all(&marker_dir).unwrap();
+    std::fs::write(marker_dir.join("cert.pem"), "SECRET OUTSIDE CERTSTORE").unwrap();
+
+    let resp = shepherd
+        .client
+        .get(format!(
+            "{}/admin/certstore/..%2f..%2fmarker/pem",
+            shepherd.dashboard_url
+        ))
+        .send()
+        .await
+        .unwrap();
+
+    assert_ne!(
+        resp.status(),
+        200,
+        "traversal must not succeed in reading a file outside the certstore"
+    );
+    let body = resp.text().await.unwrap();
+    assert!(
+        !body.contains("SECRET OUTSIDE CERTSTORE"),
+        "response must never contain the out-of-tree file's contents"
+    );
+}
+
+/// Same traversal guard, for GET /admin/certstore/:name (the entry-metadata
+/// endpoint, which goes through cert_store::read_cert_store_entry).
+#[tokio::test]
+async fn get_certstore_entry_rejects_path_traversal() {
+    let shepherd = TestShepherd::start_authed().await.unwrap();
+    let cert_store_dir = shepherd.state.config.load().cert_store_dir.clone();
+    std::fs::create_dir_all(cert_store_dir.join("live")).unwrap();
+
+    // Must be a real, parseable cert — read_cert_store_entry parses the PEM
+    // as X.509 and returns None on failure, which would mask a traversal
+    // "success" as an unrelated parse failure and make this test meaningless.
+    let (cert_pem, _key_pem, _fullchain_pem) = credo_test::cert_gen::generate_signed_cert(
+        "marker2.credo.test",
+        &["marker2.credo.test"],
+        &[],
+        30,
+        shepherd.dir.path(),
+    )
+    .unwrap();
+    let marker_dir = shepherd.dir.path().join("marker2");
+    std::fs::create_dir_all(&marker_dir).unwrap();
+    std::fs::write(marker_dir.join("cert.pem"), &cert_pem).unwrap();
+
+    let resp = shepherd
+        .client
+        .get(format!(
+            "{}/admin/certstore/..%2f..%2fmarker2",
+            shepherd.dashboard_url
+        ))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.status(),
+        404,
+        "traversal attempt must be treated as not-found, not resolved"
+    );
+}
+
 /// GET /admin/config-summary returns key config fields.
 #[tokio::test]
 async fn config_summary_returns_fields() {

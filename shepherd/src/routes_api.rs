@@ -364,6 +364,9 @@ pub async fn get_certstore_pem(
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
+    if !cert_store::is_safe_cert_name(&name) {
+        return Err(AppError::BadRequest("Invalid certificate name".to_string()));
+    }
     let path = state
         .config
         .load()
@@ -382,6 +385,9 @@ pub async fn get_certstore_fullchain(
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
     check_min_role(Some(&user.role), &Role::Readonly)?;
+    if !cert_store::is_safe_cert_name(&name) {
+        return Err(AppError::BadRequest("Invalid certificate name".to_string()));
+    }
     let path = state
         .config
         .load()

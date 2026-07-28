@@ -19,7 +19,18 @@ pub struct CertMaterial {
     pub ca: Option<String>,
 }
 
+/// True iff `name` is safe to use as a single path segment under the
+/// certstore's `live/`/`archive/` directories — no directory traversal, no
+/// path separators. Real cert/assignment names are simple identifiers and
+/// never legitimately need to escape a single directory level.
+pub fn is_safe_cert_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\'])
+}
+
 pub fn read_cert_material(store_dir: &Path, cert_name: &str) -> Option<CertMaterial> {
+    if !is_safe_cert_name(cert_name) {
+        return None;
+    }
     let live_dir = store_dir.join("live").join(cert_name);
     let cert_pem = std::fs::read_to_string(live_dir.join("cert.pem")).ok()?;
     let chain_pem = std::fs::read_to_string(live_dir.join("chain.pem")).ok();
@@ -49,6 +60,9 @@ pub fn read_cert_material(store_dir: &Path, cert_name: &str) -> Option<CertMater
 // ---------------------------------------------------------------------------
 
 pub fn read_cert_store_entry(store_dir: &Path, cert_name: &str) -> Option<CertStoreEntry> {
+    if !is_safe_cert_name(cert_name) {
+        return None;
+    }
     let cert_path = store_dir.join("live").join(cert_name).join("cert.pem");
     let pem_str = std::fs::read_to_string(&cert_path).ok()?;
 
