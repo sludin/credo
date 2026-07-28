@@ -12,7 +12,8 @@ use crate::corgis::load_corgis;
 use crate::issuance::issue_cert;
 use crate::issuance::RateLimitedError;
 use crate::renewal_jobs::{
-    append_trace, complete_job, create_job, fail_job, rate_limit_job, update_phase,
+    append_trace, complete_job, create_job_if_not_active, fail_job, rate_limit_job, update_phase,
+    JobGate,
 };
 use crate::state::AppState;
 use crate::types::{
@@ -432,33 +433,40 @@ async fn cert_maintenance(
         return Ok(());
     }
 
-    // Don't start a second issuance if one is already in flight or rate-limited.
+    // Reserve a job slot before doing anything else, atomically under one
+    // lock acquisition. This must happen *before* requesting a CSR: the
+    // reconcile loop's mutation-triggered maintenance and the periodic
+    // renewal sweep run as independent tasks and can both reach this point
+    // for the same cert. If the "is a job active?" check and the job's
+    // creation aren't the same atomic step, both callers can see "no active
+    // job," both request a fresh CSR from Corgi, and clobber Corgi's single
+    // pending-key file mid-flight — installing a cert against the wrong key.
+    let domains = build_domains(assignment);
+    let job_id = match create_job_if_not_active(
+        &state.renewal_jobs,
+        &assignment.cert_name,
+        domains.clone(),
+        &assignment.ca,
+    )
+    .await
     {
-        let jobs = state.renewal_jobs.read().await;
-        let active = jobs
-            .values()
-            .find(|j| j.cert_name == assignment.cert_name && !j.phase.is_terminal());
-        if let Some(job) = active {
-            if job.phase == crate::types::RenewalPhase::RateLimited {
-                if let Some(until) = job.rate_limited_until {
-                    if until > Utc::now() {
-                        tracing::info!(
-                            cert = %assignment.cert_name,
-                            until = %until,
-                            "Cert is rate-limited; skipping until window reopens"
-                        );
-                        return Ok(());
-                    }
-                }
-            } else {
-                tracing::debug!(
-                    cert = %assignment.cert_name,
-                    "Renewal already in progress; skipping poll-triggered renewal"
-                );
-                return Ok(());
-            }
+        JobGate::Created(id) => id,
+        JobGate::AlreadyInProgress => {
+            tracing::debug!(
+                cert = %assignment.cert_name,
+                "Renewal already in progress; skipping poll-triggered renewal"
+            );
+            return Ok(());
         }
-    }
+        JobGate::StillRateLimited(until) => {
+            tracing::info!(
+                cert = %assignment.cert_name,
+                %until,
+                "Cert is rate-limited; skipping until window reopens"
+            );
+            return Ok(());
+        }
+    };
 
     let renewal_reason = if local_cert.is_none() {
         "no cert in store"
@@ -475,6 +483,8 @@ async fn cert_maintenance(
         threshold = renew_before,
         "Certificate needs renewal"
     );
+
+    update_phase(&state.renewal_jobs, job_id, RenewalPhase::SubmittingOrder).await;
 
     // Request CSR from corgi
     let csr_resp = corgi_post::<CsrResponse>(
@@ -494,23 +504,21 @@ async fn cert_maintenance(
                 error = %e,
                 "Could not obtain CSR; skipping renewal until corgi is reachable"
             );
+            // The job was already reserved above — it must be failed here,
+            // not left dangling in a non-terminal phase forever (which would
+            // permanently block all future renewal attempts for this cert).
+            fail_job(
+                &state.renewal_jobs,
+                job_id,
+                format!("Could not obtain CSR: {e:#}"),
+            )
+            .await;
+            if let Some(path) = &state.renewal_jobs_history_path {
+                crate::renewal_jobs::persist_terminal_jobs(&state.renewal_jobs, path).await;
+            }
             return Ok(());
         }
     };
-
-    // Build domain list
-    let domains = build_domains(assignment);
-
-    // Create a renewal job for tracking
-    let job_id = create_job(
-        &state.renewal_jobs,
-        &assignment.cert_name,
-        domains.clone(),
-        &assignment.ca,
-    )
-    .await;
-
-    update_phase(&state.renewal_jobs, job_id, RenewalPhase::SubmittingOrder).await;
 
     // Issue via ACME
     let ca_config = match state

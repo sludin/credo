@@ -29,6 +29,70 @@ pub async fn create_job(store: &JobStore, cert_name: &str, domains: Vec<String>,
     id
 }
 
+/// Result of `create_job_if_not_active`.
+pub enum JobGate {
+    /// No conflicting job existed; a new one was created and reserved.
+    Created(Uuid),
+    /// A non-terminal, non-rate-limited job already exists for this cert.
+    AlreadyInProgress,
+    /// A rate-limited job exists and its window hasn't reopened yet.
+    StillRateLimited(DateTime<Utc>),
+}
+
+/// Atomically check for a conflicting job and create a new one under a
+/// single write-lock acquisition, closing the check-then-act window between
+/// "is a job already active?" and "create one" — without this, two callers
+/// (e.g. the reconcile loop's mutation-triggered maintenance and the
+/// periodic renewal sweep, which run as independent tasks) could both see
+/// "no active job," both proceed to request a fresh CSR from Corgi, and
+/// clobber Corgi's single pending-key file mid-flight, installing a
+/// certificate against the wrong key.
+///
+/// Mirrors the same rate-limit-retry semantics `cert_maintenance` used to
+/// implement via a separate read-then-later-create pair: a non-terminal job
+/// blocks a new one *unless* it's specifically `RateLimited` and its window
+/// has passed, in which case a new job is created alongside it.
+pub async fn create_job_if_not_active(
+    store: &JobStore,
+    cert_name: &str,
+    domains: Vec<String>,
+    ca: &str,
+) -> JobGate {
+    let mut jobs = store.write().await;
+    if let Some(job) = jobs
+        .values()
+        .find(|j| j.cert_name == cert_name && !j.phase.is_terminal())
+    {
+        if job.phase == RenewalPhase::RateLimited {
+            if let Some(until) = job.rate_limited_until {
+                if until > Utc::now() {
+                    return JobGate::StillRateLimited(until);
+                }
+            }
+        } else {
+            return JobGate::AlreadyInProgress;
+        }
+    }
+
+    let now = Utc::now().timestamp();
+    let job = RenewalJob {
+        id: Uuid::new_v4(),
+        cert_name: cert_name.to_string(),
+        ca: ca.to_string(),
+        domains,
+        phase: RenewalPhase::Queued,
+        created_at: now,
+        updated_at: now,
+        error: None,
+        fingerprint256: None,
+        trace: vec![],
+        rate_limited_until: None,
+    };
+    let id = job.id;
+    jobs.insert(id, job);
+    JobGate::Created(id)
+}
+
 pub async fn update_phase(store: &JobStore, id: Uuid, phase: RenewalPhase) {
     let mut jobs = store.write().await;
     if let Some(job) = jobs.get_mut(&id) {
@@ -188,5 +252,112 @@ mod tests {
     async fn append_trace_noop_for_missing_job() {
         let store: JobStore = Arc::new(RwLock::new(HashMap::new()));
         append_trace(&store, uuid::Uuid::new_v4(), "step", None, None, None).await;
+    }
+
+    #[tokio::test]
+    async fn create_job_if_not_active_creates_when_none_exists() {
+        let store: JobStore = Arc::new(RwLock::new(HashMap::new()));
+        let gate = create_job_if_not_active(
+            &store,
+            "example.com",
+            vec!["example.com".into()],
+            "letsencrypt",
+        )
+        .await;
+        assert!(matches!(gate, JobGate::Created(_)));
+    }
+
+    /// Regression test for a Medium finding: two concurrent callers for the
+    /// same cert must not both be told "no active job" — closing the window
+    /// that let both proceed to request a CSR from Corgi and clobber its
+    /// single pending-key file mid-flight.
+    #[tokio::test]
+    async fn create_job_if_not_active_rejects_second_concurrent_call() {
+        let store: JobStore = Arc::new(RwLock::new(HashMap::new()));
+
+        let first = create_job_if_not_active(
+            &store,
+            "example.com",
+            vec!["example.com".into()],
+            "letsencrypt",
+        )
+        .await;
+        assert!(matches!(first, JobGate::Created(_)));
+
+        let second = create_job_if_not_active(
+            &store,
+            "example.com",
+            vec!["example.com".into()],
+            "letsencrypt",
+        )
+        .await;
+        assert!(
+            matches!(second, JobGate::AlreadyInProgress),
+            "a second call for the same cert while the first job is still active must be rejected"
+        );
+
+        // Only one job should ever have been created.
+        assert_eq!(store.read().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn create_job_if_not_active_allows_retry_after_rate_limit_window_passes() {
+        let store: JobStore = Arc::new(RwLock::new(HashMap::new()));
+        let id = create_job(
+            &store,
+            "example.com",
+            vec!["example.com".into()],
+            "letsencrypt",
+        )
+        .await;
+        {
+            let mut jobs = store.write().await;
+            let job = jobs.get_mut(&id).unwrap();
+            job.phase = RenewalPhase::RateLimited;
+            job.rate_limited_until = Some(Utc::now() - chrono::Duration::seconds(1));
+        }
+
+        let gate = create_job_if_not_active(
+            &store,
+            "example.com",
+            vec!["example.com".into()],
+            "letsencrypt",
+        )
+        .await;
+        assert!(
+            matches!(gate, JobGate::Created(_)),
+            "a new job must be allowed once the rate-limit window has passed"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_job_if_not_active_still_blocked_within_rate_limit_window() {
+        let store: JobStore = Arc::new(RwLock::new(HashMap::new()));
+        let id = create_job(
+            &store,
+            "example.com",
+            vec!["example.com".into()],
+            "letsencrypt",
+        )
+        .await;
+        let until = Utc::now() + chrono::Duration::seconds(60);
+        {
+            let mut jobs = store.write().await;
+            let job = jobs.get_mut(&id).unwrap();
+            job.phase = RenewalPhase::RateLimited;
+            job.rate_limited_until = Some(until);
+        }
+
+        let gate = create_job_if_not_active(
+            &store,
+            "example.com",
+            vec!["example.com".into()],
+            "letsencrypt",
+        )
+        .await;
+        match gate {
+            JobGate::StillRateLimited(got) => assert_eq!(got, until),
+            _ => panic!("expected StillRateLimited"),
+        }
     }
 }
