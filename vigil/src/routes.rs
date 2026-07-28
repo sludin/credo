@@ -402,12 +402,15 @@ async fn sign_certificate(
         revoke_reason: None,
     };
 
-    let stored = storage::issue_certificate_record(
-        &config.cert_db_path,
-        &config.certs_dir,
-        record,
-        &signed.fullchain_pem,
-    )?;
+    let stored = {
+        let _storage_guard = state.inner.storage_lock.lock().await;
+        storage::issue_certificate_record(
+            &config.cert_db_path,
+            &config.certs_dir,
+            record,
+            &signed.fullchain_pem,
+        )?
+    };
 
     let _ = crate::ctlog::append_ct_log(
         &config.ct_log_path,
@@ -476,15 +479,18 @@ async fn revoke_certificate(
         .reason
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "unspecified".to_string());
-    let updated = storage::revoke_certificate(
-        &config.cert_db_path,
-        &id,
-        &auth_user.id,
-        &reason,
-        Some(auth_user.id.clone()),
-        None,
-        Some("api-user".to_string()),
-    )?
+    let updated = {
+        let _storage_guard = state.inner.storage_lock.lock().await;
+        storage::revoke_certificate(
+            &config.cert_db_path,
+            &id,
+            &auth_user.id,
+            &reason,
+            Some(auth_user.id.clone()),
+            None,
+            Some("api-user".to_string()),
+        )?
+    }
     .ok_or_else(|| AppError::NotFound("Certificate not found.".to_string()))?;
 
     let _ = crate::ctlog::append_ct_log(

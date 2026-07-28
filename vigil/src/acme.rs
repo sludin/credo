@@ -1506,12 +1506,20 @@ pub async fn finalize_order(
         revoke_reason: None,
     };
 
-    if let Err(e) = storage::issue_certificate_record(
-        &config.cert_db_path,
-        &config.certs_dir,
-        record,
-        &signed.fullchain_pem,
-    ) {
+    let issue_result = {
+        // Serialize the certstore's read-modify-write against every other
+        // mutating operation (revoke, another finalize, account save) — the
+        // JSON-file-backed store has no other concurrency control, so two
+        // concurrent writers can otherwise silently drop one's update.
+        let _storage_guard = state.inner.storage_lock.lock().await;
+        storage::issue_certificate_record(
+            &config.cert_db_path,
+            &config.certs_dir,
+            record,
+            &signed.fullchain_pem,
+        )
+    };
+    if let Err(e) = issue_result {
         tracing::error!("Failed to persist certificate: {}", e);
         return acme_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1706,17 +1714,20 @@ pub async fn revoke_cert(
         (None, Some("acme-cert-key".to_string()))
     };
 
-    let updated = storage::revoke_certificate(
-        &config.cert_db_path,
-        &record.id,
-        &revoked_by,
-        &reason,
-        None,
-        revoked_by_acme,
-        revoked_via,
-    )
-    .ok()
-    .flatten();
+    let updated = {
+        let _storage_guard = state.inner.storage_lock.lock().await;
+        storage::revoke_certificate(
+            &config.cert_db_path,
+            &record.id,
+            &revoked_by,
+            &reason,
+            None,
+            revoked_by_acme,
+            revoked_via,
+        )
+        .ok()
+        .flatten()
+    };
 
     let Some(updated) = updated else {
         return acme_error(StatusCode::NOT_FOUND, "malformed", "certificate not found");
@@ -1918,6 +1929,7 @@ async fn save_accounts(state: &AppState) -> anyhow::Result<()> {
         let map = state.inner.acme_accounts.read().await;
         map.values().cloned().collect()
     };
+    let _storage_guard = state.inner.storage_lock.lock().await;
     storage::write_acme_accounts(&state.config().acme_accounts_db_path, &accounts)
 }
 
