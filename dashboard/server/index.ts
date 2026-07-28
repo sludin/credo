@@ -18,6 +18,7 @@ import { requireAuth, makeRoleRefresh } from './auth/middleware';
 import { createAuthRouter } from './routes-auth';
 import { LoggingHandle, createRequestLogMiddleware } from './logging';
 import { createLogsRouter } from './routes-logs';
+import { isValidHostname } from './dns-validate';
 
 type Assignment = {
   corgi: string;
@@ -680,6 +681,10 @@ async function main(): Promise<void> {
     const targetValue = typeof body.targetValue === 'string' ? body.targetValue : '';
     if (!hostname) {
       res.status(400).json({ error: 'hostname required' });
+      return;
+    }
+    if (!isValidHostname(hostname)) {
+      res.status(400).json({ error: 'hostname is not a valid hostname' });
       return;
     }
 
