@@ -47,9 +47,16 @@ pub async fn get_assignments(
 
 pub async fn get_cert(
     State(state): State<AppState>,
-    axum::Extension(_node): axum::Extension<CorgiNodeConfig>,
+    axum::Extension(node): axum::Extension<CorgiNodeConfig>,
     Path((corgi_id, cert_name)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    if node.name != corgi_id {
+        return Err(AppError::Forbidden(format!(
+            "Authenticated as '{}' but requested cert material for '{}'",
+            node.name, corgi_id
+        )));
+    }
+
     let assignments = state.assignments.read().await;
     let assignment = assignments
         .iter()
@@ -88,6 +95,13 @@ pub async fn provision_cert(
     Path((corgi_id, cert_name)): Path<(String, String)>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    if node.name != corgi_id {
+        return Err(AppError::Forbidden(format!(
+            "Authenticated as '{}' but requested provisioning for '{}'",
+            node.name, corgi_id
+        )));
+    }
+
     let assignments = state.assignments.read().await;
     let assignment = assignments
         .iter()
@@ -223,6 +237,13 @@ pub async fn renew_cert(
     Path((corgi_id, cert_name)): Path<(String, String)>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
+    if node.name != corgi_id {
+        return Err(AppError::Forbidden(format!(
+            "Authenticated as '{}' but requested renewal for '{}'",
+            node.name, corgi_id
+        )));
+    }
+
     let assignments = state.assignments.read().await;
     let assignment = assignments
         .iter()
@@ -352,9 +373,16 @@ pub async fn renew_cert(
 
 pub async fn renew_status(
     State(state): State<AppState>,
-    axum::Extension(_node): axum::Extension<CorgiNodeConfig>,
+    axum::Extension(node): axum::Extension<CorgiNodeConfig>,
     Path((corgi_id, cert_name)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    if node.name != corgi_id {
+        return Err(AppError::Forbidden(format!(
+            "Authenticated as '{}' but requested renewal status for '{}'",
+            node.name, corgi_id
+        )));
+    }
+
     let assignments = state.assignments.read().await;
     let _assignment = assignments
         .iter()
