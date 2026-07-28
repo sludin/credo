@@ -19,6 +19,7 @@ import { createAuthRouter } from './routes-auth';
 import { LoggingHandle, createRequestLogMiddleware } from './logging';
 import { createLogsRouter } from './routes-logs';
 import { isValidHostname } from './dns-validate';
+import { isBlockedSsrfTarget } from './ssrf-guard';
 
 type Assignment = {
   corgi: string;
@@ -388,9 +389,25 @@ async function main(): Promise<void> {
     if (!hostParam) { res.status(400).json({ error: 'host query parameter required' }); return; }
     const port = isNaN(portParam) || portParam < 1 || portParam > 65535 ? 443 : portParam;
 
+    // Resolve once, check the resolved address (not just the hostname
+    // string) against the SSRF blocklist, and connect to that exact address
+    // — closes the DNS-rebinding gap where a hostname could resolve to a
+    // safe address at check time and a blocked one at connect time.
+    let resolvedIp: string;
+    try {
+      resolvedIp = (await dns.promises.lookup(hostParam)).address;
+    } catch {
+      res.status(400).json({ error: `Could not resolve host: ${hostParam}` });
+      return;
+    }
+    if (isBlockedSsrfTarget(resolvedIp)) {
+      res.status(400).json({ error: 'Host resolves to a disallowed address' });
+      return;
+    }
+
     const pems = await new Promise<string[]>((resolve, reject) => {
       const socket = tls.connect(
-        { host: hostParam, port, servername: hostParam, rejectUnauthorized: false, timeout: 10000 },
+        { host: resolvedIp, port, servername: hostParam, rejectUnauthorized: false, timeout: 10000 },
         () => {
           const peer = socket.getPeerCertificate(true);
           socket.destroy();
