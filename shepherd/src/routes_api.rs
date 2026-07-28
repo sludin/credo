@@ -1405,21 +1405,50 @@ fn verify_pop_cert(chain_pem: &str, ca_path: &std::path::Path) -> anyhow::Result
         cert.verify_signature(Some(issuer.public_key())).is_ok()
     };
 
+    // An intermediate promoted into the trusted pool must actually be a CA
+    // (BasicConstraints cA=true) and currently within its validity window —
+    // without this, a non-CA leaf cert (or an expired one) signed by a
+    // trusted anchor could itself "vouch for" another certificate.
+    let is_valid_promotable_ca = |der: &[u8]| -> bool {
+        let Ok((_, cert)) = X509Certificate::from_der(der) else {
+            return false;
+        };
+        if !cert.validity().is_valid() {
+            return false;
+        }
+        cert.basic_constraints()
+            .ok()
+            .flatten()
+            .map(|bc| bc.value.ca)
+            .unwrap_or(false)
+    };
+
     // Promote any chain-provided intermediate that is anchored by a currently
     // trusted cert. Repeat until stable (handles arbitrary ordering and depth).
     let mut changed = true;
     while changed {
         changed = false;
         for candidate in &chain_ders[1..] {
-            if !trusted.contains(candidate) && trusted.iter().any(|t| is_signed_by(candidate, t)) {
+            if !trusted.contains(candidate)
+                && is_valid_promotable_ca(candidate)
+                && trusted.iter().any(|t| is_signed_by(candidate, t))
+            {
                 trusted.push(candidate.clone());
                 changed = true;
             }
         }
     }
 
-    // Check the leaf against the expanded trusted pool.
+    // Check the leaf against the expanded trusted pool. The leaf itself must
+    // also be within its validity window — an expired enrollment cert must
+    // not be accepted just because it was once validly signed.
     let leaf = &chain_ders[0];
+    let leaf_currently_valid = X509Certificate::from_der(leaf)
+        .map(|(_, cert)| cert.validity().is_valid())
+        .unwrap_or(false);
+    if !leaf_currently_valid {
+        anyhow::bail!("Certificate is not within its validity period");
+    }
     if trusted.iter().any(|t| is_signed_by(leaf, t)) {
         return Ok(());
     }
@@ -1766,6 +1795,109 @@ mod tests {
                 ("q".to_string(), "hello world & more".to_string()),
                 ("level".to_string(), "warn".to_string()),
             ]
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // verify_pop_cert
+    // -----------------------------------------------------------------
+
+    fn make_ca() -> rcgen::Certificate {
+        let mut params = rcgen::CertificateParams::new(vec![]);
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        params.not_before = rcgen::date_time_ymd(2020, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2035, 1, 1);
+        rcgen::Certificate::from_params(params).unwrap()
+    }
+
+    fn make_leaf(
+        not_before: time::OffsetDateTime,
+        not_after: time::OffsetDateTime,
+    ) -> rcgen::Certificate {
+        let mut params = rcgen::CertificateParams::new(vec!["leaf.credo.test".to_string()]);
+        params.not_before = not_before;
+        params.not_after = not_after;
+        rcgen::Certificate::from_params(params).unwrap()
+    }
+
+    fn make_non_ca_intermediate() -> rcgen::Certificate {
+        let mut params = rcgen::CertificateParams::new(vec![]);
+        params.is_ca = rcgen::IsCa::NoCa;
+        params.not_before = rcgen::date_time_ymd(2020, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2035, 1, 1);
+        rcgen::Certificate::from_params(params).unwrap()
+    }
+
+    fn write_ca_bundle(dir: &std::path::Path, ca: &rcgen::Certificate) -> std::path::PathBuf {
+        let path = dir.join("ca.pem");
+        std::fs::write(&path, ca.serialize_pem().unwrap()).unwrap();
+        path
+    }
+
+    #[test]
+    fn verify_pop_cert_accepts_valid_leaf_signed_by_ca() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca = make_ca();
+        let ca_path = write_ca_bundle(dir.path(), &ca);
+
+        let leaf = make_leaf(
+            rcgen::date_time_ymd(2020, 1, 1),
+            rcgen::date_time_ymd(2035, 1, 1),
+        );
+        let leaf_pem = leaf.serialize_pem_with_signer(&ca).unwrap();
+
+        verify_pop_cert(&leaf_pem, &ca_path)
+            .expect("a currently-valid leaf signed by the CA must verify");
+    }
+
+    /// Regression test for a Medium finding: verify_pop_cert never checked
+    /// certificate validity dates, so an expired enrollment cert (still
+    /// correctly signed by the CA) would still pass verification.
+    #[test]
+    fn verify_pop_cert_rejects_expired_leaf() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca = make_ca();
+        let ca_path = write_ca_bundle(dir.path(), &ca);
+
+        // Validity window entirely in the past.
+        let leaf = make_leaf(
+            rcgen::date_time_ymd(2020, 1, 1),
+            rcgen::date_time_ymd(2021, 1, 1),
+        );
+        let leaf_pem = leaf.serialize_pem_with_signer(&ca).unwrap();
+
+        let result = verify_pop_cert(&leaf_pem, &ca_path);
+        assert!(result.is_err(), "an expired leaf cert must not verify");
+    }
+
+    /// Regression test for a Medium finding: verify_pop_cert promoted any
+    /// chain-supplied cert that had a valid signature from a trusted anchor
+    /// into the trusted pool, without checking BasicConstraints — so a
+    /// non-CA cert (validly signed by the real CA) could itself "vouch for"
+    /// a further leaf cert it signed.
+    #[test]
+    fn verify_pop_cert_rejects_leaf_vouched_for_by_non_ca_intermediate() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca = make_ca();
+        let ca_path = write_ca_bundle(dir.path(), &ca);
+
+        // A non-CA cert, itself validly signed by the real CA...
+        let fake_intermediate = make_non_ca_intermediate();
+        let fake_intermediate_pem = fake_intermediate.serialize_pem_with_signer(&ca).unwrap();
+
+        // ...used to sign a further leaf, which must NOT be trusted as a
+        // result, since the signer has no CA authority.
+        let leaf = make_leaf(
+            rcgen::date_time_ymd(2020, 1, 1),
+            rcgen::date_time_ymd(2035, 1, 1),
+        );
+        let leaf_pem = leaf.serialize_pem_with_signer(&fake_intermediate).unwrap();
+
+        let chain_pem = format!("{leaf_pem}{fake_intermediate_pem}");
+        let result = verify_pop_cert(&chain_pem, &ca_path);
+        assert!(
+            result.is_err(),
+            "a leaf signed by a non-CA intermediate must not verify, even if that intermediate itself has a valid CA signature"
         );
     }
 }
