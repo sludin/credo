@@ -18,7 +18,7 @@ fn is_uri(value: &str) -> bool {
     value.contains("://")
 }
 
-fn normalize_dns(name: &str) -> String {
+pub(crate) fn normalize_dns(name: &str) -> String {
     name.trim().to_lowercase().trim_end_matches('.').to_string()
 }
 

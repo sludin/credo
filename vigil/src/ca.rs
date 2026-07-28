@@ -517,11 +517,66 @@ pub fn sign_csr(
     extra_sans: Option<&[String]>,
     config: &VigilConfig,
 ) -> Result<SignedCertificate> {
+    sign_csr_impl(csr_pem, days, extra_sans, None, config)
+}
+
+/// Like `sign_csr`, but for ACME finalize: the CSR's own SAN/CN names must
+/// already be a subset of `validated_sans` (the order's challenge-validated
+/// identifiers). Without this, a client could complete domain-control
+/// validation for one name, then embed an *additional*, never-challenged
+/// name directly in the finalize CSR — `sign_csr`'s ordinary behavior is to
+/// union the CSR's own SANs with the caller-supplied extra ones, which is
+/// correct for the trusted admin/bootstrap callers but not for ACME, where
+/// "extra_sans" is meant to be the full authoritative set.
+pub fn sign_csr_restricted(
+    csr_pem: &str,
+    days: u32,
+    validated_sans: &[String],
+    config: &VigilConfig,
+) -> Result<SignedCertificate> {
+    sign_csr_impl(
+        csr_pem,
+        days,
+        Some(validated_sans),
+        Some(validated_sans),
+        config,
+    )
+}
+
+fn sign_csr_impl(
+    csr_pem: &str,
+    days: u32,
+    extra_sans: Option<&[String]>,
+    require_subset_of: Option<&[String]>,
+    config: &VigilConfig,
+) -> Result<SignedCertificate> {
     let csr_der = pem::parse(csr_pem.trim())
         .context("Parsing CSR PEM")?
         .into_contents();
 
     let fields = extract_csr_fields(&csr_der).context("Extracting CSR fields")?;
+
+    if let Some(allowed) = require_subset_of {
+        let allowed_normalized: Vec<String> = allowed
+            .iter()
+            .map(|s| crate::issuance_policy::normalize_dns(s))
+            .collect();
+        let mut csr_names: Vec<String> = fields.san_names.clone();
+        if let Some(cn) = &fields.cn {
+            let cn = cn.trim().to_string();
+            if !cn.is_empty() {
+                csr_names.push(cn);
+            }
+        }
+        for name in &csr_names {
+            if !allowed_normalized.contains(&crate::issuance_policy::normalize_dns(name)) {
+                bail!(
+                    "CSR contains '{}', which is not one of the order's validated identifiers",
+                    name
+                );
+            }
+        }
+    }
 
     let key_pem = std::fs::read_to_string(&config.ca_ecdsa_intermediate_key_path)
         .context("Reading CA signing key")?;
