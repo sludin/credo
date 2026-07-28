@@ -399,3 +399,166 @@ async fn create_assignment_rejects_blank_monitor_host() {
         .unwrap();
     assert_eq!(resp.status(), 400);
 }
+
+// ============================================================================
+// POST /auth/refresh
+// ============================================================================
+
+fn make_test_account(
+    identity_uri: &str,
+    role: shepherd::types::Role,
+    active: bool,
+) -> shepherd::types::Account {
+    shepherd::types::Account {
+        id: "refresh-test-account".to_string(),
+        name: "refresh-test".to_string(),
+        display_name: "Refresh Test".to_string(),
+        role,
+        active,
+        identities: vec![identity_uri.to_string()],
+        notes: String::new(),
+        created_at: None,
+    }
+}
+
+/// A refresh token for an active account is honored, and a fresh access token
+/// plus rotated refresh token are returned.
+#[tokio::test]
+async fn refresh_succeeds_for_active_account() {
+    let shepherd = TestShepherd::start().await.unwrap();
+    let identity_uri = "vigil://credo/user/refresh-test";
+
+    shepherd
+        .state
+        .accounts
+        .write()
+        .await
+        .push(make_test_account(
+            identity_uri,
+            shepherd::types::Role::Operator,
+            true,
+        ));
+
+    let expires_at = chrono::Utc::now().timestamp() + 3600;
+    let token = shepherd
+        .state
+        .refresh_tokens
+        .issue_token(
+            identity_uri,
+            &shepherd::types::Role::Operator,
+            None,
+            expires_at,
+        )
+        .await;
+
+    let resp = shepherd
+        .client
+        .post(format!("{}/auth/refresh", shepherd.dashboard_url))
+        .json(&serde_json::json!({ "refreshToken": token }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert!(body["accessToken"].as_str().is_some());
+    assert!(body["refreshToken"].as_str().is_some());
+}
+
+/// Regression test for a High finding: a refresh token for an account that has
+/// since been deactivated must be rejected, not silently honored using the
+/// role cached in the token at issuance time. Deactivating an account must
+/// actually stop it from refreshing its own session.
+#[tokio::test]
+async fn refresh_rejected_for_deactivated_account() {
+    let shepherd = TestShepherd::start().await.unwrap();
+    let identity_uri = "vigil://credo/user/refresh-test-deactivated";
+
+    // Account is inactive from the start — equivalent to having been
+    // deactivated after the refresh token was issued.
+    shepherd
+        .state
+        .accounts
+        .write()
+        .await
+        .push(make_test_account(
+            identity_uri,
+            shepherd::types::Role::Admin,
+            false,
+        ));
+
+    let expires_at = chrono::Utc::now().timestamp() + 3600;
+    let token = shepherd
+        .state
+        .refresh_tokens
+        .issue_token(
+            identity_uri,
+            &shepherd::types::Role::Admin,
+            None,
+            expires_at,
+        )
+        .await;
+
+    let resp = shepherd
+        .client
+        .post(format!("{}/auth/refresh", shepherd.dashboard_url))
+        .json(&serde_json::json!({ "refreshToken": token.clone() }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.status(),
+        401,
+        "refresh must be rejected for a deactivated account"
+    );
+
+    // The rejected token must also be revoked — not just refused this once.
+    let resp2 = shepherd
+        .client
+        .post(format!("{}/auth/refresh", shepherd.dashboard_url))
+        .json(&serde_json::json!({ "refreshToken": token }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp2.status(),
+        401,
+        "a refresh token rejected for inactivity must be revoked, not just skipped once"
+    );
+}
+
+/// A refresh token for an identity with no matching account at all (e.g. the
+/// account was deleted outright, not just deactivated) must also be rejected.
+#[tokio::test]
+async fn refresh_rejected_when_account_no_longer_exists() {
+    let shepherd = TestShepherd::start().await.unwrap();
+    let identity_uri = "vigil://credo/user/refresh-test-deleted";
+
+    // No account is ever added for this identity.
+    let expires_at = chrono::Utc::now().timestamp() + 3600;
+    let token = shepherd
+        .state
+        .refresh_tokens
+        .issue_token(
+            identity_uri,
+            &shepherd::types::Role::Admin,
+            None,
+            expires_at,
+        )
+        .await;
+
+    let resp = shepherd
+        .client
+        .post(format!("{}/auth/refresh", shepherd.dashboard_url))
+        .json(&serde_json::json!({ "refreshToken": token }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.status(),
+        401,
+        "refresh must be rejected when no account exists for the token's identity"
+    );
+}
