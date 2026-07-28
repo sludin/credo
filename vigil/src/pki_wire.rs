@@ -57,9 +57,16 @@ pub struct ParsedOcspRequest {
     pub serial_number: String,
 }
 
+/// Recursion limit for `find_first_cert_id`. Well-formed OCSPRequest DER
+/// nests only a handful of levels deep; this exists purely to bound a
+/// maliciously deeply-nested DER body (attacker-controlled, reachable via
+/// any authenticated mTLS peer hitting POST /ocsp) so it can't exhaust the
+/// stack.
+const MAX_DER_NESTING_DEPTH: u32 = 32;
+
 /// Parse a DER OCSPRequest; extract the first CertID and its serial number.
 pub fn parse_ocsp_request(der_request: &[u8]) -> Result<ParsedOcspRequest> {
-    let cert_id_der = find_first_cert_id(der_request)
+    let cert_id_der = find_first_cert_id(der_request, 0)
         .ok_or_else(|| anyhow::anyhow!("OCSP request: CertID not found"))?;
     let serial_number = extract_serial_from_cert_id(&cert_id_der)?;
     Ok(ParsedOcspRequest {
@@ -69,7 +76,10 @@ pub fn parse_ocsp_request(der_request: &[u8]) -> Result<ParsedOcspRequest> {
 }
 
 /// Walk the DER tree to find the first SEQUENCE that looks like a CertID.
-fn find_first_cert_id(data: &[u8]) -> Option<Vec<u8>> {
+fn find_first_cert_id(data: &[u8], depth: u32) -> Option<Vec<u8>> {
+    if depth >= MAX_DER_NESTING_DEPTH {
+        return None;
+    }
     let mut pos = 0;
     while pos < data.len() {
         let tag = data[pos];
@@ -85,12 +95,12 @@ fn find_first_cert_id(data: &[u8]) -> Option<Vec<u8>> {
             if looks_like_cert_id(content) {
                 return Some(data[pos..content_end].to_vec());
             }
-            if let Some(found) = find_first_cert_id(content) {
+            if let Some(found) = find_first_cert_id(content, depth + 1) {
                 return Some(found);
             }
         } else if tag & 0xe0 == 0xa0 {
             // Context-specific constructed
-            if let Some(found) = find_first_cert_id(content) {
+            if let Some(found) = find_first_cert_id(content, depth + 1) {
                 return Some(found);
             }
         }
@@ -340,4 +350,62 @@ pub fn build_signed_crl_pem(
         "-----BEGIN X509 CRL-----\n{}\n-----END X509 CRL-----\n",
         b64
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wrap_sequence(content: &[u8]) -> Vec<u8> {
+        assert!(
+            content.len() < 128,
+            "test helper only supports short-form DER length"
+        );
+        let mut out = vec![0x30u8, content.len() as u8];
+        out.extend_from_slice(content);
+        out
+    }
+
+    /// A minimal, well-formed CertID: SEQUENCE { SEQUENCE(AlgId, empty),
+    /// OCTET STRING, OCTET STRING, INTEGER }.
+    fn build_cert_id_der() -> Vec<u8> {
+        let content = [
+            0x30, 0x00, // AlgId SEQUENCE, empty
+            0x04, 0x01, 0xAA, // issuerNameHash OCTET STRING
+            0x04, 0x01, 0xBB, // issuerKeyHash OCTET STRING
+            0x02, 0x01, 0x01, // serialNumber INTEGER
+        ];
+        wrap_sequence(&content)
+    }
+
+    /// Wraps `inner` in `depth` layers of single-child SEQUENCEs.
+    fn nest(depth: usize, inner: Vec<u8>) -> Vec<u8> {
+        let mut cur = inner;
+        for _ in 0..depth {
+            cur = wrap_sequence(&cur);
+        }
+        cur
+    }
+
+    #[test]
+    fn parse_ocsp_request_finds_cert_id_nested_below_depth_cap() {
+        let der = nest(20, build_cert_id_der());
+        let parsed = parse_ocsp_request(&der).expect("must find CertID within the depth cap");
+        assert!(!parsed.serial_number.is_empty());
+    }
+
+    /// Regression test for a Medium finding: find_first_cert_id recursed into
+    /// untrusted, attacker-controlled DER (reachable via POST /ocsp behind
+    /// mTLS auth) with no depth limit, letting a deeply-nested body exhaust
+    /// the stack. A CertID nested past the depth cap must now be reported as
+    /// not found (a clean error) rather than pursued indefinitely.
+    #[test]
+    fn parse_ocsp_request_rejects_cert_id_nested_beyond_depth_cap() {
+        let der = nest(50, build_cert_id_der());
+        let result = parse_ocsp_request(&der);
+        assert!(
+            result.is_err(),
+            "a CertID nested deeper than the recursion cap must not be found"
+        );
+    }
 }
