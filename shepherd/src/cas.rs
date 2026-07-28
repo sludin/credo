@@ -210,6 +210,36 @@ mod tests {
         assert_eq!(cpd.window_days, 30);
         assert!(rl.duplicate_certificates.is_none());
     }
+
+    /// Regression test for a Medium finding: the ACME HTTP connector accepts
+    /// either https or plain http, so a misconfigured (or DNS-hijacked)
+    /// plain-http directoryUrl would get no server authentication and no
+    /// client mTLS identity. Config load must reject it outright.
+    #[test]
+    fn load_cas_rejects_non_https_directory_url() {
+        let dir = TempDir::new().unwrap();
+        let path = write_ca_json(
+            &dir,
+            r#"{
+            "cas": {
+                "vigil": {
+                    "protocol": "acme",
+                    "provider": "vigil",
+                    "config": {
+                        "directoryUrl": "http://vigil.example.com:7020/acme/directory",
+                        "accountKeyPath": "/tmp/account.pem"
+                    }
+                }
+            }
+        }"#,
+        );
+
+        let result = load_cas(&path);
+        assert!(
+            result.is_err(),
+            "a plain-http directoryUrl must be rejected at config load"
+        );
+    }
 }
 
 fn parse_ca_entry(name: &str, entry: RawCaEntry, base: &Path) -> Result<CaConfig> {
@@ -223,6 +253,20 @@ fn parse_ca_entry(name: &str, entry: RawCaEntry, base: &Path) -> Result<CaConfig
 
     let raw: RawAcmeConfig = serde_json::from_value(entry.config)
         .with_context(|| format!("Parsing ACME config for CA '{name}'"))?;
+
+    // The ACME HTTP connector accepts either https or plain http
+    // (https_or_http()) so it can talk to Vigil over the same connector
+    // stack it uses for public CAs. Reject a non-https directoryUrl here
+    // instead — a misconfigured or DNS-hijacked plain-http endpoint would
+    // otherwise get no server authentication and no client mTLS identity is
+    // presented on that path either.
+    if !raw.directory_url.starts_with("https://") {
+        anyhow::bail!(
+            "CA '{}': directoryUrl must be https://, got '{}'",
+            name,
+            raw.directory_url
+        );
+    }
 
     let resolve = |s: &str| -> PathBuf {
         let p = Path::new(s);
