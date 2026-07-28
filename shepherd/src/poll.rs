@@ -600,50 +600,37 @@ async fn cert_maintenance(
             )
             .await;
 
-            if let Err(e) = crate::corgi_client::push_cert_install(
-                &state.corgi_client_pool,
-                node,
-                &assignment.cert_name,
-                &issued,
+            // issue_cert already persisted the new material into Shepherd's own
+            // certstore. Shepherd never pushes cert material to Corgi — send a
+            // data-free nudge instead, so Corgi pulls its assignments, notices
+            // the fingerprint change via get_assignments' live-enriched
+            // fingerprint256, and fetches + installs the new material itself
+            // via GET /agents/:id/certs/:name (the same path Corgi's normal
+            // pull cycle already uses). nudge_corgi_sync is best-effort by
+            // design: a dropped nudge is not fatal, since Corgi's own periodic
+            // safety-net pull converges eventually regardless.
+            nudge_corgi_sync(state, node).await;
+            tracing::info!(
+                corgi = %node.name,
+                cert = %assignment.cert_name,
+                fingerprint256 = %issued.fingerprint256,
+                "Renewed cert persisted; nudged corgi to pull and install"
+            );
+            append_trace(
+                &state.renewal_jobs,
+                job_id,
+                "nudged-corgi-sync",
+                None,
+                None,
+                Some("ok"),
             )
-            .await
-            {
-                tracing::warn!(
-                    corgi = %node.name,
-                    cert = %assignment.cert_name,
-                    error = %e,
-                    "Cert issued but install on corgi failed; corgi will sync on next poll"
-                );
-                append_trace(
-                    &state.renewal_jobs,
-                    job_id,
-                    "install-failed",
-                    Some(&e.to_string()),
-                    None,
-                    Some("warn"),
-                )
-                .await;
-            } else {
-                tracing::info!(
-                    corgi = %node.name,
-                    cert = %assignment.cert_name,
-                    fingerprint256 = %issued.fingerprint256,
-                    "Renewed cert installed on corgi"
-                );
-                append_trace(
-                    &state.renewal_jobs,
-                    job_id,
-                    "installed-on-corgi",
-                    None,
-                    None,
-                    Some("ok"),
-                )
-                .await;
-                // The production cert is now in corgi's certstore.  Evict the cached
-                // mTLS client so the next connection rebuilds from the production cert
-                // instead of the bootstrap fallback.
-                crate::corgi_client::evict(&state.corgi_client_pool, &node.name).await;
-            }
+            .await;
+            // The production cert is now in Shepherd's certstore and Corgi has
+            // been nudged to fetch it. Evict Shepherd's cached mTLS client for
+            // this corgi so the next connection rebuilds fresh once Corgi has
+            // installed the new material (e.g. if this assignment is Corgi's
+            // own control-plane serving cert).
+            crate::corgi_client::evict(&state.corgi_client_pool, &node.name).await;
 
             complete_job(&state.renewal_jobs, job_id, issued.fingerprint256.clone()).await;
             if let Some(path) = &state.renewal_jobs_history_path {

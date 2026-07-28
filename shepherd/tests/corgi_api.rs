@@ -207,6 +207,141 @@ async fn renew_status_rejects_mismatched_corgi_id() {
     );
 }
 
+/// GET /agents/:id/assignments enriches each assignment with Shepherd's live
+/// fingerprint256 from the certstore. This is the mechanism that lets a
+/// pull-only architecture work: instead of Shepherd pushing newly-issued cert
+/// material to Corgi directly, Shepherd nudges Corgi to pull assignments, and
+/// Corgi's own fingerprint comparison (against this field) is what tells it
+/// there's new material to fetch via GET /agents/:id/certs/:name.
+#[tokio::test]
+async fn get_assignments_includes_live_fingerprint_from_certstore() {
+    use shepherd::types::ManagedAssignment;
+
+    let shepherd = TestShepherd::start_authed().await.unwrap();
+
+    shepherd
+        .state
+        .assignments
+        .write()
+        .await
+        .push(ManagedAssignment {
+            cert_name: "fp-test-cert".to_string(),
+            corgi: Some("test-corgi-01".to_string()),
+            ca: "letsencrypt".to_string(),
+            domain: Some("fp-test.credo.test".to_string()),
+            sans: vec![],
+            renew_before_days: None,
+            days: None,
+            identity_uri: None,
+            validation: None,
+            cert_mode: None,
+            key_mode: None,
+            cert_owner: None,
+            cert_group: None,
+            key_owner: None,
+            key_group: None,
+            key_algorithm: None,
+            hooks: None,
+            monitor: None,
+        });
+
+    let (cert_pem, _key_pem, fullchain_pem) = credo_test::cert_gen::generate_signed_cert(
+        "fp-test.credo.test",
+        &["fp-test.credo.test"],
+        &[],
+        30,
+        shepherd.dir.path(),
+    )
+    .unwrap();
+    let live_dir = shepherd.dir.path().join("certstore/live/fp-test-cert");
+    std::fs::create_dir_all(&live_dir).unwrap();
+    std::fs::write(live_dir.join("cert.pem"), &cert_pem).unwrap();
+    std::fs::write(live_dir.join("fullchain.pem"), &fullchain_pem).unwrap();
+
+    // Compute the expected fingerprint exactly as cert_store.rs does, so this
+    // test doesn't just assert "some non-null string came back".
+    let der = pem::parse(cert_pem.trim()).unwrap().into_contents();
+    use sha2::{Digest, Sha256};
+    let expected_fp = hex::encode(Sha256::digest(&der)).to_uppercase();
+
+    let resp = shepherd
+        .client
+        .get(format!(
+            "{}/agents/test-corgi-01/assignments",
+            shepherd.agent_url
+        ))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let assignments = body["assignments"].as_array().unwrap();
+    let entry = assignments
+        .iter()
+        .find(|a| a["certName"].as_str() == Some("fp-test-cert"))
+        .expect("seeded assignment must be present");
+    assert_eq!(
+        entry["fingerprint256"].as_str(),
+        Some(expected_fp.as_str()),
+        "assignment must carry Shepherd's live certstore fingerprint"
+    );
+}
+
+/// GET /agents/:id/assignments reports fingerprint256: null for an assignment
+/// whose cert has never been issued (nothing in the certstore yet) — Corgi's
+/// pull logic treats that as "no local material yet, fetch regardless."
+#[tokio::test]
+async fn get_assignments_reports_null_fingerprint_for_unissued_cert() {
+    use shepherd::types::ManagedAssignment;
+
+    let shepherd = TestShepherd::start_authed().await.unwrap();
+    shepherd
+        .state
+        .assignments
+        .write()
+        .await
+        .push(ManagedAssignment {
+            cert_name: "never-issued".to_string(),
+            corgi: Some("test-corgi-01".to_string()),
+            ca: "letsencrypt".to_string(),
+            domain: Some("never-issued.credo.test".to_string()),
+            sans: vec![],
+            renew_before_days: None,
+            days: None,
+            identity_uri: None,
+            validation: None,
+            cert_mode: None,
+            key_mode: None,
+            cert_owner: None,
+            cert_group: None,
+            key_owner: None,
+            key_group: None,
+            key_algorithm: None,
+            hooks: None,
+            monitor: None,
+        });
+
+    let resp = shepherd
+        .client
+        .get(format!(
+            "{}/agents/test-corgi-01/assignments",
+            shepherd.agent_url
+        ))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    let assignments = body["assignments"].as_array().unwrap();
+    let entry = assignments
+        .iter()
+        .find(|a| a["certName"].as_str() == Some("never-issued"))
+        .expect("seeded assignment must be present");
+    assert!(entry["fingerprint256"].is_null());
+}
+
 /// Corgi agents other than the authenticated one cannot access another corgi's assignments.
 /// The auth bypass injects a fixed CorgiNodeConfig; the handler filters by corgi name.
 #[tokio::test]
