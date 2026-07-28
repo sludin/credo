@@ -25,6 +25,20 @@ import { requireAuth, requireRole } from './auth/middleware';
 
 type Role = 'admin' | 'operator' | 'readonly';
 
+// Regenerates the session ID before establishing a new authenticated
+// session, so a pre-existing (possibly attacker-fixed) session ID is never
+// reused across the anonymous -> authenticated trust transition. Must be
+// called before assigning req.session.user — regenerate() replaces
+// req.session with a fresh object, discarding anything set beforehand.
+export function regenerateSession(req: Request): Promise<void> {
+  return new Promise((resolve, reject) => {
+    req.session.regenerate((err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
 function asyncHandler(fn: (req: Request, res: Response) => Promise<void>) {
   return (req: Request, res: Response): void => {
     fn(req, res).catch((err: unknown) => {
@@ -274,6 +288,7 @@ export function createAuthRouter(
       role: roleResult.role,
       roleVerifiedAt: Date.now(),
     };
+    await regenerateSession(req);
     req.session.user = sessionUser;
     res.json({ ok: true, user: sessionUser });
   }));
@@ -404,6 +419,7 @@ export function createAuthRouter(
       role: roleResult.role,
       roleVerifiedAt: Date.now(),
     };
+    await regenerateSession(req);
     req.session.user = sessionUser;
     res.json({ ok: true, user: sessionUser });
   }));
