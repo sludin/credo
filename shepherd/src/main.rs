@@ -898,6 +898,12 @@ async fn cmd_account_add(args: AccountAddArgs<'_>) -> Result<()> {
     let config = load_config().context("Loading config")?;
     let shepherd_url = shepherd_dashboard_url(&config);
 
+    // Fail early on an unrecognized --role rather than silently downgrading
+    // it (credo_lib::types::Role::from_str would default to Readonly).
+    if credo_lib::types::Role::try_from_str(role_str).is_none() {
+        anyhow::bail!("Invalid role '{role_str}'; expected admin, operator, or readonly");
+    }
+
     // Fail early if the account already exists
     let mut accounts =
         shepherd::accounts::load_accounts(&config.accounts_path).context("Loading accounts")?;

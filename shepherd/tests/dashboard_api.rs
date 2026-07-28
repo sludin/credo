@@ -266,6 +266,49 @@ async fn list_accounts_returns_empty() {
     );
 }
 
+/// PUT /accounts/:id with an unrecognized role must be rejected, not
+/// silently escalate the account to Admin. Regression test for a Medium
+/// finding: Role::from_str used to default any unrecognized string to Admin.
+#[tokio::test]
+async fn update_account_rejects_invalid_role() {
+    use shepherd::types::{Account, Role};
+
+    let shepherd = TestShepherd::start_authed().await.unwrap();
+    let account = Account {
+        id: "acct-1".to_string(),
+        name: "bob".to_string(),
+        display_name: "Bob".to_string(),
+        role: Role::Readonly,
+        active: true,
+        identities: vec!["vigil://credo/user/bob".to_string()],
+        notes: String::new(),
+        created_at: None,
+    };
+    shepherd.state.accounts.write().await.push(account);
+
+    let resp = shepherd
+        .client
+        .put(format!("{}/accounts/acct-1", shepherd.dashboard_url))
+        .json(&serde_json::json!({ "role": "admni" }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.status(),
+        400,
+        "an unrecognized role must be rejected, not silently applied"
+    );
+
+    let accounts = shepherd.state.accounts.read().await;
+    let bob = accounts.iter().find(|a| a.id == "acct-1").unwrap();
+    assert_eq!(
+        bob.role,
+        Role::Readonly,
+        "the account's role must be unchanged after a rejected update"
+    );
+}
+
 /// GET /accounts/me returns the identity of the authenticated user.
 #[tokio::test]
 async fn get_me_returns_authenticated_identity() {

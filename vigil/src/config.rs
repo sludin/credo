@@ -248,9 +248,19 @@ pub fn load_config() -> Result<VigilConfig> {
                 .uri
                 .filter(|s| !s.trim().is_empty())
                 .with_context(|| format!("rbacIdentities[{}].uri must be a non-empty string", i))?;
+            // Omitted role defaults to admin (documented convenience default);
+            // a *present but unrecognized* role is a config mistake and must
+            // fail the config load rather than silently granting admin.
+            let role_str = entry.role.as_deref().unwrap_or("admin");
+            let role = crate::types::Role::try_from_str(role_str).with_context(|| {
+                format!(
+                    "rbacIdentities[{}].role '{}' is invalid; expected admin, operator, or readonly",
+                    i, role_str
+                )
+            })?;
             Ok(RbacIdentityConfig {
                 uri: uri.trim().to_string(),
-                role: crate::types::Role::from_str(entry.role.as_deref().unwrap_or("admin")),
+                role,
                 name: entry.name.filter(|s| !s.trim().is_empty()),
             })
         })

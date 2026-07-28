@@ -49,12 +49,27 @@ impl Role {
         }
     }
 
+    /// Parses a role string, defaulting anything unrecognized to `Readonly`
+    /// (least privilege) rather than escalating. Suitable for trusted,
+    /// internally-produced strings (e.g. a role Shepherd itself signed into a
+    /// JWT) where "this should never happen" is the only realistic case for
+    /// a mismatch. At a trust boundary where the input is attacker- or
+    /// user-submitted (an HTTP request body, a CLI flag), prefer
+    /// `try_from_str` and reject unrecognized values outright instead of
+    /// silently downgrading them.
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
+        Self::try_from_str(s).unwrap_or(Role::Readonly)
+    }
+
+    /// Parses a role string, returning `None` for anything other than the
+    /// three known values (case-insensitive, trimmed).
+    pub fn try_from_str(s: &str) -> Option<Self> {
         match s.trim().to_lowercase().as_str() {
-            "operator" => Role::Operator,
-            "readonly" => Role::Readonly,
-            _ => Role::Admin,
+            "admin" => Some(Role::Admin),
+            "operator" => Some(Role::Operator),
+            "readonly" => Some(Role::Readonly),
+            _ => None,
         }
     }
 }
@@ -277,6 +292,30 @@ impl ClientIdentity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn role_from_str_parses_known_values_case_insensitively() {
+        assert_eq!(Role::from_str("admin"), Role::Admin);
+        assert_eq!(Role::from_str("Operator"), Role::Operator);
+        assert_eq!(Role::from_str("  READONLY  "), Role::Readonly);
+    }
+
+    /// Regression test for a Medium finding: an unrecognized role string used
+    /// to silently escalate to Admin. It must now default to Readonly (least
+    /// privilege), not Admin.
+    #[test]
+    fn role_from_str_defaults_unrecognized_input_to_readonly_not_admin() {
+        assert_eq!(Role::from_str("not-a-real-role"), Role::Readonly);
+        assert_eq!(Role::from_str(""), Role::Readonly);
+        assert_eq!(Role::from_str("admni"), Role::Readonly);
+    }
+
+    #[test]
+    fn role_try_from_str_rejects_unrecognized_input() {
+        assert_eq!(Role::try_from_str("admin"), Some(Role::Admin));
+        assert_eq!(Role::try_from_str("not-a-real-role"), None);
+        assert_eq!(Role::try_from_str(""), None);
+    }
 
     #[test]
     fn monitor_config_defaults_port_and_protocol() {

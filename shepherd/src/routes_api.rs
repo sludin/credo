@@ -1083,7 +1083,11 @@ pub async fn update_account(
         account.display_name = v.to_string();
     }
     if let Some(v) = body.get("role").and_then(|v| v.as_str()) {
-        account.role = Role::from_str(v);
+        account.role = Role::try_from_str(v).ok_or_else(|| {
+            AppError::BadRequest(format!(
+                "Invalid role '{v}'; expected admin, operator, or readonly"
+            ))
+        })?;
     }
     if let Some(v) = body.get("active").and_then(|v| v.as_bool()) {
         account.active = v;
