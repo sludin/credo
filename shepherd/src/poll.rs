@@ -193,8 +193,25 @@ async fn reconcile_cycle(state: &AppState, targets: Option<Vec<String>>, mainten
     // Phase 3 (mutation-triggered only): run cert maintenance right away so a
     // new or changed assignment issues within seconds. The renewal loop owns
     // the periodic sweep.
+    //
+    // Spawned rather than awaited: issuance can run for minutes (DNS-01
+    // propagation alone can poll for up to ~1000s), and this cycle is called
+    // from run_reconcile_loop's single sequential loop — awaiting it here
+    // would delay every other corgi's liveness probing and any queued
+    // ReconcileRequest until this cert's issuance finishes. A full-fleet
+    // reload (`corgis: None`) would otherwise stall liveness detection for
+    // the *entire* fleet for as long as the slowest queued issuance takes.
+    // cert_maintenance already tolerates concurrent invocations for the same
+    // cert via its own in-flight-job guard (the periodic renewal loop already
+    // runs concurrently with this same code path today), so detaching it here
+    // doesn't introduce a new class of race, just lets liveness probing keep
+    // moving while it runs.
     if maintenance {
-        cert_maintenance_for(state, &corgis).await;
+        let st = state.clone();
+        let corgis = corgis.clone();
+        tokio::spawn(async move {
+            cert_maintenance_for(&st, &corgis).await;
+        });
     }
 
     for name in newly_unreachable {
