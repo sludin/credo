@@ -242,9 +242,7 @@ pub fn install_to_archive(
 
 fn write_file(path: &Path, data: &[u8], mode: u32) -> Result<()> {
     ensure_parent(path)?;
-    fs::write(path, data).with_context(|| format!("Writing {}", path.display()))?;
-    set_permissions(path, mode)?;
-    Ok(())
+    credo_lib::file_policy::write_file_with_mode(path, data, mode)
 }
 
 /// Compute a relative path from `target` to `link_path`'s directory.
