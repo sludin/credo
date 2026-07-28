@@ -262,12 +262,17 @@ export function loadConfig(options?: { skipTlsCheck?: boolean }): DashboardConfi
       : typeof rawAuth.roleRefreshIntervalMs === 'number' && rawAuth.roleRefreshIntervalMs > 0
         ? Math.round(rawAuth.roleRefreshIntervalMs / 1000)
         : 300;
+  // Default lowered from 1800s to 300s: this is the window a demoted or
+  // deactivated account keeps its cached (stale) role if Shepherd happens to
+  // be unreachable when a refresh was due. 30 minutes was needlessly long
+  // exposure for that scenario; an operator who wants more outage tolerance
+  // can still configure a larger value explicitly.
   const authRoleStaleTimeoutSeconds =
     typeof rawAuth.roleStaleTimeoutSeconds === 'number' && rawAuth.roleStaleTimeoutSeconds > 0
       ? rawAuth.roleStaleTimeoutSeconds
       : typeof rawAuth.roleStaleTimeoutMs === 'number' && rawAuth.roleStaleTimeoutMs > 0
         ? Math.round(rawAuth.roleStaleTimeoutMs / 1000)
-        : 1800;
+        : 300;
   const authSessionsDir = path.resolve(
     baseDir,
     optionalString(rawAuth.sessionsDir) ?? 'sessions'

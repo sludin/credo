@@ -12,6 +12,23 @@ export type PopToken = {
 
 const POP_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
 
+// Tracks PoP signatures that have already been successfully verified, so a
+// captured, still-time-valid PoP token can't be replayed to run the success
+// path more than once (e.g. against /enroll/verify, which mints a fresh
+// Shepherd token pair on every successful call and only clears the invite
+// at /enroll/finish, not here). Keyed by the token's own signature — unique
+// per signing operation, since the signed message includes issuedAt — with
+// an expiry matching POP_MAX_AGE_MS; safe to forget once the token would
+// fail the issuedAt-freshness check anyway. A legitimate retry with a fresh
+// PoP token (new issuedAt, new signature) is unaffected.
+const consumedSignatures = new Map<string, number>(); // signature -> expiresAtMs
+
+function pruneExpiredSignatures(now: number): void {
+  for (const [sig, expiresAt] of consumedSignatures) {
+    if (expiresAt <= now) consumedSignatures.delete(sig);
+  }
+}
+
 function extractIdentityUri(pem: string): string | null {
   try {
     const x509 = new X509Certificate(pem);
@@ -136,6 +153,16 @@ export function verifyPopToken(
   } catch (err) {
     return { ok: false, error: `Signature error: ${String(err)}` };
   }
+
+  // 7. Single-use: reject a replay of this exact (already-successfully-
+  // verified) signed token, even though it's still within its freshness
+  // window.
+  const now = Date.now();
+  pruneExpiredSignatures(now);
+  if (consumedSignatures.has(token.signature)) {
+    return { ok: false, error: 'PoP token has already been used.' };
+  }
+  consumedSignatures.set(token.signature, issuedAtMs + POP_MAX_AGE_MS);
 
   return { ok: true, identityUri: certIdentityUri };
 }
