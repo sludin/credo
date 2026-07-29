@@ -13,10 +13,12 @@ use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 
-/// Build a CSR (DER) with SAN entries for each of `sans`, signed by a fresh key.
-/// The first entry also becomes the CSR's CommonName.
-fn build_csr_der(sans: &[&str]) -> Vec<u8> {
-    let key = SigningKey::random(&mut OsRng);
+/// Build a CSR (DER) with SAN entries for each of `sans`, signed by `key`. The
+/// first entry also becomes the CSR's CommonName. `key` becomes the
+/// certificate's own keypair — distinct from whatever ACME account key drives
+/// the request; callers that need to prove possession of the cert's key
+/// (e.g. jwk-path revoke) hang onto `key` after calling this.
+fn build_csr_der(sans: &[&str], key: &SigningKey) -> Vec<u8> {
     let key_pem = key
         .to_pkcs8_pem(pkcs8::LineEnding::LF)
         .expect("encode CSR key to PKCS8 PEM");
@@ -219,6 +221,34 @@ impl AcmeTestClient {
             Self::jws_url(&url)
         };
         let body = self.jws_with_kid(&nonce, &jws_url, json!({}));
+        self.http.post(&url).json(&body).send().await.unwrap()
+    }
+
+    async fn finalize(&self, finalize_url: &str, csr_der: &[u8]) -> Value {
+        let url = Self::norm(finalize_url);
+        let nonce = self.nonce().await;
+        let jws_url = if finalize_url.starts_with("https://") {
+            finalize_url.to_string()
+        } else {
+            Self::jws_url(&url)
+        };
+        let payload = json!({"csr": B64.encode(csr_der)});
+        let body = self.jws_with_kid(&nonce, &jws_url, payload);
+        let resp = self.http.post(&url).json(&body).send().await.unwrap();
+        assert_eq!(resp.status(), 200, "finalize must return 200");
+        resp.json().await.unwrap()
+    }
+
+    /// POST /acme/revoke-cert signed via the jwk (certificate-key) path, using
+    /// this client's own key rather than an account kid.
+    async fn revoke_via_jwk(&self, cert_id: &str) -> reqwest::Response {
+        let url = format!("{}/acme/revoke-cert", self.base);
+        let nonce = self.nonce().await;
+        let body = self.jws_with_jwk(
+            &nonce,
+            &Self::jws_url(&url),
+            json!({"certificateId": cert_id}),
+        );
         self.http.post(&url).json(&body).send().await.unwrap()
     }
 
@@ -468,7 +498,8 @@ async fn finalize_rejects_csr_san_outside_validated_order() {
     let finalize_url = order["finalize"].as_str().unwrap();
 
     // A CSR naming only the validated domain must still succeed.
-    let clean_csr = build_csr_der(&[validated_domain]);
+    let clean_key = SigningKey::random(&mut OsRng);
+    let clean_csr = build_csr_der(&[validated_domain], &clean_key);
     let resp = client.finalize_raw(finalize_url, &clean_csr).await;
     assert_eq!(
         resp.status(),
@@ -486,7 +517,8 @@ async fn finalize_rejects_csr_san_outside_validated_order() {
     assert_eq!(resp.status(), 200);
 
     let finalize_url2 = order2["finalize"].as_str().unwrap();
-    let smuggling_csr = build_csr_der(&[validated_domain, smuggled_domain]);
+    let smuggling_key = SigningKey::random(&mut OsRng);
+    let smuggling_csr = build_csr_der(&[validated_domain, smuggled_domain], &smuggling_key);
     let resp = client.finalize_raw(finalize_url2, &smuggling_csr).await;
     assert_eq!(
         resp.status(),
@@ -498,5 +530,76 @@ async fn finalize_rejects_csr_san_outside_validated_order() {
         body["type"].as_str().unwrap_or("").contains("badCSR"),
         "error type must be badCSR, got: {}",
         body["type"]
+    );
+}
+
+/// RFC 8555 §7.6 proof-of-possession: revoke-cert's jwk (certificate-key) path must
+/// require the JWK to be the certificate's own key, not just any valid keypair.
+/// Regression test for the fix to a Critical finding where any mTLS-authenticated
+/// ACME client could revoke any certificate in the fleet via a throwaway keypair.
+#[tokio::test]
+async fn revoke_cert_via_jwk_requires_matching_key() {
+    let vigil = TestVigil::start_authed().await.unwrap();
+    let mut client = AcmeTestClient::new(&vigil.url);
+    client.register().await;
+
+    // Issue a certificate for a domain. The CSR is signed by `cert_key`, which is
+    // the certificate's own keypair — distinct from `client`'s ACME account key.
+    let domain = "revoke-test.credo.test";
+    let cert_key = SigningKey::random(&mut OsRng);
+    let order = client.new_order(domain, Some("none-01")).await;
+    let authz_url = order["authorizations"][0].as_str().unwrap();
+    let authz = client.get_authz(authz_url).await;
+    let (chall_url, _token) = AcmeTestClient::find_challenge(&authz, "http-01");
+    let resp = client.respond_challenge(&chall_url).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "none-01 challenge response must return 200"
+    );
+
+    let finalize_url = order["finalize"].as_str().unwrap();
+    let csr_der = build_csr_der(&[domain], &cert_key);
+    let finalized = client.finalize(finalize_url, &csr_der).await;
+    assert_eq!(
+        finalized["status"].as_str(),
+        Some("valid"),
+        "order must be valid immediately after finalize"
+    );
+    let cert_id = finalized["certificate"]
+        .as_str()
+        .expect("finalize response must include a certificate URL")
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .to_string();
+
+    // An attacker holding an unrelated keypair (never registered as an account,
+    // never involved in issuing this cert) must NOT be able to revoke it via the
+    // jwk path just by signing a request with their own throwaway key.
+    let mut attacker = AcmeTestClient::new(&vigil.url);
+    attacker.key = SigningKey::random(&mut OsRng);
+    let resp = attacker.revoke_via_jwk(&cert_id).await;
+    assert_eq!(
+        resp.status(),
+        403,
+        "revoke-cert via jwk with a non-matching key must be rejected"
+    );
+    let body: Value = resp.json().await.unwrap();
+    assert!(
+        body["type"].as_str().unwrap_or("").contains("unauthorized"),
+        "error type must be unauthorized, got: {}",
+        body["type"]
+    );
+
+    // The actual holder of the certificate's private key CAN revoke it via the
+    // jwk path, with no account kid at all — this is the legitimate use of §7.6.
+    let mut owner = AcmeTestClient::new(&vigil.url);
+    owner.key = cert_key;
+    let resp = owner.revoke_via_jwk(&cert_id).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "revoke-cert via jwk with the matching certificate key must succeed"
     );
 }
