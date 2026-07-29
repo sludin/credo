@@ -248,15 +248,22 @@ pub async fn refresh_token(
 
     // Use the current account role rather than the role baked in at issuance,
     // so that role changes in shepherd.accounts.json take effect at the next refresh.
+    // If the account is no longer active (or gone entirely), the refresh token
+    // must not keep working — otherwise deactivating/deleting an account
+    // wouldn't stop it from indefinitely renewing its own session.
     let current_role = {
         let accounts = state.accounts.read().await;
         accounts
             .iter()
             .find(|a| a.active && a.identities.iter().any(|id| id == &entry.identity_uri))
             .map(|a| a.role.clone())
-            .unwrap_or_else(|| Role::from_str(&entry.role))
     };
-    let role = current_role;
+    let Some(role) = current_role else {
+        state.refresh_tokens.revoke_token(token).await;
+        return Err(AppError::Unauthorized(
+            "Account is inactive or no longer exists".to_string(),
+        ));
+    };
     let access = sign_jwt(
         &state.jwt_keys,
         &entry.identity_uri,

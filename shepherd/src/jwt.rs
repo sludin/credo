@@ -5,7 +5,6 @@ use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, 
 use p256::ecdsa::SigningKey;
 use pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey, LineEnding};
 use serde::{Deserialize, Serialize};
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use crate::types::Role;
@@ -59,16 +58,8 @@ fn generate_and_save(key_path: &Path) -> Result<String> {
     if let Some(parent) = key_path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
-    std::fs::write(key_path, pem.as_bytes())
+    credo_lib::file_policy::write_file_with_mode(key_path, pem.as_bytes(), 0o600)
         .with_context(|| format!("Writing JWT signing key: {}", key_path.display()))?;
-    std::fs::set_permissions(key_path, std::fs::Permissions::from_mode(0o600)).with_context(
-        || {
-            format!(
-                "Setting permissions on JWT signing key: {}",
-                key_path.display()
-            )
-        },
-    )?;
 
     tracing::info!(path = %key_path.display(), "Generated new JWT signing key");
     Ok(pem.to_string())

@@ -134,9 +134,8 @@ pub fn generate_key(key_path: &Path) -> Result<String> {
     let key_pem = cert.serialize_private_key_pem();
 
     ensure_parent(key_path)?;
-    std::fs::write(key_path, &key_pem)
+    credo_lib::file_policy::write_file_with_mode(key_path, key_pem.as_bytes(), 0o600)
         .with_context(|| format!("Writing key to {}", key_path.display()))?;
-    set_permissions(key_path, 0o600)?;
 
     Ok(key_pem)
 }
@@ -281,9 +280,8 @@ pub fn generate_key_and_csr(
     let key_pem = cert.serialize_private_key_pem();
 
     ensure_parent(key_path)?;
-    std::fs::write(key_path, &key_pem)
+    credo_lib::file_policy::write_file_with_mode(key_path, key_pem.as_bytes(), 0o600)
         .with_context(|| format!("Writing key to {}", key_path.display()))?;
-    set_permissions(key_path, 0o600)?;
 
     let csr_pem = cert
         .serialize_request_pem()

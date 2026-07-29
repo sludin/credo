@@ -18,7 +18,7 @@ use base64::Engine;
 use serde_json::{json, Value};
 
 use crate::auth::AuthUser;
-use crate::ca::sign_csr;
+use crate::ca::sign_csr_restricted;
 use crate::error::acme_error_body;
 use crate::issuance_policy::validate_issuance_policy;
 use crate::state::AppState;
@@ -1471,7 +1471,7 @@ pub async fn finalize_order(
         return acme_error(StatusCode::BAD_REQUEST, "badCSR", &e.to_string());
     }
 
-    let signed = match sign_csr(&csr_pem, days, Some(&sans), &state.config()) {
+    let signed = match sign_csr_restricted(&csr_pem, days, &sans, &state.config()) {
         Ok(s) => s,
         Err(e) => return acme_error(StatusCode::BAD_REQUEST, "badCSR", &e.to_string()),
     };

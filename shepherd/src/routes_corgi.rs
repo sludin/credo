@@ -2,7 +2,7 @@ use axum::extract::{Path, State};
 use axum::response::Json;
 use serde_json::json;
 
-use crate::cert_store::read_cert_material;
+use crate::cert_store::{read_cert_material, read_cert_store_entry};
 use crate::corgi_client::corgi_post;
 use crate::error::AppError;
 use crate::issuance::issue_cert;
@@ -28,15 +28,36 @@ pub async fn get_assignments(
     }
 
     let assignments = state.assignments.read().await;
-    let filtered: Vec<_> = assignments
+    let filtered: Vec<&ManagedAssignment> = assignments
         .iter()
         .filter(|a| a.corgi.as_deref() == Some(&node.name))
         .collect();
 
+    // Enrich each assignment with Shepherd's current fingerprint256 for that
+    // cert, read live from the certstore. ManagedAssignment itself carries no
+    // such field (it's loaded verbatim from shepherd.assignments.json), but
+    // Corgi's reconcile pull needs it to know whether a cert Shepherd just
+    // (re)issued differs from what Corgi has installed — this is what lets
+    // Corgi fetch newly-issued material on its own pull instead of Shepherd
+    // pushing it directly.
+    let store_dir = state.config.load().cert_store_dir.clone();
+    let enriched: Vec<serde_json::Value> = filtered
+        .iter()
+        .map(|a| {
+            let mut v = serde_json::to_value(a).unwrap_or_else(|_| json!({}));
+            if let Some(obj) = v.as_object_mut() {
+                let fingerprint256 =
+                    read_cert_store_entry(&store_dir, &a.cert_name).and_then(|e| e.fingerprint256);
+                obj.insert("fingerprint256".to_string(), json!(fingerprint256));
+            }
+            v
+        })
+        .collect();
+
     Ok(Json(json!({
         "corgiId": corgi_id,
-        "assignments": filtered,
-        "assignmentsCount": filtered.len(),
+        "assignments": enriched,
+        "assignmentsCount": enriched.len(),
     })))
 }
 
@@ -47,9 +68,16 @@ pub async fn get_assignments(
 
 pub async fn get_cert(
     State(state): State<AppState>,
-    axum::Extension(_node): axum::Extension<CorgiNodeConfig>,
+    axum::Extension(node): axum::Extension<CorgiNodeConfig>,
     Path((corgi_id, cert_name)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    if node.name != corgi_id {
+        return Err(AppError::Forbidden(format!(
+            "Authenticated as '{}' but requested cert material for '{}'",
+            node.name, corgi_id
+        )));
+    }
+
     let assignments = state.assignments.read().await;
     let assignment = assignments
         .iter()
@@ -88,6 +116,13 @@ pub async fn provision_cert(
     Path((corgi_id, cert_name)): Path<(String, String)>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    if node.name != corgi_id {
+        return Err(AppError::Forbidden(format!(
+            "Authenticated as '{}' but requested provisioning for '{}'",
+            node.name, corgi_id
+        )));
+    }
+
     let assignments = state.assignments.read().await;
     let assignment = assignments
         .iter()
@@ -223,6 +258,13 @@ pub async fn renew_cert(
     Path((corgi_id, cert_name)): Path<(String, String)>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), AppError> {
+    if node.name != corgi_id {
+        return Err(AppError::Forbidden(format!(
+            "Authenticated as '{}' but requested renewal for '{}'",
+            node.name, corgi_id
+        )));
+    }
+
     let assignments = state.assignments.read().await;
     let assignment = assignments
         .iter()
@@ -352,9 +394,16 @@ pub async fn renew_cert(
 
 pub async fn renew_status(
     State(state): State<AppState>,
-    axum::Extension(_node): axum::Extension<CorgiNodeConfig>,
+    axum::Extension(node): axum::Extension<CorgiNodeConfig>,
     Path((corgi_id, cert_name)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    if node.name != corgi_id {
+        return Err(AppError::Forbidden(format!(
+            "Authenticated as '{}' but requested renewal status for '{}'",
+            node.name, corgi_id
+        )));
+    }
+
     let assignments = state.assignments.read().await;
     let _assignment = assignments
         .iter()

@@ -26,7 +26,6 @@ impl HeProvider {
 
     async fn update(ddns_key: String, record_name: String, txt_value: String) -> Result<()> {
         let client = reqwest::Client::builder()
-            .danger_accept_invalid_certs(true)
             .timeout(std::time::Duration::from_secs(15))
             .build()
             .context("Building HE DNS HTTP client")?;
@@ -38,7 +37,6 @@ impl HeProvider {
         tracing::info!(
             url = "https://dyn.dns.he.net/nic/update",
             hostname = %record_name,
-            password = %ddns_key,
             txt = %txt_value,
             "HE DNS TXT update request"
         );

@@ -21,7 +21,7 @@ import {
   finishAuthentication,
 } from './auth/webauthn';
 import { verifyPopToken, resolveShepherdAccount, type PopToken } from './auth/pop';
-import { requireAuth, requireRole } from './auth/middleware';
+import { requireAuth, requireRole, makeRoleRefresh } from './auth/middleware';
 
 type Role = 'admin' | 'operator' | 'readonly';
 
@@ -113,6 +113,7 @@ export function createAuthRouter(
 ) {
   const router = express.Router();
   const auth = config.auth;
+  const roleRefresh = makeRoleRefresh(config, shepherdApi, serviceCert);
 
   // ------------------------------------------------------------------
   // GET /auth/me
@@ -495,6 +496,13 @@ export function createAuthRouter(
   // ------------------------------------------------------------------
   // Admin: user management
   // ------------------------------------------------------------------
+  // These routes are the most privileged in the dashboard (create/deactivate
+  // users, revoke passkeys, mint enrollment links), so — unlike the rest of
+  // this router — they need the same cached-role revalidation that /api/*
+  // gets from makeRoleRefresh. Without it, a demoted/deactivated admin session
+  // keeps admin-panel access for the life of the cookie, since these routes
+  // never happen to hit /api/* to trigger a refresh as a side effect.
+  router.use('/admin', requireAuth, roleRefresh);
 
   router.get('/admin/users', requireAuth, requireRole('operator'), asyncHandler(async (_req: Request, res: Response) => {
     const { users } = loadUsers();

@@ -6,11 +6,31 @@ use axum::{extract::Path, routing::get, Router};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD as B64, Engine};
 use credo_test::vigil_harness::TestVigil;
 use p256::ecdsa::SigningKey;
+use pkcs8::EncodePrivateKey;
 use rand::rngs::OsRng;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
+
+/// Build a CSR (DER) with SAN entries for each of `sans`, signed by a fresh key.
+/// The first entry also becomes the CSR's CommonName.
+fn build_csr_der(sans: &[&str]) -> Vec<u8> {
+    let key = SigningKey::random(&mut OsRng);
+    let key_pem = key
+        .to_pkcs8_pem(pkcs8::LineEnding::LF)
+        .expect("encode CSR key to PKCS8 PEM");
+    let key_pair = rcgen::KeyPair::from_pem(&key_pem).expect("load rcgen keypair from PEM");
+    let mut params =
+        rcgen::CertificateParams::new(sans.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    params.key_pair = Some(key_pair);
+    params.distinguished_name = rcgen::DistinguishedName::new();
+    params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, sans[0]);
+    let cert = rcgen::Certificate::from_params(params).expect("build CSR params");
+    cert.serialize_request_der().expect("serialize CSR DER")
+}
 
 // ---------------------------------------------------------------------------
 // JWS signing helper
@@ -203,6 +223,21 @@ impl AcmeTestClient {
     }
 
     /// Poll the authz URL every 50 ms until status is "valid" or "invalid", or timeout.
+    /// POST the order's finalize URL with `csr_der` and return the raw response
+    /// (status not asserted here — callers may expect a rejection).
+    async fn finalize_raw(&self, finalize_url: &str, csr_der: &[u8]) -> reqwest::Response {
+        let url = Self::norm(finalize_url);
+        let nonce = self.nonce().await;
+        let jws_url = if finalize_url.starts_with("https://") {
+            finalize_url.to_string()
+        } else {
+            Self::jws_url(&url)
+        };
+        let payload = json!({"csr": B64.encode(csr_der)});
+        let body = self.jws_with_kid(&nonce, &jws_url, payload);
+        self.http.post(&url).json(&body).send().await.unwrap()
+    }
+
     async fn poll_authz_until_terminal(&self, authz_url: &str, timeout_ms: u64) -> Value {
         use std::time::{Duration, Instant};
         let deadline = Instant::now() + Duration::from_millis(timeout_ms);
@@ -402,5 +437,66 @@ async fn http_01_wrong_key_auth_rejected() {
         authz["status"].as_str(),
         Some("invalid"),
         "authz must be invalid after failed http-01 validation"
+    );
+}
+
+/// finalize must reject a CSR that embeds a domain the order never validated.
+/// Regression test for the fix to a High finding where `sign_csr` unioned the
+/// CSR's own SANs with the order's validated identifiers instead of requiring
+/// the CSR's SANs to be a subset of them, letting a client smuggle an
+/// unchallenged domain into the issued certificate.
+#[tokio::test]
+async fn finalize_rejects_csr_san_outside_validated_order() {
+    let vigil = TestVigil::start_authed().await.unwrap();
+    let mut client = AcmeTestClient::new(&vigil.url);
+    client.register().await;
+
+    let validated_domain = "finalize-test.credo.test";
+    let smuggled_domain = "unvalidated-finalize-test.credo.test";
+
+    let order = client.new_order(validated_domain, Some("none-01")).await;
+    let authz_url = order["authorizations"][0].as_str().unwrap();
+    let authz = client.get_authz(authz_url).await;
+    let (chall_url, _token) = AcmeTestClient::find_challenge(&authz, "http-01");
+    let resp = client.respond_challenge(&chall_url).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "none-01 challenge response must return 200"
+    );
+
+    let finalize_url = order["finalize"].as_str().unwrap();
+
+    // A CSR naming only the validated domain must still succeed.
+    let clean_csr = build_csr_der(&[validated_domain]);
+    let resp = client.finalize_raw(finalize_url, &clean_csr).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "finalize with a CSR matching the validated order must succeed"
+    );
+
+    // A second order/CSR that also embeds a domain never subjected to any
+    // challenge in this order must be rejected, not silently included.
+    let order2 = client.new_order(validated_domain, Some("none-01")).await;
+    let authz_url2 = order2["authorizations"][0].as_str().unwrap();
+    let authz2 = client.get_authz(authz_url2).await;
+    let (chall_url2, _token2) = AcmeTestClient::find_challenge(&authz2, "http-01");
+    let resp = client.respond_challenge(&chall_url2).await;
+    assert_eq!(resp.status(), 200);
+
+    let finalize_url2 = order2["finalize"].as_str().unwrap();
+    let smuggling_csr = build_csr_der(&[validated_domain, smuggled_domain]);
+    let resp = client.finalize_raw(finalize_url2, &smuggling_csr).await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "finalize must reject a CSR containing a domain outside the validated order"
+    );
+    let body: Value = resp.json().await.unwrap();
+    assert!(
+        body["type"].as_str().unwrap_or("").contains("badCSR"),
+        "error type must be badCSR, got: {}",
+        body["type"]
     );
 }
