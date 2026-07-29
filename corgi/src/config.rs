@@ -58,6 +58,13 @@ pub enum ServiceHookDef {
         exec: Vec<String>,
         args: HashMap<String, HookArgSpec>,
     },
+    /// Signals a credo service directly via its PID file — no subprocess, no
+    /// shell. Always sends SIGHUP, the reload convention every credo binary
+    /// already implements. Tighter than a shell-exec hook for credo's own
+    /// services (corgi/shepherd/vigil/dashboard), which all write a PID file.
+    CredoSignal {
+        pid_file: PathBuf,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -412,6 +419,21 @@ fn parse_hook_def(value: &Value, name: &str) -> Result<ServiceHookDef> {
     }
 
     if let Some(obj) = value.as_object() {
+        if let Some(pid_file) = obj.get("pidFile") {
+            let pid_file = pid_file.as_str().ok_or_else(|| {
+                anyhow::anyhow!("serviceHooks['{}'].pidFile must be a string", name)
+            })?;
+            if pid_file.trim().is_empty() {
+                return Err(anyhow::anyhow!(
+                    "serviceHooks['{}'].pidFile must not be empty",
+                    name
+                ));
+            }
+            return Ok(ServiceHookDef::CredoSignal {
+                pid_file: PathBuf::from(pid_file),
+            });
+        }
+
         let exec = obj
             .get("exec")
             .and_then(|v| v.as_array())
@@ -999,5 +1021,57 @@ mod tests {
     fn flock_entry_monitor_absent_is_none() {
         let entry = parse_entry(serde_json::json!({ "name": "api.example.com" }));
         assert_eq!(entry.monitor, None);
+    }
+
+    #[test]
+    fn parse_hook_def_pid_file_object_is_credo_signal() {
+        let def = parse_hook_def(
+            &serde_json::json!({ "pidFile": "corgi.pid" }),
+            "self-reload",
+        )
+        .unwrap();
+        match def {
+            ServiceHookDef::CredoSignal { pid_file } => {
+                assert_eq!(pid_file, PathBuf::from("corgi.pid"));
+            }
+            other => panic!("expected CredoSignal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_hook_def_pid_file_empty_string_errors() {
+        let result = parse_hook_def(&serde_json::json!({ "pidFile": "  " }), "self-reload");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_hook_def_pid_file_non_string_errors() {
+        let result = parse_hook_def(&serde_json::json!({ "pidFile": 5 }), "self-reload");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_hook_def_still_distinguishes_parameterized_from_credo_signal() {
+        // An object with "exec" (no "pidFile") must still parse as Parameterized,
+        // proving the new pidFile branch doesn't swallow the existing shape.
+        let def = parse_hook_def(
+            &serde_json::json!({
+                "exec": ["docker", "exec", "-t", "{container}", "nginx", "-s", "reload"],
+                "args": { "container": { "type": "container-name" } }
+            }),
+            "docker-nginx",
+        )
+        .unwrap();
+        assert!(matches!(def, ServiceHookDef::Parameterized { .. }));
+    }
+
+    #[test]
+    fn parse_hook_def_simple_array_still_parses() {
+        let def = parse_hook_def(
+            &serde_json::json!(["systemctl", "reload", "nginx"]),
+            "nginx",
+        )
+        .unwrap();
+        assert!(matches!(def, ServiceHookDef::Simple(_)));
     }
 }

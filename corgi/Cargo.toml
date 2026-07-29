@@ -65,7 +65,7 @@ tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # Unix file operations (chmod, chown, atomic symlinks)
-nix = { workspace = true }
+nix = { workspace = true, features = ["signal"] }
 
 # Error handling
 anyhow    = { workspace = true }

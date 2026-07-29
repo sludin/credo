@@ -72,6 +72,7 @@
     }
   ],
 
+  "_credoSignalHooks": "credoSignal hooks (e.g. corgi-self-reload below) send SIGHUP directly to a PID file — no subprocess, no shell. Use them for credo's own binaries (corgi/shepherd/vigil/dashboard), which all write a PID file and already reload on SIGHUP.",
   "serviceHooks": {
     "nginx":  ["systemctl", "reload", "nginx"],
     "caddy":  ["caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--force"],
@@ -79,7 +80,8 @@
     "docker-nginx": {
       "exec": ["docker", "exec", "-t", "{container}", "nginx", "-s", "reload"],
       "args": { "container": { "type": "container-name" } }
-    }
+    },
+    "corgi-self-reload": { "pidFile": "corgi.pid" }
   },
 
   "defaultHooks": [],

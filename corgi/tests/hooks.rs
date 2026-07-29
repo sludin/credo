@@ -223,3 +223,52 @@ async fn run_hooks_logged_emits_nothing_when_no_hooks_configured() {
 
     assert!(!events.iter().any(|e| e.message == "Hook executed"));
 }
+
+// ---------------------------------------------------------------------------
+// CredoSignal — the tighter, in-process hook kind for credo's own services
+// ---------------------------------------------------------------------------
+
+/// A CredoSignal hook must deliver a real SIGHUP (not just report success in
+/// its HookResult) and must NOT fire for an unrelated hook. Both cases live
+/// in one test function, not two `#[tokio::test]`s: `tokio::signal::unix`
+/// SIGHUP listeners are process-global, so a sibling test self-signalling
+/// concurrently could otherwise produce a false positive here.
+#[tokio::test]
+async fn credo_signal_hook_delivers_real_sighup_and_only_when_configured() {
+    use tokio::signal::unix::{signal, SignalKind};
+    use tokio::time::{timeout, Duration};
+
+    let dir = TempDir::new().unwrap();
+    let mut config = make_config(&dir);
+
+    let pid_file = dir.path().join("self.pid");
+    std::fs::write(&pid_file, format!("{}\n", std::process::id())).unwrap();
+    config.service_hooks.insert(
+        "corgi-self-reload".to_string(),
+        ServiceHookDef::CredoSignal {
+            pid_file: pid_file.clone(),
+        },
+    );
+
+    let mut hup = signal(SignalKind::hangup()).expect("registering SIGHUP listener");
+
+    // Positive case: entry's hook is the CredoSignal — expect a real SIGHUP.
+    let mut own_entry = empty_entry("corgi-01.credo.test", &dir);
+    own_entry.hooks = Some(vec![HookRef::Simple("corgi-self-reload".to_string())]);
+
+    let results = run_hooks_logged(&own_entry, &config).await;
+    assert!(results.iter().any(|r| r.hook == "corgi-self-reload"));
+
+    timeout(Duration::from_secs(2), hup.recv())
+        .await
+        .expect("SIGHUP should have been delivered within 2s")
+        .expect("signal stream should not have closed");
+
+    // Negative case: an unrelated cert with no hooks must not self-signal.
+    let mut other_entry = empty_entry("nginx.example.com", &dir);
+    other_entry.hooks = Some(vec![]);
+    run_hooks_logged(&other_entry, &config).await;
+
+    let result = timeout(Duration::from_millis(300), hup.recv()).await;
+    assert!(result.is_err(), "unrelated hook run must not send a SIGHUP");
+}

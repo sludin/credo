@@ -60,6 +60,14 @@ Before running the dashboard:
 
 1. **A TLS cert + key** for the dashboard's own HTTPS server (`tls.certPath` / `tls.keyPath`). This is typically managed by corgi — add an assignment for `dashboard.example.com` to `shepherd.assignments.json`.
 
+   The dashboard hot-reloads its TLS cert on `SIGHUP` (zero downtime — no restart, no dropped connections). It writes its PID to `pidFile` (default: `dashboard.pid` in the working directory) so a corgi `credoSignal` hook can target it directly, the same way corgi/shepherd/vigil signal themselves. Configure this on the corgi instance managing the dashboard's cert:
+   ```json
+   "serviceHooks": {
+     "dashboard-reload": { "pidFile": "/var/apps/credo/dashboard/dashboard.pid" }
+   }
+   ```
+   and reference `"dashboard-reload"` in that flock entry's `hooks`. Without this, a renewed cert is installed on disk but the dashboard keeps serving the old one until it's restarted or sent `SIGHUP` manually.
+
 2. **An mTLS service cert + key** for the dashboard to use when calling Shepherd (`mtls.certPath` / `mtls.keyPath`). These are often the same cert/key pair as the TLS cert above, if the dashboard is registered as a node in the fleet.
 
 3. **The CA trust bundle** (`credo-catrust.pem`) so the dashboard can verify Shepherd's server cert.

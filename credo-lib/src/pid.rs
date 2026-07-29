@@ -81,6 +81,24 @@ pub fn stop_service(pid_path: &Path, timeout_secs: u64) -> Result<()> {
     )
 }
 
+/// Send `sig` to the process identified by `pid_path`. Unlike `stop_service`,
+/// this does not wait for the process to react — callers that need a
+/// notify-and-move-on signal (e.g. SIGHUP to trigger a reload) use this.
+pub fn signal(pid_path: &Path, sig: Signal) -> Result<()> {
+    let pid = read_pid(pid_path)?;
+
+    if !is_running(pid) {
+        bail!(
+            "process for pidfile {} (PID {}) is not running",
+            pid_path.display(),
+            pid
+        );
+    }
+
+    kill(Pid::from_raw(pid as i32), sig)
+        .with_context(|| format!("failed to send {:?} to PID {}", sig, pid))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,5 +133,36 @@ mod tests {
         let result = stop_service(&path, 5);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not running"));
+    }
+
+    #[test]
+    fn signal_delivers_to_live_process() {
+        // Signalling with `None` (a no-op probe, like `is_running` uses) against our
+        // own PID always succeeds without visibly disturbing the test process.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("self.pid");
+        write_pid(&path).unwrap();
+        assert!(signal(&path, Signal::SIGCONT).is_ok());
+    }
+
+    #[test]
+    fn signal_stale_pid_errors() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("stale.pid");
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        std::fs::write(&path, format!("{}\n", pid)).unwrap();
+
+        let result = signal(&path, Signal::SIGHUP);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not running"));
+    }
+
+    #[test]
+    fn signal_missing_pidfile_errors() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("missing.pid");
+        assert!(signal(&path, Signal::SIGHUP).is_err());
     }
 }

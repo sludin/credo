@@ -262,6 +262,17 @@ Maps hook names to shell commands. Hook names are referenced in flock entries an
 
 Allowed arg types: `"container-name"`, `"hostname"`, `"signal"`, `"service-name"`, `"identifier"`. Each type has a validation regex applied before execution.
 
+**credoSignal hook** (PID-file signal, no subprocess):
+```json
+{
+  "serviceHooks": {
+    "corgi-self-reload": { "pidFile": "corgi.pid" },
+    "shepherd-reload":   { "pidFile": "/opt/credo/shepherd/shepherd.pid" }
+  }
+}
+```
+Sends `SIGHUP` directly to the process recorded in `pidFile` via `nix::sys::signal::kill` — no shell, no subprocess spawn, no dependency on `kill`/`systemctl` being present. Use this for credo's own binaries (shepherd, corgi, vigil, dashboard), which all write a PID file and already reload their TLS listener cert on `SIGHUP`. For corgi's own identity cert specifically, this is wired automatically: Shepherd attaches a `corgi-self-reload` hook to every corgi's self-assignment on enrollment, so a corgi just needs to define that hook name pointing at its own `corgi.pid` (relative paths resolve against the corgi process's own working directory — that's where it wrote the file). For shepherd/vigil/dashboard, the `pidFile` must be an absolute path, since it belongs to a different process than the corgi executing the hook.
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `defaultHooks` | string[] | `[]` | Hook names that run after any cert update, regardless of which cert changed |

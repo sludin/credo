@@ -1,4 +1,5 @@
 use anyhow::Result;
+use nix::sys::signal::Signal;
 use regex::Regex;
 use std::collections::HashSet;
 use std::process::Stdio;
@@ -155,6 +156,35 @@ async fn run_hooks(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResult> 
                             });
                             break;
                         }
+                    }
+                }
+            }
+
+            ServiceHookDef::CredoSignal { pid_file } => {
+                let command_str = format!("SIGHUP -> {}", pid_file.display());
+                match credo_lib::pid::signal(pid_file, Signal::SIGHUP) {
+                    Ok(()) => {
+                        results.push(HookResult {
+                            hook: hook_name,
+                            command: command_str,
+                            stdout: "signaled".to_string(),
+                            stderr: String::new(),
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            hook = %hook_name,
+                            pid_file = %pid_file.display(),
+                            error = %e,
+                            cert_name = %entry.name,
+                            "credoSignal hook failed"
+                        );
+                        results.push(HookResult {
+                            hook: hook_name,
+                            command: command_str,
+                            stdout: String::new(),
+                            stderr: e.to_string(),
+                        });
                     }
                 }
             }

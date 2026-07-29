@@ -20,6 +20,7 @@ import { LoggingHandle, createRequestLogMiddleware } from './logging';
 import { createLogsRouter } from './routes-logs';
 import { isValidHostname } from './dns-validate';
 import { isBlockedSsrfTarget } from './ssrf-guard';
+import { reloadTlsSecureContext } from './tls-reload';
 
 type Assignment = {
   corgi: string;
@@ -287,6 +288,18 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const clients = createShepherdClients(config);
   const loggingHandle = LoggingHandle.init(config.logging, 'dashboard');
+
+  // Written so a corgi credoSignal hook can target this process directly
+  // (SIGHUP -> reloadTlsSecureContext below) the same way it already does
+  // for shepherd/corgi/vigil's own PID files.
+  fs.writeFileSync(config.pidPath, String(process.pid));
+  process.on('exit', () => {
+    try {
+      fs.unlinkSync(config.pidPath);
+    } catch {
+      // already removed, or never existed — fine either way
+    }
+  });
 
   initUsersStore(config.auth.usersPath);
 
@@ -948,6 +961,22 @@ async function main(): Promise<void> {
   server.on('tlsClientError', (err) => {
     process.stderr.write(`[dashboard] TLS client error: ${err.message}\n`);
   });
+
+  // Re-reads config (so a changed tls.certPath/keyPath is picked up too, not
+  // just a changed file at the same path) and hot-swaps the TLS cert with
+  // zero downtime — no restart needed, matching how shepherd/corgi/vigil
+  // already reload their own listener cert on SIGHUP.
+  process.on('SIGHUP', () => {
+    try {
+      const freshConfig = loadConfig();
+      reloadTlsSecureContext(server, freshConfig.tls.certPath, freshConfig.tls.keyPath);
+      process.stdout.write('[dashboard] SIGHUP received — reloaded TLS cert\n');
+    } catch (err) {
+      const message = err instanceof Error ? err.stack || err.message : String(err);
+      process.stderr.write(`[dashboard] SIGHUP reload failed: ${message}\n`);
+    }
+  });
+
   server.listen(config.port, config.bind, () => {
     process.stdout.write(
       `[dashboard] listening on https://${config.bind}:${config.port} using shepherd API ${config.shepherdApiUrl}\n`

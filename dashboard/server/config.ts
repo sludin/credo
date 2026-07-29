@@ -44,6 +44,8 @@ export type DashboardConfig = {
   };
   auth: DashboardAuthConfig;
   configPath: string;
+  /** Written at startup; a corgi credoSignal hook targets this to trigger a SIGHUP reload. */
+  pidPath: string;
 };
 
 type RawDashboardConfig = {
@@ -70,6 +72,7 @@ type RawDashboardConfig = {
   dnsPollingIntervalSeconds?: unknown;
   dnsJobTimeoutSeconds?: unknown;
   dnsPublicResolvers?: unknown;
+  pidFile?: unknown;
   logging?: {
     enabled?: unknown;
     dir?: unknown;
@@ -277,6 +280,7 @@ export function loadConfig(options?: { skipTlsCheck?: boolean }): DashboardConfi
     baseDir,
     optionalString(rawAuth.sessionsDir) ?? 'sessions'
   );
+  const pidPath = path.resolve(baseDir, optionalString(raw.pidFile) ?? 'dashboard.pid');
 
   return {
     port,
@@ -318,5 +322,6 @@ export function loadConfig(options?: { skipTlsCheck?: boolean }): DashboardConfi
       sessionsDir: authSessionsDir,
     },
     configPath,
+    pidPath,
   };
 }
