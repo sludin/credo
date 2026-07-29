@@ -6,7 +6,7 @@ use crate::cert_ops::{
     cert_days_remaining, cert_pem_matches_key_file, generate_key_and_csr, install_certificate,
     read_cert_fingerprint,
 };
-use crate::hooks::run_hooks;
+use crate::hooks::run_hooks_logged;
 use crate::shepherd::ShepherdClient;
 use crate::state::AppState;
 use crate::types::{CsrRequest, InstallRequest};
@@ -215,15 +215,7 @@ pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
                 );
 
                 if result.changed {
-                    let hook_results = run_hooks(entry, &config).await;
-                    for hr in &hook_results {
-                        tracing::info!(
-                            cert_name = %assignment.cert_name,
-                            hook = %hr.hook,
-                            command = %hr.command,
-                            "Hook executed"
-                        );
-                    }
+                    run_hooks_logged(entry, &config).await;
                     crate::monitor::schedule_post_install_check(
                         state,
                         assignment.cert_name.clone(),

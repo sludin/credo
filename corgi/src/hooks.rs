@@ -17,7 +17,7 @@ pub struct HookResult {
 
 /// Execute all hooks for a flock entry.
 /// Uses entry.hooks when set; falls back to config.default_hooks when None.
-pub async fn run_hooks(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResult> {
+async fn run_hooks(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResult> {
     let refs: &[HookRef] = match &entry.hooks {
         Some(h) => h,
         None => &config.default_hooks,
@@ -161,6 +161,23 @@ pub async fn run_hooks(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResu
         }
     }
 
+    results
+}
+
+/// Run all hooks for a flock entry and log each execution at INFO.
+/// This is the single entry point callers should use — `run_hooks` alone
+/// does not log successes, only failures, which previously let call sites
+/// silently diverge in observability.
+pub async fn run_hooks_logged(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResult> {
+    let results = run_hooks(entry, config).await;
+    for hr in &results {
+        tracing::info!(
+            cert_name = %entry.name,
+            hook = %hr.hook,
+            command = %hr.command,
+            "Hook executed"
+        );
+    }
     results
 }
 
