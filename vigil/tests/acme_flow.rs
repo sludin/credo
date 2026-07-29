@@ -34,6 +34,27 @@ fn build_csr_der(sans: &[&str], key: &SigningKey) -> Vec<u8> {
     cert.serialize_request_der().expect("serialize CSR DER")
 }
 
+/// Like `build_csr_der`, but also embeds a URI SAN — mirrors what corgi's
+/// real CSRs always include (its mTLS identity, via
+/// `corgi::cert_ops::collect_sans`) alongside the DNS name.
+fn build_csr_der_with_uri_san(dns_san: &str, uri_san: &str, key: &SigningKey) -> Vec<u8> {
+    let key_pem = key
+        .to_pkcs8_pem(pkcs8::LineEnding::LF)
+        .expect("encode CSR key to PKCS8 PEM");
+    let key_pair = rcgen::KeyPair::from_pem(&key_pem).expect("load rcgen keypair from PEM");
+    let mut params = rcgen::CertificateParams::new(vec![dns_san.to_string()]);
+    params
+        .subject_alt_names
+        .push(rcgen::SanType::URI(uri_san.to_string()));
+    params.key_pair = Some(key_pair);
+    params.distinguished_name = rcgen::DistinguishedName::new();
+    params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, dns_san);
+    let cert = rcgen::Certificate::from_params(params).expect("build CSR params");
+    cert.serialize_request_der().expect("serialize CSR DER")
+}
+
 // ---------------------------------------------------------------------------
 // JWS signing helper
 // ---------------------------------------------------------------------------
@@ -601,5 +622,44 @@ async fn revoke_cert_via_jwk_requires_matching_key() {
         resp.status(),
         200,
         "revoke-cert via jwk with the matching certificate key must succeed"
+    );
+}
+
+/// A CSR that embeds a URI identity SAN alongside the validated DNS name
+/// must still finalize successfully — this is corgi's normal shape (see
+/// `corgi::cert_ops::collect_sans`, which always adds an identity URI SAN
+/// next to the domain's DNS SAN). Regression test for a bug in the
+/// finalize_rejects_csr_san_outside_validated_order fix (sign_csr_restricted),
+/// which originally checked *every* CSR SAN — including URI SANs, which are
+/// never part of an ACME order's DNS identifiers and are authorized
+/// separately via allowed_identity_uri_prefixes — against the order's
+/// validated identifiers, rejecting all real corgi issuance with badCSR.
+#[tokio::test]
+async fn finalize_accepts_csr_with_uri_identity_san_alongside_validated_dns_name() {
+    let vigil = TestVigil::start_authed().await.unwrap();
+    let mut client = AcmeTestClient::new(&vigil.url);
+    client.register().await;
+
+    let domain = "corgi-uri-san-test.credo.test";
+    let order = client.new_order(domain, Some("none-01")).await;
+    let authz_url = order["authorizations"][0].as_str().unwrap();
+    let authz = client.get_authz(authz_url).await;
+    let (chall_url, _token) = AcmeTestClient::find_challenge(&authz, "http-01");
+    let resp = client.respond_challenge(&chall_url).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "none-01 challenge response must return 200"
+    );
+
+    let finalize_url = order["finalize"].as_str().unwrap();
+    let key = SigningKey::random(&mut OsRng);
+    // Matches TestVigil's configured allowed_identity_uri_prefixes ("vigil://credo/").
+    let csr_der = build_csr_der_with_uri_san(domain, "vigil://credo/corgi-03", &key);
+    let resp = client.finalize_raw(finalize_url, &csr_der).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "finalize with a validated DNS SAN plus an allowed URI identity SAN must succeed"
     );
 }

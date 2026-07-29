@@ -353,13 +353,25 @@ fn parse_cert_metadata(
 // CSR extraction helpers
 // ---------------------------------------------------------------------------
 
+/// Which GeneralName variant a CSR SAN entry came from. ACME's per-domain
+/// challenge validation only ever produces "dns" identifiers, so only Dns
+/// entries are meaningful to check against an order's validated identifiers;
+/// Uri (identity) SANs are authorized separately via
+/// `issuance_policy::allowed_identity_uri_prefixes`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SanKind {
+    Dns,
+    Uri,
+    Ip,
+}
+
 struct CsrFields {
     /// Raw DER bytes of the Subject RDNSequence
     subject_der: Vec<u8>,
     /// Raw DER bytes of the SubjectPublicKeyInfo
     spki_der: Vec<u8>,
-    /// SAN names from the CSR (DNS names, URIs, IPs as strings)
-    san_names: Vec<String>,
+    /// SAN entries from the CSR, tagged by GeneralName type (DNS/URI/IP).
+    sans: Vec<(SanKind, String)>,
     /// CN value if present
     cn: Option<String>,
 }
@@ -385,19 +397,22 @@ fn extract_csr_fields(csr_der: &[u8]) -> Result<CsrFields> {
     let spki_der = extract_spki_der(csr_der)?;
 
     // SANs from requested extensions
-    let mut san_names = Vec::new();
+    let mut sans = Vec::new();
     for ext_result in csr.requested_extensions().into_iter().flatten() {
         if let x509_parser::extensions::ParsedExtension::SubjectAlternativeName(san) = ext_result {
             for name in &san.general_names {
                 match name {
                     x509_parser::extensions::GeneralName::DNSName(dns) => {
-                        san_names.push(dns.trim().to_string());
+                        sans.push((SanKind::Dns, dns.trim().to_string()));
                     }
                     x509_parser::extensions::GeneralName::URI(uri) => {
-                        san_names.push(uri.trim().to_string());
+                        sans.push((SanKind::Uri, uri.trim().to_string()));
                     }
                     x509_parser::extensions::GeneralName::IPAddress(ip) if ip.len() == 4 => {
-                        san_names.push(format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]));
+                        sans.push((
+                            SanKind::Ip,
+                            format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]),
+                        ));
                     }
                     _ => {}
                 }
@@ -408,7 +423,7 @@ fn extract_csr_fields(csr_der: &[u8]) -> Result<CsrFields> {
     Ok(CsrFields {
         subject_der,
         spki_der,
-        san_names,
+        sans,
         cn,
     })
 }
@@ -557,11 +572,26 @@ fn sign_csr_impl(
     let fields = extract_csr_fields(&csr_der).context("Extracting CSR fields")?;
 
     if let Some(allowed) = require_subset_of {
+        // Only DNS-type SAN entries (and CN, which is always a domain name in
+        // this codebase's CSRs) are checked against the order's ACME-validated
+        // identifiers — ACME's per-domain challenge validation only ever
+        // produces "dns" identifiers. URI identity SANs (e.g. a corgi's
+        // vigil://... mTLS identity, always present alongside the DNS name —
+        // see corgi::cert_ops::collect_sans) and IP SANs are authorized
+        // through the separate `allowed_identity_uri_prefixes`/`allow_ip_sans`
+        // checks in `validate_issuance_policy`, not ACME domain validation;
+        // subjecting them to this check as well rejects every legitimate
+        // corgi issuance request.
         let allowed_normalized: Vec<String> = allowed
             .iter()
             .map(|s| crate::issuance_policy::normalize_dns(s))
             .collect();
-        let mut csr_names: Vec<String> = fields.san_names.clone();
+        let mut csr_names: Vec<String> = fields
+            .sans
+            .iter()
+            .filter(|(kind, _)| *kind == SanKind::Dns)
+            .map(|(_, name)| name.clone())
+            .collect();
         if let Some(cn) = &fields.cn {
             let cn = cn.trim().to_string();
             if !cn.is_empty() {
@@ -606,8 +636,8 @@ fn sign_csr_impl(
         (hex::encode(random_bytes), false)
     };
 
-    // Build SAN list: CSR SANs + CN + extra
-    let mut san_set: Vec<String> = fields.san_names.clone();
+    // Build SAN list: CSR SANs (all kinds — DNS, URI, IP) + CN + extra
+    let mut san_set: Vec<String> = fields.sans.iter().map(|(_, name)| name.clone()).collect();
     if let Some(cn) = &fields.cn {
         let cn = cn.trim().to_string();
         if !cn.is_empty() && !san_set.contains(&cn) {
