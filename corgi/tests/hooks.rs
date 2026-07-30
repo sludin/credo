@@ -19,6 +19,24 @@ use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::Layer;
 
 // ---------------------------------------------------------------------------
+// Serialization
+// ---------------------------------------------------------------------------
+
+/// Unix signals are process-global — the credo_signal test below sends a real
+/// SIGHUP to this test binary's own PID, and the kernel may deliver it to any
+/// thread in the process. Run cargo's default parallel test threads and that
+/// signal can land while an unrelated test on another thread is mid-flight,
+/// which was observed to spuriously drop that test's tracing-capture events.
+/// Every test in this file takes this lock for its full duration (held across
+/// `.await`, hence `tokio::sync::Mutex` rather than `std::sync::Mutex`) so
+/// only one runs at a time, regardless of `--test-threads`.
+static TEST_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn serialize() -> tokio::sync::MutexGuard<'static, ()> {
+    TEST_SERIAL.lock().await
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -177,6 +195,7 @@ async fn capture_events<F: std::future::Future<Output = ()>>(f: F) -> Vec<Captur
 /// flock_install path, which is what made real hook runs invisible in logs.
 #[tokio::test]
 async fn run_hooks_logged_emits_hook_executed_event() {
+    let _serial = serialize().await;
     let dir = TempDir::new().unwrap();
     let mut config = make_config(&dir);
     config.service_hooks.insert(
@@ -211,6 +230,7 @@ async fn run_hooks_logged_emits_hook_executed_event() {
 /// legitimate (distinct from silence caused by a missing log call).
 #[tokio::test]
 async fn run_hooks_logged_emits_nothing_when_no_hooks_configured() {
+    let _serial = serialize().await;
     let dir = TempDir::new().unwrap();
     let config = make_config(&dir);
     let mut entry = empty_entry("no-hooks-cert", &dir);
@@ -235,6 +255,7 @@ async fn run_hooks_logged_emits_nothing_when_no_hooks_configured() {
 /// concurrently could otherwise produce a false positive here.
 #[tokio::test]
 async fn credo_signal_hook_delivers_real_sighup_and_only_when_configured() {
+    let _serial = serialize().await;
     use tokio::signal::unix::{signal, SignalKind};
     use tokio::time::{timeout, Duration};
 
@@ -247,6 +268,7 @@ async fn credo_signal_hook_delivers_real_sighup_and_only_when_configured() {
         "corgi-self-reload".to_string(),
         ServiceHookDef::CredoSignal {
             pid_file: pid_file.clone(),
+            signal: nix::sys::signal::Signal::SIGHUP,
         },
     );
 

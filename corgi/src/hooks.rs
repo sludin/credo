@@ -1,5 +1,4 @@
 use anyhow::Result;
-use nix::sys::signal::Signal;
 use regex::Regex;
 use std::collections::HashSet;
 use std::process::Stdio;
@@ -160,9 +159,9 @@ async fn run_hooks(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResult> 
                 }
             }
 
-            ServiceHookDef::CredoSignal { pid_file } => {
-                let command_str = format!("SIGHUP -> {}", pid_file.display());
-                match credo_lib::pid::signal(pid_file, Signal::SIGHUP) {
+            ServiceHookDef::CredoSignal { pid_file, signal } => {
+                let command_str = format!("{:?} -> {}", signal, pid_file.display());
+                match credo_lib::pid::signal(pid_file, *signal) {
                     Ok(()) => {
                         results.push(HookResult {
                             hook: hook_name,
