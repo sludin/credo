@@ -594,7 +594,10 @@ fn get_cert_spki_bytes(cert_path: &Path) -> Option<Vec<u8>> {
 fn get_cert_spki_bytes_from_pem(cert_pem: &str) -> Option<Vec<u8>> {
     let der = pem_cert_to_der(cert_pem).ok()?;
     let (_, cert) = x509_parser::parse_x509_certificate(&der).ok()?;
-    Some(cert.public_key().raw.to_vec())
+    // `.raw` is the whole DER-encoded SubjectPublicKeyInfo (algorithm identifier
+    // + BIT STRING wrapper); `get_key_public_point` below compares against the
+    // bare SEC1 EC point, so we need just the BIT STRING content here too.
+    Some(cert.public_key().subject_public_key.data.to_vec())
 }
 
 /// Returns true if `cert_pem` was signed for the public key corresponding to
@@ -617,4 +620,40 @@ fn get_key_public_point(key_path: &Path) -> Option<Vec<u8>> {
     let sk = p256::SecretKey::from_pkcs8_pem(&pem_str).ok()?;
     let point = sk.public_key().to_encoded_point(false);
     Some(point.as_bytes().to_vec())
+}
+
+#[cfg(test)]
+mod pending_key_match_tests {
+    use super::*;
+    use rcgen::{Certificate, CertificateParams};
+    use std::io::Write;
+
+    fn write_key(pem: &str) -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(pem.as_bytes()).unwrap();
+        f
+    }
+
+    #[test]
+    fn matches_when_cert_was_issued_for_the_pending_key() {
+        let cert =
+            Certificate::from_params(CertificateParams::new(vec!["example.com".into()])).unwrap();
+        let cert_pem = cert.serialize_pem().unwrap();
+        let key_file = write_key(&cert.serialize_private_key_pem());
+
+        assert!(cert_pem_matches_key_file(&cert_pem, key_file.path()));
+    }
+
+    #[test]
+    fn does_not_match_a_different_key() {
+        let cert =
+            Certificate::from_params(CertificateParams::new(vec!["example.com".into()])).unwrap();
+        let cert_pem = cert.serialize_pem().unwrap();
+
+        let other =
+            Certificate::from_params(CertificateParams::new(vec!["example.com".into()])).unwrap();
+        let key_file = write_key(&other.serialize_private_key_pem());
+
+        assert!(!cert_pem_matches_key_file(&cert_pem, key_file.path()));
+    }
 }
