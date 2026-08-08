@@ -379,6 +379,23 @@ pub fn install_certificate(
         .or(req.fullchain_pem.as_deref())
         .ok_or_else(|| anyhow::anyhow!("certPem or fullchainPem is required"))?;
 
+    // If the caller didn't supply a key, install_to_archive will pick one up
+    // from pending/ below. Verify up front that it actually corresponds to
+    // this cert — every caller that can land here without a key (the sync
+    // loop, an admin push, a future caller) needs this guard, not just one
+    // of them, since a stale pending key (e.g. superseded by a newer CSR)
+    // must never get linked to a cert it wasn't issued against.
+    if req.key_pem.is_none() {
+        let pending = crate::archive::pending_key_path(cert_store_dir, &entry.name);
+        if pending.exists() && !cert_pem_matches_key_file(cert_pem, &pending) {
+            anyhow::bail!(
+                "received cert for '{}' does not match the pending key; \
+                 the matching cert hasn't arrived yet",
+                entry.name
+            );
+        }
+    }
+
     let previous_fingerprint = read_cert_fingerprint(&entry.path); // display format
 
     let cert_der = pem_cert_to_der(cert_pem)?;
@@ -509,6 +526,7 @@ pub fn read_cert_status(entry: &FlockEntry) -> crate::types::CertificateStatus {
 pub fn to_flock_summary(
     entry: &FlockEntry,
     monitor_results: &std::collections::HashMap<String, credo_lib::types::MonitorResult>,
+    install_issues: &std::collections::HashMap<String, crate::types::InstallIssue>,
 ) -> crate::types::FlockSummary {
     let fingerprint256 = read_cert_fingerprint(&entry.path);
 
@@ -570,6 +588,7 @@ pub fn to_flock_summary(
         status,
         key_exists: entry.key_path.exists(),
         monitor: crate::monitor::monitor_result_for(entry, monitor_results),
+        install_issue: install_issues.get(&entry.name).cloned(),
     }
 }
 

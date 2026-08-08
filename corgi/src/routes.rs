@@ -83,9 +83,10 @@ pub async fn flock_list(
     check_min_role(role.as_ref().map(|e| &e.0), &Role::Readonly)?;
     let flock = state.flock.read().await;
     let monitor_results = state.monitor_results.read().await;
+    let install_issues = state.install_issues.read().await;
     let summaries: Vec<_> = flock
         .iter()
-        .map(|e| to_flock_summary(e, &monitor_results))
+        .map(|e| to_flock_summary(e, &monitor_results, &install_issues))
         .collect();
     Ok(Json(json!({ "flock": summaries })))
 }

@@ -257,7 +257,7 @@ async fn cert_maintenance_for(state: &AppState, corgis: &[CorgiNodeConfig]) {
 /// Ask the corgi to re-pull its assignments now. Data still flows via corgi's
 /// pull; this is a data-free trigger. Failures are logged only — the periodic
 /// sweep and corgi's own safety-net pull converge the state eventually.
-async fn nudge_corgi_sync(state: &AppState, node: &CorgiNodeConfig) {
+pub(crate) async fn nudge_corgi_sync(state: &AppState, node: &CorgiNodeConfig) {
     {
         let cs = state.corgi_state.read().await;
         if cs.get(&node.name).map(|s| &s.status) != Some(&CorgiStatus::Reachable) {
@@ -299,6 +299,8 @@ struct FlockEntry {
     key_exists: bool,
     #[serde(default)]
     monitor: Option<credo_lib::types::MonitorResult>,
+    #[serde(default)]
+    install_issue: Option<crate::types::CorgiInstallIssue>,
 }
 
 async fn poll_flock(state: &AppState, node: &CorgiNodeConfig) -> CorgiStatus {
@@ -316,6 +318,7 @@ async fn poll_flock(state: &AppState, node: &CorgiNodeConfig) -> CorgiStatus {
                     san_names: e.san_names,
                     key_exists: Some(e.key_exists),
                     monitor: e.monitor,
+                    install_issue: e.install_issue,
                 })
                 .collect();
             let mut cs = state.corgi_state.write().await;
@@ -338,6 +341,124 @@ async fn poll_flock(state: &AppState, node: &CorgiNodeConfig) -> CorgiStatus {
             entry.error = Some(e.to_string());
             CorgiStatus::Unreachable
         }
+    }
+}
+
+/// True if `flock`'s entry named `cert_name` reports `expected_fingerprint`.
+/// Normalizes both sides (strip colons, lowercase) so format differences
+/// between how Shepherd and Corgi render a fingerprint ("FD:5A:.." vs
+/// "fd5a..") don't cause a spurious non-match.
+fn flock_reports_fingerprint(
+    flock: &[FlockEntry],
+    cert_name: &str,
+    expected_fingerprint: &str,
+) -> bool {
+    let normalize = |s: &str| s.replace(':', "").to_lowercase();
+    let expected = normalize(expected_fingerprint);
+    flock
+        .iter()
+        .find(|e| e.name == cert_name)
+        .and_then(|e| e.fingerprint256.as_deref())
+        .map(|fp| normalize(fp) == expected)
+        .unwrap_or(false)
+}
+
+/// Poll a corgi's `/flock` for up to `timeout`, checking whether `cert_name`
+/// now reports `expected_fingerprint`. Used after an admin-triggered renewal
+/// nudge to give the caller synchronous confirmation. A `false` return is
+/// *not* a failure signal to act on — Corgi's own periodic pull converges
+/// eventually regardless (see `nudge_corgi_sync`); it only means we couldn't
+/// confirm within this window.
+pub(crate) async fn wait_for_corgi_fingerprint(
+    state: &AppState,
+    node: &CorgiNodeConfig,
+    cert_name: &str,
+    expected_fingerprint: &str,
+    timeout: Duration,
+) -> bool {
+    let poll_interval = Duration::from_secs(3);
+    let deadline = tokio::time::Instant::now() + timeout;
+
+    loop {
+        if let Ok(resp) = corgi_get::<FlockResponse>(&state.corgi_client_pool, node, "/flock").await
+        {
+            if flock_reports_fingerprint(&resp.flock, cert_name, expected_fingerprint) {
+                return true;
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
+#[cfg(test)]
+mod fingerprint_match_tests {
+    use super::*;
+
+    fn entry(name: &str, fp: Option<&str>) -> FlockEntry {
+        FlockEntry {
+            name: name.to_string(),
+            lifetime_days: None,
+            status: None,
+            san_names: vec![],
+            fingerprint256: fp.map(str::to_string),
+            valid_to: None,
+            key_exists: false,
+            monitor: None,
+            install_issue: None,
+        }
+    }
+
+    #[test]
+    fn matches_identical_fingerprint() {
+        let flock = vec![entry("cloud.ludin.org", Some("FD:5A:01"))];
+        assert!(flock_reports_fingerprint(
+            &flock,
+            "cloud.ludin.org",
+            "FD:5A:01"
+        ));
+    }
+
+    #[test]
+    fn matches_despite_colon_and_case_differences() {
+        let flock = vec![entry("cloud.ludin.org", Some("fd:5a:01"))];
+        assert!(flock_reports_fingerprint(
+            &flock,
+            "cloud.ludin.org",
+            "FD5A01"
+        ));
+    }
+
+    #[test]
+    fn no_match_for_different_fingerprint() {
+        let flock = vec![entry("cloud.ludin.org", Some("FD:5A:01"))];
+        assert!(!flock_reports_fingerprint(
+            &flock,
+            "cloud.ludin.org",
+            "AA:BB:CC"
+        ));
+    }
+
+    #[test]
+    fn no_match_when_cert_name_absent() {
+        let flock = vec![entry("other.example.org", Some("FD:5A:01"))];
+        assert!(!flock_reports_fingerprint(
+            &flock,
+            "cloud.ludin.org",
+            "FD:5A:01"
+        ));
+    }
+
+    #[test]
+    fn no_match_when_entry_has_no_fingerprint_yet() {
+        let flock = vec![entry("cloud.ludin.org", None)];
+        assert!(!flock_reports_fingerprint(
+            &flock,
+            "cloud.ludin.org",
+            "FD:5A:01"
+        ));
     }
 }
 

@@ -2,6 +2,7 @@ use axum::extract::{Path, Query, State};
 use axum::response::Json;
 use chrono::Utc;
 use serde_json::json;
+use std::time::Duration;
 
 use axum::http::header;
 use axum::response::IntoResponse;
@@ -980,38 +981,52 @@ async fn admin_provision_or_renew(
                 .await;
 
                 if result.changed {
-                    match crate::corgi_client::push_cert_install(
-                        &state2.corgi_client_pool,
+                    // Same pull-based path the automatic renewal loop uses (see
+                    // poll::cert_maintenance) — Shepherd never pushes cert material to
+                    // Corgi. We additionally poll briefly here so an admin-triggered
+                    // renew still gets synchronous confirmation; a timeout isn't a
+                    // failure, since Corgi's own periodic pull converges regardless.
+                    crate::poll::nudge_corgi_sync(&state2, &node2).await;
+                    append_trace(
+                        &state2.renewal_jobs,
+                        job_id,
+                        "nudged-corgi-sync",
+                        None,
+                        None,
+                        Some("ok"),
+                    )
+                    .await;
+
+                    let confirmed = crate::poll::wait_for_corgi_fingerprint(
+                        &state2,
                         &node2,
                         &cert_name2,
-                        &result,
+                        &result.fingerprint256,
+                        Duration::from_secs(90),
                     )
-                    .await
-                    {
-                        Ok(_) => {
-                            append_trace(
-                                &state2.renewal_jobs,
-                                job_id,
-                                "installed-on-corgi",
-                                None,
-                                None,
-                                Some("ok"),
-                            )
-                            .await;
-                        }
-                        Err(e) => {
-                            tracing::warn!(cert = %cert_name2, error = %e,
-                                "Admin-triggered renewal: corgi install failed (non-fatal)");
-                            append_trace(
-                                &state2.renewal_jobs,
-                                job_id,
-                                "install-failed",
-                                Some(&e.to_string()),
-                                None,
-                                Some("warn"),
-                            )
-                            .await;
-                        }
+                    .await;
+                    if confirmed {
+                        append_trace(
+                            &state2.renewal_jobs,
+                            job_id,
+                            "confirmed-on-corgi",
+                            None,
+                            None,
+                            Some("ok"),
+                        )
+                        .await;
+                    } else {
+                        tracing::info!(cert = %cert_name2, corgi = %node2.name,
+                            "Admin-triggered renewal: corgi hasn't confirmed install yet; its periodic pull will converge");
+                        append_trace(
+                            &state2.renewal_jobs,
+                            job_id,
+                            "install-pending-corgi-pull",
+                            None,
+                            None,
+                            Some("warn"),
+                        )
+                        .await;
                     }
                 }
 

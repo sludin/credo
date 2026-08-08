@@ -306,6 +306,21 @@ pub struct CorgiFlockEntry {
     /// Endpoint-monitor result the corgi reported for this cert.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub monitor: Option<credo_lib::types::MonitorResult>,
+    /// Set when the corgi has been failing to install this cert repeatedly
+    /// (e.g. a pending key that no longer matches the cert Shepherd issued).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_issue: Option<CorgiInstallIssue>,
+}
+
+/// Mirrors corgi's `InstallIssue` — a stuck-install condition reported via
+/// `/flock`, surfaced here so the dashboard can show it without anyone
+/// needing to read corgi's logs to notice.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CorgiInstallIssue {
+    pub reason: String,
+    pub since: i64,
+    pub attempts: u32,
 }
 
 #[derive(Debug, Clone)]

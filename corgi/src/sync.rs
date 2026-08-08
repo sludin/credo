@@ -3,13 +3,40 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::archive::pending_key_path;
 use crate::assignments::{load_assignments_cache, merge_assignments, save_assignments_cache};
 use crate::cert_ops::{
-    cert_days_remaining, cert_pem_matches_key_file, generate_key_and_csr, install_certificate,
-    read_cert_fingerprint,
+    cert_days_remaining, generate_key_and_csr, install_certificate, read_cert_fingerprint,
 };
 use crate::hooks::run_hooks_logged;
 use crate::shepherd::ShepherdClient;
 use crate::state::AppState;
-use crate::types::{CsrRequest, InstallRequest};
+use crate::types::{CsrRequest, InstallIssue, InstallRequest};
+
+/// How long a cert can keep failing to install before we escalate the log
+/// level from WARN to ERROR. A single-cycle failure during a legitimate
+/// in-flight race (a new CSR superseding an in-progress one) is expected and
+/// resolves itself within one Shepherd nudge round-trip; one that persists
+/// past several sync cycles does not, and needs a human to notice.
+const STUCK_INSTALL_THRESHOLD_SECS: i64 = 5 * 60;
+
+/// Records an install failure for `cert_name` in `issues`, returning `true`
+/// once it has been failing continuously for at least
+/// `STUCK_INSTALL_THRESHOLD_SECS` — the caller should log at ERROR when that
+/// happens instead of the usual WARN. Pure function over the map so the
+/// escalation threshold logic is unit-testable without a running sync loop.
+fn note_install_failure(
+    issues: &mut std::collections::HashMap<String, InstallIssue>,
+    cert_name: &str,
+    reason: String,
+    now: i64,
+) -> bool {
+    let issue = issues.entry(cert_name.to_string()).or_insert(InstallIssue {
+        reason: reason.clone(),
+        since: now,
+        attempts: 0,
+    });
+    issue.reason = reason;
+    issue.attempts += 1;
+    now - issue.since >= STUCK_INSTALL_THRESHOLD_SECS
+}
 
 /// Perform a single reconciliation pass: pull assignments from Shepherd,
 /// compare fingerprints, fetch and install changed certs, run hooks.
@@ -175,28 +202,10 @@ pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
             continue;
         }
 
-        // If a pending key is waiting to be archived and Shepherd didn't supply
-        // the private key, verify the cert matches the pending key before
-        // installing.  A mismatch means the new cert isn't ready yet — Shepherd
-        // is still serving the old one.  Skip this cycle; install_to_archive
-        // would otherwise link the pending (new) key to the old cert.
-        if pending.exists() && cert_response.key_pem.is_none() {
-            let cert_pem = cert_response
-                .cert_pem
-                .as_deref()
-                .or(cert_response.fullchain_pem.as_deref());
-            if let Some(pem) = cert_pem {
-                if !cert_pem_matches_key_file(pem, &pending) {
-                    tracing::warn!(
-                        cert_name = %assignment.cert_name,
-                        "Received cert does not match pending key; deferring install until new cert is issued"
-                    );
-                    continue;
-                }
-            }
-        }
-
-        // Install
+        // Install. install_certificate() itself verifies a pending key matches
+        // the cert being installed before touching disk — see its doc comment.
+        // A mismatch there (new cert isn't ready yet; Shepherd is still serving
+        // the old one) surfaces as an Err below and we just retry next cycle.
         let install_req = InstallRequest {
             cert_pem: cert_response.cert_pem,
             chain_pem: cert_response.chain_pem,
@@ -213,6 +222,11 @@ pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
                     fingerprint256 = %result.next_fingerprint,
                     "Cert installed successfully"
                 );
+                state
+                    .install_issues
+                    .write()
+                    .await
+                    .remove(&assignment.cert_name);
 
                 if result.changed {
                     run_hooks_logged(entry, &config).await;
@@ -223,11 +237,27 @@ pub async fn reconcile_once(state: &AppState) -> anyhow::Result<()> {
                 }
             }
             Err(e) => {
-                tracing::warn!(
-                    cert_name = %assignment.cert_name,
-                    error = %e,
-                    "Failed to install cert"
-                );
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64;
+                let stuck = {
+                    let mut issues = state.install_issues.write().await;
+                    note_install_failure(&mut issues, &assignment.cert_name, e.to_string(), now)
+                };
+                if stuck {
+                    tracing::error!(
+                        cert_name = %assignment.cert_name,
+                        error = %e,
+                        "Cert install has been failing for over 5 minutes — needs attention"
+                    );
+                } else {
+                    tracing::warn!(
+                        cert_name = %assignment.cert_name,
+                        error = %e,
+                        "Failed to install cert"
+                    );
+                }
             }
         }
     }
@@ -288,5 +318,67 @@ pub async fn run_sync_loop(state: AppState) {
 
         let interval = state.config.load().shepherd_sync.interval_seconds;
         tokio::time::sleep(credo_lib::timing::jittered_duration(interval, 0.1)).await;
+    }
+}
+
+#[cfg(test)]
+mod install_failure_tracking_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn first_failure_is_not_stuck() {
+        let mut issues = HashMap::new();
+        let stuck = note_install_failure(&mut issues, "cloud.ludin.org", "mismatch".into(), 1000);
+        assert!(!stuck, "a single fresh failure must not escalate");
+        let issue = issues.get("cloud.ludin.org").unwrap();
+        assert_eq!(issue.attempts, 1);
+        assert_eq!(issue.since, 1000);
+    }
+
+    #[test]
+    fn repeated_failures_within_threshold_are_not_stuck() {
+        let mut issues = HashMap::new();
+        note_install_failure(&mut issues, "cloud.ludin.org", "mismatch".into(), 1000);
+        let stuck = note_install_failure(&mut issues, "cloud.ludin.org", "mismatch".into(), 1100);
+        assert!(!stuck, "under 5 minutes elapsed must not escalate yet");
+        assert_eq!(issues.get("cloud.ludin.org").unwrap().attempts, 2);
+    }
+
+    #[test]
+    fn failure_past_threshold_is_stuck() {
+        let mut issues = HashMap::new();
+        note_install_failure(&mut issues, "cloud.ludin.org", "mismatch".into(), 1000);
+        let stuck = note_install_failure(
+            &mut issues,
+            "cloud.ludin.org",
+            "mismatch".into(),
+            1000 + STUCK_INSTALL_THRESHOLD_SECS,
+        );
+        assert!(stuck, "past the threshold must escalate to ERROR");
+    }
+
+    #[test]
+    fn since_is_preserved_across_repeated_failures() {
+        let mut issues = HashMap::new();
+        note_install_failure(&mut issues, "cloud.ludin.org", "mismatch".into(), 1000);
+        note_install_failure(&mut issues, "cloud.ludin.org", "mismatch".into(), 1200);
+        assert_eq!(
+            issues.get("cloud.ludin.org").unwrap().since,
+            1000,
+            "since must track the first failure, not the latest"
+        );
+    }
+
+    #[test]
+    fn different_certs_are_tracked_independently() {
+        let mut issues = HashMap::new();
+        note_install_failure(&mut issues, "a.example.org", "mismatch".into(), 1000);
+        let stuck = note_install_failure(&mut issues, "b.example.org", "mismatch".into(), 1000);
+        assert!(
+            !stuck,
+            "a fresh failure on a different cert must not inherit the other's history"
+        );
+        assert_eq!(issues.len(), 2);
     }
 }

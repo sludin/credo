@@ -494,6 +494,128 @@ fn install_certificate_unchanged_on_second_install() {
     );
 }
 
+/// When key_pem is None and a pending key on disk was generated for a
+/// *different* CSR than the cert being installed, install_certificate must
+/// reject the install rather than silently linking a mismatched pending key
+/// to the new cert (archive/ would then hold a cert+key pair that were never
+/// issued together). This guard is what protects every caller that can land
+/// here without a key — not just the sync loop.
+#[test]
+fn install_certificate_rejects_cert_that_does_not_match_pending_key() {
+    let dir = TempDir::new().unwrap();
+    let cert_store = dir.path().join("certstore");
+    std::fs::create_dir_all(&cert_store).unwrap();
+
+    let entry = corgi::config::FlockEntry {
+        name: "stale-pending".to_string(),
+        path: cert_store.join("live/stale-pending/cert.pem"),
+        key_path: cert_store.join("live/stale-pending/privkey.pem"),
+        fullchain_path: None,
+        chain_path: None,
+        csr_path: None,
+        domain: None,
+        monitor: None,
+        hooks: None,
+        csr_subject: None,
+        identity_uri: None,
+        sans: vec![],
+        cert_mode: None,
+        key_mode: None,
+        cert_owner: None,
+        cert_group: None,
+        key_owner: None,
+        key_group: None,
+    };
+
+    // Cert issued for one key; pending/ holds an unrelated, newer key (e.g. a
+    // later CSR request overwrote it before this cert arrived).
+    let (cert_pem, _issued_for_key_pem) = signed_cert_pem("stale-pending.credo.test");
+    let (_other_cert_pem, other_key_pem) = signed_cert_pem("stale-pending.credo.test");
+
+    let pending = corgi::archive::pending_key_path(&cert_store, &entry.name);
+    std::fs::create_dir_all(pending.parent().unwrap()).unwrap();
+    std::fs::write(&pending, &other_key_pem).unwrap();
+
+    let req = InstallRequest {
+        cert_pem: Some(cert_pem),
+        key_pem: None,
+        fullchain_pem: None,
+        chain_pem: None,
+        restart: Some(false),
+    };
+
+    let err = match install_certificate(&entry, &cert_store, &req) {
+        Err(e) => e,
+        Ok(_) => panic!("install must be rejected when cert doesn't match pending key"),
+    };
+    assert!(
+        err.to_string().contains("does not match the pending key"),
+        "unexpected error message: {err}"
+    );
+    assert!(
+        !cert_store.join("archive/stale-pending").exists(),
+        "no archive entry must be written when the guard rejects the install"
+    );
+}
+
+/// The mirror image of the rejection test: when the pending key *does* match
+/// the cert being installed, install_certificate proceeds and archives it.
+#[test]
+fn install_certificate_accepts_cert_that_matches_pending_key() {
+    let dir = TempDir::new().unwrap();
+    let cert_store = dir.path().join("certstore");
+    std::fs::create_dir_all(&cert_store).unwrap();
+
+    let entry = corgi::config::FlockEntry {
+        name: "matching-pending".to_string(),
+        path: cert_store.join("live/matching-pending/cert.pem"),
+        key_path: cert_store.join("live/matching-pending/privkey.pem"),
+        fullchain_path: None,
+        chain_path: None,
+        csr_path: None,
+        domain: None,
+        monitor: None,
+        hooks: None,
+        csr_subject: None,
+        identity_uri: None,
+        sans: vec![],
+        cert_mode: None,
+        key_mode: None,
+        cert_owner: None,
+        cert_group: None,
+        key_owner: None,
+        key_group: None,
+    };
+
+    let (cert_pem, key_pem) = signed_cert_pem("matching-pending.credo.test");
+
+    let pending = corgi::archive::pending_key_path(&cert_store, &entry.name);
+    std::fs::create_dir_all(pending.parent().unwrap()).unwrap();
+    std::fs::write(&pending, &key_pem).unwrap();
+
+    let req = InstallRequest {
+        cert_pem: Some(cert_pem),
+        key_pem: None,
+        fullchain_pem: None,
+        chain_pem: None,
+        restart: Some(false),
+    };
+
+    let result = install_certificate(&entry, &cert_store, &req)
+        .expect("install must succeed when pending key matches the cert");
+    assert!(result.changed);
+    assert!(
+        cert_store
+            .join("archive/matching-pending/privkey-001.pem")
+            .is_file(),
+        "pending key must be archived once it's confirmed to match"
+    );
+    assert!(
+        !pending.exists(),
+        "pending key must be cleared after archiving"
+    );
+}
+
 /// pem_cert_to_der parses a PEM certificate and returns the DER bytes.
 #[test]
 fn pem_cert_to_der_returns_non_empty_der() {

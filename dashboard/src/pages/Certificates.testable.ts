@@ -15,6 +15,7 @@ export function deriveStatus(
   if (!flockCert && !certEntry?.exists) return 'invalid';
   if (flockCert?.status === 'not-ok') return 'invalid';
   if (daysLeft !== null && daysLeft < 0) return 'invalid';
+  if (flockCert?.installIssue) return 'error';
   if (actualDnsSans && actualDnsSans.length > 0) {
     const configured = [
       ...new Set(
