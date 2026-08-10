@@ -32,8 +32,11 @@ const RENEWAL_JITTER_FRAC: f64 = 0.05;
 const PROBE_CONCURRENCY: usize = 16;
 /// A burst of API mutations coalesces into one targeted cycle.
 const MUTATION_DEBOUNCE: Duration = Duration::from_secs(1);
-/// One quick re-probe after a corgi drops offline, to filter transient blips
-/// before the next full interval.
+/// One quick re-probe after a corgi drops offline (or, on cold start, after
+/// its very first probe ever fails) to filter transient blips before the
+/// next full interval. Without the cold-start case, a coordinated restart of
+/// shepherd and every corgi together can leave the dashboard showing
+/// "unreachable" for up to two full reconcile intervals instead of ~60s.
 const UNREACHABLE_RETRY_DELAY: Duration = Duration::from_secs(60);
 
 /// A request for an immediate reconcile of one or more corgis.
@@ -138,6 +141,18 @@ pub async fn run_renewal_loop(state: AppState) {
 // Cycles
 // ---------------------------------------------------------------------------
 
+/// True if a corgi that just probed as `now` should get the fast one-shot
+/// reprobe (`UNREACHABLE_RETRY_DELAY`) instead of waiting for the next full
+/// reconcile interval: either it just dropped from reachable, or this is the
+/// very first probe ever recorded for it and that probe failed (`prev` is
+/// `None` because no `corgi_state` entry exists yet — the cold-start /
+/// coordinated-restart case). A corgi that was already known-unreachable and
+/// still is does *not* get a fast retry, so a persistently-down corgi isn't
+/// hammered every cycle.
+fn needs_fast_reprobe(prev: Option<&CorgiStatus>, now: &CorgiStatus) -> bool {
+    *now == CorgiStatus::Unreachable && matches!(prev, Some(CorgiStatus::Reachable) | None)
+}
+
 async fn reconcile_cycle(state: &AppState, targets: Option<Vec<String>>, maintenance: bool) {
     maybe_reload_corgis(state).await;
     maybe_reload_assignments(state).await;
@@ -174,11 +189,11 @@ async fn reconcile_cycle(state: &AppState, targets: Option<Vec<String>>, mainten
             (node.name, prev, now)
         });
     }
-    let mut newly_unreachable = Vec::new();
+    let mut needs_fast_retry = Vec::new();
     while let Some(res) = probes.join_next().await {
         if let Ok((name, prev, now)) = res {
-            if prev == Some(CorgiStatus::Reachable) && now == CorgiStatus::Unreachable {
-                newly_unreachable.push(name);
+            if needs_fast_reprobe(prev.as_ref(), &now) {
+                needs_fast_retry.push(name);
             }
         }
     }
@@ -215,7 +230,7 @@ async fn reconcile_cycle(state: &AppState, targets: Option<Vec<String>>, mainten
         });
     }
 
-    for name in newly_unreachable {
+    for name in needs_fast_retry {
         let st = state.clone();
         tokio::spawn(async move {
             tokio::time::sleep(UNREACHABLE_RETRY_DELAY).await;
@@ -390,6 +405,45 @@ pub(crate) async fn wait_for_corgi_fingerprint(
             return false;
         }
         tokio::time::sleep(poll_interval).await;
+    }
+}
+
+#[cfg(test)]
+mod fast_reprobe_tests {
+    use super::*;
+
+    #[test]
+    fn reachable_dropping_to_unreachable_gets_fast_retry() {
+        assert!(needs_fast_reprobe(
+            Some(&CorgiStatus::Reachable),
+            &CorgiStatus::Unreachable
+        ));
+    }
+
+    #[test]
+    fn never_probed_before_and_now_unreachable_gets_fast_retry() {
+        assert!(needs_fast_reprobe(None, &CorgiStatus::Unreachable));
+    }
+
+    #[test]
+    fn already_unreachable_staying_unreachable_does_not_get_fast_retry() {
+        assert!(!needs_fast_reprobe(
+            Some(&CorgiStatus::Unreachable),
+            &CorgiStatus::Unreachable
+        ));
+    }
+
+    #[test]
+    fn staying_reachable_does_not_get_fast_retry() {
+        assert!(!needs_fast_reprobe(
+            Some(&CorgiStatus::Reachable),
+            &CorgiStatus::Reachable
+        ));
+    }
+
+    #[test]
+    fn first_probe_ever_succeeding_does_not_get_fast_retry() {
+        assert!(!needs_fast_reprobe(None, &CorgiStatus::Reachable));
     }
 }
 
