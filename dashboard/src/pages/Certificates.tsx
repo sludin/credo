@@ -1097,6 +1097,34 @@ export default function Certificates(): React.ReactElement {
                               );
                             })()}
 
+                            {/* Stuck install (e.g. pending key no longer matches Shepherd's cert) */}
+                            {(() => {
+                              const issue = selectedRow.flockCert?.installIssue;
+                              if (!issue) return null;
+                              const sinceMs = issue.since * 1000;
+                              const stuckMinutes = Math.max(0, Math.round((Date.now() - sinceMs) / 60000));
+                              return (
+                                <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+                                  <div className="field-row" style={{ marginBottom: 4 }}>
+                                    <span className="field-label" style={{ fontWeight: 600 }}>Install Issue</span>
+                                    <span className="field-value">
+                                      <StatusBadge label="Stuck" tone="red" />
+                                    </span>
+                                  </div>
+                                  <div className="field-row" style={{ alignItems: 'flex-start' }}>
+                                    <span className="field-label">Reason</span>
+                                    <span className="field-value" style={{ fontSize: 11, color: 'var(--red)' }}>{issue.reason}</span>
+                                  </div>
+                                  <div className="field-row">
+                                    <span className="field-label">Failing since</span>
+                                    <span className="field-value" style={{ fontSize: 11 }}>
+                                      {new Date(sinceMs).toLocaleString()} ({stuckMinutes}m, {issue.attempts} attempt{issue.attempts === 1 ? '' : 's'})
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })()}
+
                             {activeJob && <ActiveJobSection job={activeJob} />}
                             {!activeJob && lastJob && (
                               <LastJobSection job={lastJob} expanded={logsExpanded} onToggle={() => setLogsExpanded(v => !v)} />

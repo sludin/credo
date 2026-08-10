@@ -118,8 +118,11 @@ The trust bundle contains the intermediate CA certificate (and optionally the ro
 | Shepherd main config (`shepherd.config.json`) | `SIGHUP` to the Shepherd process |
 | Corgi main config (`corgi.config.json`) | `SIGHUP` to the Corgi process |
 | Vigil main config (`vigil.config.json`) | `SIGHUP` to the Vigil process |
-| Dashboard main config (`dashboard.config.json`) | Restart the Dashboard BFF |
-| Any TLS certificate renewal | `SIGHUP` (Shepherd/Corgi/Vigil) or restart (Dashboard) |
+| Dashboard main config (`dashboard.config.json`) | Restart the Dashboard BFF (`SIGHUP` only reloads its TLS cert, see below — not the rest of the config) |
+| Any TLS certificate renewal for corgi/shepherd/vigil/dashboard's own listener cert | Automatic — Corgi's `credoSignal` hook sends `SIGHUP` to the target's PID file the moment the cert changes (see `corgi/docs/config.md`) |
+| Any TLS certificate renewal for a third-party service (nginx, Caddy, ...) | Configured shell hook (`serviceHooks`), same as always |
+
+Shepherd, Corgi, and Vigil all reload their own listener TLS config on `SIGHUP` (rebuilds from the current cert path, no restart). Dashboard now does the same via Node's `setSecureContext` (zero downtime — no listener rebind at all). Manually sending `SIGHUP` is still available as a fallback/override; the `credoSignal` hook is what makes it automatic.
 
 ---
 

@@ -5,7 +5,7 @@ use tokio::sync::RwLock;
 
 use crate::config::{CorgiConfig, FlockEntry};
 use crate::shepherd::build_shepherd_client;
-use crate::types::{ChallengeRecord, ManagedAssignment};
+use crate::types::{ChallengeRecord, InstallIssue, ManagedAssignment};
 
 /// Shared application state, cheaply cloneable via Arc.
 #[derive(Clone)]
@@ -27,6 +27,9 @@ pub struct AppState {
     pub sync_lock: Arc<tokio::sync::Mutex<()>>,
     /// Latest endpoint-monitor result per cert name (reported via /flock).
     pub monitor_results: Arc<RwLock<HashMap<String, credo_lib::types::MonitorResult>>>,
+    /// Ongoing install failures per cert name (reported via /flock). Cleared
+    /// on the next successful install; see `sync::record_install_failure`.
+    pub install_issues: Arc<RwLock<HashMap<String, InstallIssue>>>,
     /// Handle to this service's rotating log file + live broadcast, used by
     /// the `/logs` route. `credo_lib::LoggingHandle::disabled()` in tests,
     /// since the test harness can't call `init_logging_with_config` (it
@@ -57,6 +60,7 @@ impl AppState {
             last_sync_at: Arc::new(RwLock::new(None)),
             sync_lock: Arc::new(tokio::sync::Mutex::new(())),
             monitor_results: Arc::new(RwLock::new(HashMap::new())),
+            install_issues: Arc::new(RwLock::new(HashMap::new())),
             logging_handle,
         })
     }

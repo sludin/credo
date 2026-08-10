@@ -29,6 +29,12 @@ export type MonitorResult = {
 };
 
 // ── Flock (Corgi + certs) ─────────────────────────────────────────────────
+export type InstallIssue = {
+  reason: string;
+  since: number;
+  attempts: number;
+};
+
 export type FlockCert = {
   name: string;
   lifetimeDays: number;
@@ -37,6 +43,7 @@ export type FlockCert = {
   fingerprint256?: string;
   validTo?: string;
   monitor?: MonitorResult;
+  installIssue?: InstallIssue;
 };
 
 export type CorgiState = {

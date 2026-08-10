@@ -668,7 +668,8 @@ mod tests {
         );
 
         // Summaries carry the result on the wire for shepherd's flock probe.
-        let summary = crate::cert_ops::to_flock_summary(&entry, &results);
+        let no_issues = std::collections::HashMap::new();
+        let summary = crate::cert_ops::to_flock_summary(&entry, &results, &no_issues);
         let v = serde_json::to_value(&summary).unwrap();
         assert_eq!(v["monitor"]["status"], "ok");
     }

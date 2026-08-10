@@ -337,7 +337,15 @@ pub async fn enroll_corgi(
             key_owner: None,
             key_group: None,
             key_algorithm: None,
-            hooks: None,
+            // Corgi's own identity cert flows through the ordinary managed-cert
+            // pipeline like anything else it manages — this hook is what makes
+            // it reload itself (SIGHUP via its own PID file) the moment this
+            // cert actually changes, instead of requiring an operator/cron to
+            // send SIGHUP by hand. Requires a matching `credoSignal` entry
+            // named "corgi-self-reload" in the corgi's own serviceHooks config.
+            hooks: Some(vec![crate::types::HookRef::Simple(
+                "corgi-self-reload".to_string(),
+            )]),
             monitor: None,
         };
         let assignments_path = state.config.load().assignments_config_path.clone();

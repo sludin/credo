@@ -234,9 +234,11 @@ Used only when `auth.mode` is `"proxy-headers"`. All values are lowercased on lo
 
 ## Service Hooks
 
-Maps hook names to shell commands. Hook names are referenced in flock entries and `defaultHooks`. Commands are always resolved locally on the Corgi node — Shepherd only sends names, never commands.
+Maps hook names to shell commands or in-process signals. Hook names are referenced in flock entries and `defaultHooks`. Commands are always resolved locally on the Corgi node — Shepherd only sends names, never commands.
 
-**Simple hook** (array of shell tokens):
+The array shorthand is always the simple shell-command case and needs no further tagging. Any other shape is a JSON object and **must** carry an explicit `"type"` field — `"exec"` or `"signal"` — naming which kind of hook it is. There is no shape-sniffing: an object without a recognized `type` is a config error, not a guess.
+
+**Simple hook** (array of shell tokens — no `type` field, the array shape is unambiguous):
 ```json
 {
   "serviceHooks": {
@@ -246,11 +248,12 @@ Maps hook names to shell commands. Hook names are referenced in flock entries an
 }
 ```
 
-**Parameterized hook** (with typed runtime arguments):
+**`"type": "exec"`** (shell command with typed runtime arguments):
 ```json
 {
   "serviceHooks": {
     "docker-nginx": {
+      "type": "exec",
       "exec": ["docker", "exec", "-t", "{container}", "nginx", "-s", "reload"],
       "args": {
         "container": { "type": "container-name" }
@@ -260,7 +263,20 @@ Maps hook names to shell commands. Hook names are referenced in flock entries an
 }
 ```
 
-Allowed arg types: `"container-name"`, `"hostname"`, `"signal"`, `"service-name"`, `"identifier"`. Each type has a validation regex applied before execution.
+Allowed `args.<name>.type` values: `"container-name"`, `"hostname"`, `"signal"`, `"service-name"`, `"identifier"`. Each has a validation regex applied before execution. (This is a different `type` field, nested inside `args` — it names an argument's validation kind, not the hook kind.)
+
+**`"type": "signal"`** (credoSignal — PID-file signal, no subprocess):
+```json
+{
+  "serviceHooks": {
+    "corgi-self-reload": { "type": "signal", "pidFile": "corgi.pid" },
+    "shepherd-reload":   { "type": "signal", "pidFile": "/opt/credo/shepherd/shepherd.pid", "signal": "TERM" }
+  }
+}
+```
+Sends a signal directly to the process recorded in `pidFile` via `nix::sys::signal::kill` — no shell, no subprocess spawn, no dependency on `kill`/`systemctl` being present. `signal` is optional and defaults to `HUP` (the reload convention every credo binary implements); it accepts either a raw signal number (`1`) or a well-known bare name (`"HUP"`, `"TERM"`, case-insensitive — the same convention as the `args.<name>.type: "signal"` arg validator above, not the `nix`/POSIX `"SIGHUP"` spelling, though that's accepted too).
+
+Use this for credo's own binaries (shepherd, corgi, vigil, dashboard), which all write a PID file and already reload their TLS listener cert on `SIGHUP`. For corgi's own identity cert specifically, this is wired automatically: Shepherd attaches a `corgi-self-reload` hook to every corgi's self-assignment on enrollment, so a corgi just needs to define that hook name pointing at its own `corgi.pid` (relative paths resolve against the corgi process's own working directory — that's where it wrote the file). For shepherd/vigil/dashboard, the `pidFile` must be an absolute path, since it belongs to a different process than the corgi executing the hook.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|

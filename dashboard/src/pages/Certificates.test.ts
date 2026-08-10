@@ -41,6 +41,14 @@ describe('deriveStatus', () => {
     expect(deriveStatus(base, okFlock, existsEntry, 60, false, ['example.com'], true)).toBe('error');
   });
 
+  it('returns error when corgi reports a stuck install issue', () => {
+    const stuck: FlockCert = {
+      ...okFlock,
+      installIssue: { reason: 'cert does not match pending key', since: 1000, attempts: 5 },
+    };
+    expect(deriveStatus(base, stuck, existsEntry, 60, false, ['example.com'], false)).toBe('error');
+  });
+
   it('returns valid when cert is within renewBefore window but not expired', () => {
     expect(deriveStatus(base, okFlock, existsEntry, 20, false, ['example.com'], false)).toBe('valid');
   });

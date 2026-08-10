@@ -72,14 +72,17 @@
     }
   ],
 
+  "_hookTypes": "Object-shaped hooks require an explicit \"type\": \"exec\" (shell command with typed args) or \"type\": \"signal\" (credoSignal — sends a signal directly to a PID file, no subprocess/shell). The array shorthand below needs no type; it's always the simple shell-command case.",
   "serviceHooks": {
     "nginx":  ["systemctl", "reload", "nginx"],
     "caddy":  ["caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--force"],
     "apache": ["systemctl", "reload", "apache2"],
     "docker-nginx": {
+      "type": "exec",
       "exec": ["docker", "exec", "-t", "{container}", "nginx", "-s", "reload"],
       "args": { "container": { "type": "container-name" } }
-    }
+    },
+    "corgi-self-reload": { "type": "signal", "pidFile": "corgi.pid" }
   },
 
   "defaultHooks": [],

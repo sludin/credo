@@ -11,7 +11,7 @@ use crate::cert_ops::{
     generate_key_and_csr, install_certificate, read_cert_status, to_flock_summary,
 };
 use crate::error::AppError;
-use crate::hooks::run_hooks;
+use crate::hooks::run_hooks_logged;
 use crate::state::AppState;
 use crate::sync::reconcile_once;
 use crate::types::{ChallengeRecord, CsrRequest, InstallRequest, Role};
@@ -83,9 +83,10 @@ pub async fn flock_list(
     check_min_role(role.as_ref().map(|e| &e.0), &Role::Readonly)?;
     let flock = state.flock.read().await;
     let monitor_results = state.monitor_results.read().await;
+    let install_issues = state.install_issues.read().await;
     let summaries: Vec<_> = flock
         .iter()
-        .map(|e| to_flock_summary(e, &monitor_results))
+        .map(|e| to_flock_summary(e, &monitor_results, &install_issues))
         .collect();
     Ok(Json(json!({ "flock": summaries })))
 }
@@ -151,7 +152,7 @@ pub async fn flock_install(
 
     let should_restart = result.changed && body.restart.unwrap_or(true);
     let hook_results: Vec<Value> = if should_restart {
-        run_hooks(&entry, &config)
+        run_hooks_logged(&entry, &config)
             .await
             .iter()
             .map(|hr| json!({ "hook": hr.hook, "command": hr.command, "stdout": hr.stdout, "stderr": hr.stderr }))
@@ -190,7 +191,7 @@ pub async fn flock_restart(
         .await
         .ok_or_else(|| AppError::NotFound(format!("Certificate '{}' not found", name)))?;
 
-    let results: Vec<Value> = run_hooks(&entry, &state.config.load_full())
+    let results: Vec<Value> = run_hooks_logged(&entry, &state.config.load_full())
         .await
         .iter()
         .map(|hr| json!({ "hook": hr.hook, "command": hr.command, "stdout": hr.stdout, "stderr": hr.stderr }))

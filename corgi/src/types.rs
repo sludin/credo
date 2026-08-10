@@ -22,6 +22,22 @@ pub struct FlockSummary {
     pub status: String,
     pub key_exists: bool,
     pub monitor: MonitorResult,
+    /// Set when this cert's install has been failing repeatedly — e.g. a
+    /// pending key that no longer matches the cert Shepherd is serving.
+    /// `None` once an install succeeds again.
+    pub install_issue: Option<InstallIssue>,
+}
+
+/// Tracks a cert whose install has been failing across sync cycles, so a
+/// stuck state (see corgi::sync::record_install_failure) is visible via
+/// /flock and the dashboard instead of only showing up in logs.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallIssue {
+    pub reason: String,
+    /// Unix seconds of the first consecutive failure (reset on success).
+    pub since: i64,
+    pub attempts: u32,
 }
 
 #[derive(Debug, Serialize)]

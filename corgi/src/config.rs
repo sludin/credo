@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use nix::sys::signal::Signal;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -57,6 +58,15 @@ pub enum ServiceHookDef {
     Parameterized {
         exec: Vec<String>,
         args: HashMap<String, HookArgSpec>,
+    },
+    /// Signals a credo service directly via its PID file — no subprocess, no
+    /// shell. Defaults to SIGHUP, the reload convention every credo binary
+    /// already implements, but any signal can be configured. Tighter than a
+    /// shell-exec hook for credo's own services (corgi/shepherd/vigil/
+    /// dashboard), which all write a PID file.
+    CredoSignal {
+        pid_file: PathBuf,
+        signal: Signal,
     },
 }
 
@@ -412,42 +422,120 @@ fn parse_hook_def(value: &Value, name: &str) -> Result<ServiceHookDef> {
     }
 
     if let Some(obj) = value.as_object() {
-        let exec = obj
-            .get("exec")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| anyhow::anyhow!("serviceHooks['{}'].exec must be an array", name))?
-            .iter()
-            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-            .collect::<Vec<_>>();
-
-        if exec.is_empty() {
-            return Err(anyhow::anyhow!(
-                "serviceHooks['{}'].exec must not be empty",
+        let hook_type = obj.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "serviceHooks['{}'] is an object but has no \"type\" field (expected \"exec\" or \"signal\")",
                 name
-            ));
-        }
+            )
+        })?;
 
-        let mut args: HashMap<String, HookArgSpec> = HashMap::new();
-        if let Some(args_obj) = obj.get("args").and_then(|v| v.as_object()) {
-            for (arg_name, spec_val) in args_obj {
-                let kind_str = spec_val
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-                let kind: HookArgType = kind_str.parse().with_context(|| {
-                    format!("serviceHooks['{}'].args['{}'].type", name, arg_name)
-                })?;
-                args.insert(arg_name.clone(), HookArgSpec { kind });
-            }
-        }
-
-        return Ok(ServiceHookDef::Parameterized { exec, args });
+        return match hook_type {
+            "exec" => parse_exec_hook(obj, name),
+            "signal" => parse_signal_hook(obj, name),
+            other => Err(anyhow::anyhow!(
+                "serviceHooks['{}'].type '{}' is not recognized (expected \"exec\" or \"signal\")",
+                name,
+                other
+            )),
+        };
     }
 
     Err(anyhow::anyhow!(
-        "serviceHooks['{}'] must be an array (simple) or object with exec (parameterized)",
+        "serviceHooks['{}'] must be an array (simple) or object with a \"type\" field",
+        name
+    ))
+}
+
+fn parse_exec_hook(obj: &serde_json::Map<String, Value>, name: &str) -> Result<ServiceHookDef> {
+    let exec = obj
+        .get("exec")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow::anyhow!("serviceHooks['{}'].exec must be an array", name))?
+        .iter()
+        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .collect::<Vec<_>>();
+
+    if exec.is_empty() {
+        return Err(anyhow::anyhow!(
+            "serviceHooks['{}'].exec must not be empty",
+            name
+        ));
+    }
+
+    let mut args: HashMap<String, HookArgSpec> = HashMap::new();
+    if let Some(args_obj) = obj.get("args").and_then(|v| v.as_object()) {
+        for (arg_name, spec_val) in args_obj {
+            let kind_str = spec_val
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let kind: HookArgType = kind_str
+                .parse()
+                .with_context(|| format!("serviceHooks['{}'].args['{}'].type", name, arg_name))?;
+            args.insert(arg_name.clone(), HookArgSpec { kind });
+        }
+    }
+
+    Ok(ServiceHookDef::Parameterized { exec, args })
+}
+
+fn parse_signal_hook(obj: &serde_json::Map<String, Value>, name: &str) -> Result<ServiceHookDef> {
+    let pid_file = obj
+        .get("pidFile")
+        .ok_or_else(|| anyhow::anyhow!("serviceHooks['{}'].pidFile is required", name))?
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("serviceHooks['{}'].pidFile must be a string", name))?;
+    if pid_file.trim().is_empty() {
+        return Err(anyhow::anyhow!(
+            "serviceHooks['{}'].pidFile must not be empty",
+            name
+        ));
+    }
+
+    let signal = match obj.get("signal") {
+        None => Signal::SIGHUP,
+        Some(v) => parse_signal_value(v, name)?,
+    };
+
+    Ok(ServiceHookDef::CredoSignal {
+        pid_file: PathBuf::from(pid_file),
+        signal,
+    })
+}
+
+/// Accepts a signal as a JSON number (raw signal number, e.g. `1`) or a
+/// well-known bare name (e.g. `"HUP"`, `"TERM"`) — same bare-name convention
+/// as the existing `HookArgType::Signal` arg validator (`^[A-Z]{2,10}$`),
+/// not the `nix`/POSIX `"SIGHUP"` spelling, though that's accepted too.
+fn parse_signal_value(v: &Value, name: &str) -> Result<Signal> {
+    if let Some(n) = v.as_i64() {
+        return Signal::try_from(n as i32).map_err(|_| {
+            anyhow::anyhow!(
+                "serviceHooks['{}'].signal: {} is not a valid signal number",
+                name,
+                n
+            )
+        });
+    }
+    if let Some(s) = v.as_str() {
+        let normalized = s.trim().to_uppercase();
+        let full_name = if normalized.starts_with("SIG") {
+            normalized
+        } else {
+            format!("SIG{normalized}")
+        };
+        return full_name.parse::<Signal>().map_err(|_| {
+            anyhow::anyhow!(
+                "serviceHooks['{}'].signal: '{}' is not a recognized signal name",
+                name,
+                s
+            )
+        });
+    }
+    Err(anyhow::anyhow!(
+        "serviceHooks['{}'].signal must be a number or a signal name string",
         name
     ))
 }
@@ -999,5 +1087,143 @@ mod tests {
     fn flock_entry_monitor_absent_is_none() {
         let entry = parse_entry(serde_json::json!({ "name": "api.example.com" }));
         assert_eq!(entry.monitor, None);
+    }
+
+    #[test]
+    fn parse_hook_def_signal_type_is_credo_signal() {
+        let def = parse_hook_def(
+            &serde_json::json!({ "type": "signal", "pidFile": "corgi.pid" }),
+            "self-reload",
+        )
+        .unwrap();
+        match def {
+            ServiceHookDef::CredoSignal { pid_file, signal } => {
+                assert_eq!(pid_file, PathBuf::from("corgi.pid"));
+                assert_eq!(signal, Signal::SIGHUP);
+            }
+            other => panic!("expected CredoSignal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_hook_def_pid_file_empty_string_errors() {
+        let result = parse_hook_def(
+            &serde_json::json!({ "type": "signal", "pidFile": "  " }),
+            "self-reload",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_hook_def_pid_file_non_string_errors() {
+        let result = parse_hook_def(
+            &serde_json::json!({ "type": "signal", "pidFile": 5 }),
+            "self-reload",
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_hook_def_still_distinguishes_parameterized_from_credo_signal() {
+        let def = parse_hook_def(
+            &serde_json::json!({
+                "type": "exec",
+                "exec": ["docker", "exec", "-t", "{container}", "nginx", "-s", "reload"],
+                "args": { "container": { "type": "container-name" } }
+            }),
+            "docker-nginx",
+        )
+        .unwrap();
+        assert!(matches!(def, ServiceHookDef::Parameterized { .. }));
+    }
+
+    #[test]
+    fn parse_hook_def_simple_array_still_parses() {
+        let def = parse_hook_def(
+            &serde_json::json!(["systemctl", "reload", "nginx"]),
+            "nginx",
+        )
+        .unwrap();
+        assert!(matches!(def, ServiceHookDef::Simple(_)));
+    }
+
+    #[test]
+    fn parse_hook_def_object_without_type_errors() {
+        // The pre-existing exec/args shape predates the "type" field and has
+        // no implicit fallback — this proves the break is intentional.
+        let result = parse_hook_def(
+            &serde_json::json!({
+                "exec": ["docker", "exec", "-t", "{container}", "nginx", "-s", "reload"],
+                "args": { "container": { "type": "container-name" } }
+            }),
+            "docker-nginx",
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("\"type\""));
+    }
+
+    #[test]
+    fn parse_hook_def_unrecognized_type_errors() {
+        let result = parse_hook_def(&serde_json::json!({ "type": "bogus" }), "weird-hook");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("bogus"));
+    }
+
+    #[test]
+    fn parse_hook_def_signal_defaults_to_hup_when_omitted() {
+        let def = parse_hook_def(
+            &serde_json::json!({ "type": "signal", "pidFile": "x.pid" }),
+            "reload",
+        )
+        .unwrap();
+        match def {
+            ServiceHookDef::CredoSignal { signal, .. } => assert_eq!(signal, Signal::SIGHUP),
+            other => panic!("expected CredoSignal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_hook_def_signal_accepts_bare_name() {
+        for spelling in ["TERM", "term", "SIGTERM"] {
+            let def = parse_hook_def(
+                &serde_json::json!({ "type": "signal", "pidFile": "x.pid", "signal": spelling }),
+                "reload",
+            )
+            .unwrap();
+            match def {
+                ServiceHookDef::CredoSignal { signal, .. } => {
+                    assert_eq!(signal, Signal::SIGTERM, "spelling: {spelling}")
+                }
+                other => panic!("expected CredoSignal, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn parse_hook_def_signal_accepts_number() {
+        let def = parse_hook_def(
+            &serde_json::json!({ "type": "signal", "pidFile": "x.pid", "signal": 1 }),
+            "reload",
+        )
+        .unwrap();
+        match def {
+            ServiceHookDef::CredoSignal { signal, .. } => assert_eq!(signal, Signal::SIGHUP),
+            other => panic!("expected CredoSignal, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_hook_def_signal_rejects_garbage() {
+        let bad_name = parse_hook_def(
+            &serde_json::json!({ "type": "signal", "pidFile": "x.pid", "signal": "NOT_A_SIGNAL" }),
+            "reload",
+        );
+        assert!(bad_name.is_err());
+
+        let bad_number = parse_hook_def(
+            &serde_json::json!({ "type": "signal", "pidFile": "x.pid", "signal": 9999 }),
+            "reload",
+        );
+        assert!(bad_number.is_err());
     }
 }

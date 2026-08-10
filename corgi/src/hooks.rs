@@ -17,7 +17,7 @@ pub struct HookResult {
 
 /// Execute all hooks for a flock entry.
 /// Uses entry.hooks when set; falls back to config.default_hooks when None.
-pub async fn run_hooks(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResult> {
+async fn run_hooks(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResult> {
     let refs: &[HookRef] = match &entry.hooks {
         Some(h) => h,
         None => &config.default_hooks,
@@ -158,9 +158,55 @@ pub async fn run_hooks(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResu
                     }
                 }
             }
+
+            ServiceHookDef::CredoSignal { pid_file, signal } => {
+                let command_str = format!("{:?} -> {}", signal, pid_file.display());
+                match credo_lib::pid::signal(pid_file, *signal) {
+                    Ok(()) => {
+                        results.push(HookResult {
+                            hook: hook_name,
+                            command: command_str,
+                            stdout: "signaled".to_string(),
+                            stderr: String::new(),
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            hook = %hook_name,
+                            pid_file = %pid_file.display(),
+                            error = %e,
+                            cert_name = %entry.name,
+                            "credoSignal hook failed"
+                        );
+                        results.push(HookResult {
+                            hook: hook_name,
+                            command: command_str,
+                            stdout: String::new(),
+                            stderr: e.to_string(),
+                        });
+                    }
+                }
+            }
         }
     }
 
+    results
+}
+
+/// Run all hooks for a flock entry and log each execution at INFO.
+/// This is the single entry point callers should use — `run_hooks` alone
+/// does not log successes, only failures, which previously let call sites
+/// silently diverge in observability.
+pub async fn run_hooks_logged(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResult> {
+    let results = run_hooks(entry, config).await;
+    for hr in &results {
+        tracing::info!(
+            cert_name = %entry.name,
+            hook = %hr.hook,
+            command = %hr.command,
+            "Hook executed"
+        );
+    }
     results
 }
 
