@@ -308,6 +308,10 @@ tr.clickable { cursor: pointer; }
 .action-menu-item.danger { color: var(--red); }
 .action-menu-item.danger:hover { background: rgba(239,68,68,0.08); }
 
+/* ── Log viewer ───────────────────────────────────────────────────────── */
+.log-line:hover { background: rgba(99,102,241,0.04); }
+.log-ts { color: var(--muted); }
+
 .toast {
   position: fixed; bottom: 16px; right: 16px; z-index: 1000;
   background: var(--surface2); border: 1px solid var(--border);
