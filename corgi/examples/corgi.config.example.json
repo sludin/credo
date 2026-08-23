@@ -87,6 +87,9 @@
 
   "defaultHooks": [],
 
+  "_logHookOutput": "A hook that exits non-zero always logs its stdout/stderr at ERROR. Set this true to also log a successful hook's stdout/stderr at INFO (default false, since successful output is usually just noise).",
+  "logHookOutput": false,
+
   "logLevel": "info",
 
   "_logging": "Opt-in rotating log file + live tail for the /logs endpoint; omit entirely for stdout-only (current behavior)",

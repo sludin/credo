@@ -169,6 +169,9 @@ pub struct CorgiConfig {
     pub bind: String,
     pub service_hooks: HashMap<String, ServiceHookDef>,
     pub default_hooks: Vec<HookRef>,
+    /// Log a successful hook's stdout/stderr at INFO. A failed hook's output
+    /// is always logged at ERROR regardless of this setting.
+    pub log_hook_output: bool,
     pub log_level: credo_lib::LogLevel,
     pub logging: credo_lib::LoggingConfig,
     pub auth: AuthConfig,
@@ -270,6 +273,9 @@ struct RawConfig {
 
     #[serde(rename = "defaultHooks", default)]
     default_hooks: Vec<Value>,
+
+    #[serde(rename = "logHookOutput")]
+    log_hook_output: Option<bool>,
 
     #[serde(rename = "logLevel")]
     log_level: Option<String>,
@@ -917,6 +923,11 @@ pub fn load_config() -> Result<CorgiConfig> {
             .unwrap_or(900),
     );
 
+    let log_hook_output = bool_from_env(
+        "CORGI_LOG_HOOK_OUTPUT",
+        raw.log_hook_output.unwrap_or(false),
+    );
+
     // Log level
     let log_level_str = str_from_env(
         "CORGI_LOG_LEVEL",
@@ -1012,6 +1023,7 @@ pub fn load_config() -> Result<CorgiConfig> {
         bind,
         service_hooks,
         default_hooks,
+        log_hook_output,
         log_level,
         logging,
         auth: AuthConfig { mode: auth_mode },
