@@ -40,4 +40,30 @@ fn shepherd_sync_defaults_are_safety_net_paced() {
         config.monitor_interval_seconds, 900,
         "endpoint monitor sweep should default to 15 minutes"
     );
+
+    assert!(
+        !config.log_hook_output,
+        "hook output logging should be opt-in (default false)"
+    );
+
+    let mut f = std::fs::File::create(&path).unwrap();
+    write!(
+        f,
+        r#"{{
+            "nodeId": "corgi-defaults-test",
+            "commonName": "corgi-defaults-test.example.com",
+            "shepherdUrl": "https://shepherd.example.com:7010",
+            "logging": {{ "hookOutput": true }}
+        }}"#
+    )
+    .unwrap();
+
+    std::env::set_var("CORGI_CONFIG_PATH", &path);
+    let config = corgi::config::load_config().unwrap();
+    std::env::remove_var("CORGI_CONFIG_PATH");
+
+    assert!(
+        config.log_hook_output,
+        "logging.hookOutput: true in config should enable hook output logging"
+    );
 }

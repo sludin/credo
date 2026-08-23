@@ -169,11 +169,13 @@ pub struct CorgiConfig {
     pub bind: String,
     pub service_hooks: HashMap<String, ServiceHookDef>,
     pub default_hooks: Vec<HookRef>,
-    /// Log a successful hook's stdout/stderr at INFO. A failed hook's output
-    /// is always logged at ERROR regardless of this setting.
-    pub log_hook_output: bool,
     pub log_level: credo_lib::LogLevel,
     pub logging: credo_lib::LoggingConfig,
+    /// From `logging.hookOutput`. Log a successful hook's stdout/stderr at
+    /// INFO. A failed hook's output is always logged at ERROR regardless of
+    /// this setting. Kept separate from `logging` since `LoggingConfig` is
+    /// shared across services and has no hook concept.
+    pub log_hook_output: bool,
     pub auth: AuthConfig,
     pub rbac_identities: Vec<RbacIdentity>,
     pub proxy_auth: ProxyAuthConfig,
@@ -274,12 +276,12 @@ struct RawConfig {
     #[serde(rename = "defaultHooks", default)]
     default_hooks: Vec<Value>,
 
-    #[serde(rename = "logHookOutput")]
-    log_hook_output: Option<bool>,
-
     #[serde(rename = "logLevel")]
     log_level: Option<String>,
-    logging: Option<credo_lib::LoggingConfig>,
+    // Kept as a raw Value (not credo_lib::LoggingConfig directly) so we can
+    // also pull the corgi-only `hookOutput` field out of the same object —
+    // LoggingConfig itself is shared across services and has no hook concept.
+    logging: Option<Value>,
 
     auth: Option<RawAuth>,
     #[serde(rename = "authMode")]
@@ -923,18 +925,25 @@ pub fn load_config() -> Result<CorgiConfig> {
             .unwrap_or(900),
     );
 
-    let log_hook_output = bool_from_env(
-        "CORGI_LOG_HOOK_OUTPUT",
-        raw.log_hook_output.unwrap_or(false),
-    );
-
     // Log level
     let log_level_str = str_from_env(
         "CORGI_LOG_LEVEL",
         raw.log_level.as_deref().unwrap_or("info"),
     );
     let log_level = credo_lib::LogLevel::from_str(&log_level_str);
-    let logging = raw.logging.unwrap_or_default();
+
+    let log_hook_output = raw
+        .logging
+        .as_ref()
+        .and_then(|v| v.get("hookOutput"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let logging: credo_lib::LoggingConfig = match raw.logging {
+        Some(v) => {
+            serde_json::from_value(v).with_context(|| "Deserializing config field 'logging'")?
+        }
+        None => credo_lib::LoggingConfig::default(),
+    };
 
     // Ports
     let mtls_port = env::var("CORGI_MTLS_PORT")
@@ -1023,9 +1032,9 @@ pub fn load_config() -> Result<CorgiConfig> {
         bind,
         service_hooks,
         default_hooks,
-        log_hook_output,
         log_level,
         logging,
+        log_hook_output,
         auth: AuthConfig { mode: auth_mode },
         rbac_identities,
         proxy_auth,
