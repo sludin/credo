@@ -1097,6 +1097,31 @@ export default function Certificates(): React.ReactElement {
                               );
                             })()}
 
+                            {/* Post-install hooks */}
+                            {(() => {
+                              const hooks = selectedRow.assignment.hooks as (string | { name: string; args?: Record<string, string> })[] | undefined;
+                              const hookLabel = (h: string | { name: string; args?: Record<string, string> }): string =>
+                                typeof h === 'string' ? h : h.name;
+                              return (
+                                <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+                                  <div className="field-row" style={{ marginBottom: 4 }}>
+                                    <span className="field-label" style={{ fontWeight: 600 }}>Hooks</span>
+                                    <span className="field-value" style={{ fontSize: 11, color: 'var(--muted)' }}>
+                                      {hooks === undefined ? 'Default' : hooks.length === 0 ? 'None' : `${hooks.length} configured`}
+                                    </span>
+                                  </div>
+                                  {hooks && hooks.length > 0 && (
+                                    <div className="field-row" style={{ alignItems: 'flex-start' }}>
+                                      <span className="field-label">Names</span>
+                                      <span className="field-value mono" style={{ fontSize: 11, whiteSpace: 'pre-wrap' }}>
+                                        {hooks.map(hookLabel).join('\n')}
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })()}
+
                             {/* Stuck install (e.g. pending key no longer matches Shepherd's cert) */}
                             {(() => {
                               const issue = selectedRow.flockCert?.installIssue;
