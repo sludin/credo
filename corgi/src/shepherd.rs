@@ -245,6 +245,7 @@ mod tests {
             bind: "127.0.0.1".to_string(),
             service_hooks: HashMap::new(),
             default_hooks: vec![],
+            log_hook_output: false,
             log_level: credo_lib::LogLevel::Warn,
             logging: credo_lib::LoggingConfig::default(),
             auth: AuthConfig {

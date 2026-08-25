@@ -13,6 +13,18 @@ pub struct HookResult {
     pub command: String,
     pub stdout: String,
     pub stderr: String,
+    pub success: bool,
+    pub exit_code: Option<i32>,
+}
+
+/// Raw outcome of spawning a hook command — distinct from `Err` (the command
+/// never ran at all, e.g. binary not found) so a non-zero exit can carry its
+/// own stdout/stderr/code instead of being flattened into an error string.
+struct SpawnOutput {
+    stdout: String,
+    stderr: String,
+    success: bool,
+    exit_code: Option<i32>,
 }
 
 /// Execute all hooks for a flock entry.
@@ -102,27 +114,24 @@ async fn run_hooks(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResult> 
                 let command_str = argv.join(" ");
 
                 match spawn_no_shell(&argv).await {
-                    Ok((stdout, stderr)) => {
+                    Ok(out) => {
                         results.push(HookResult {
                             hook: hook_name,
                             command: command_str,
-                            stdout,
-                            stderr,
+                            stdout: out.stdout,
+                            stderr: out.stderr,
+                            success: out.success,
+                            exit_code: out.exit_code,
                         });
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            hook = %hook_name,
-                            command = %command_str,
-                            error = %e,
-                            cert_name = %entry.name,
-                            "Parameterized hook failed"
-                        );
                         results.push(HookResult {
                             hook: hook_name,
                             command: command_str,
                             stdout: String::new(),
                             stderr: e.to_string(),
+                            success: false,
+                            exit_code: None,
                         });
                     }
                 }
@@ -131,27 +140,30 @@ async fn run_hooks(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResult> 
             ServiceHookDef::Simple(commands) => {
                 for cmd_str in commands {
                     match spawn_shell(cmd_str).await {
-                        Ok((stdout, stderr)) => {
+                        Ok(out) => {
+                            let success = out.success;
                             results.push(HookResult {
                                 hook: hook_name.clone(),
                                 command: cmd_str.clone(),
-                                stdout,
-                                stderr,
+                                stdout: out.stdout,
+                                stderr: out.stderr,
+                                success,
+                                exit_code: out.exit_code,
                             });
+                            // A non-zero exit aborts remaining commands in this
+                            // hook, same as a command that failed to start.
+                            if !success {
+                                break;
+                            }
                         }
                         Err(e) => {
-                            tracing::warn!(
-                                hook = %hook_name,
-                                command = %cmd_str,
-                                error = %e,
-                                cert_name = %entry.name,
-                                "Simple hook failed; aborting remaining commands in hook"
-                            );
                             results.push(HookResult {
                                 hook: hook_name.clone(),
                                 command: cmd_str.clone(),
                                 stdout: String::new(),
                                 stderr: e.to_string(),
+                                success: false,
+                                exit_code: None,
                             });
                             break;
                         }
@@ -168,21 +180,18 @@ async fn run_hooks(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResult> 
                             command: command_str,
                             stdout: "signaled".to_string(),
                             stderr: String::new(),
+                            success: true,
+                            exit_code: None,
                         });
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            hook = %hook_name,
-                            pid_file = %pid_file.display(),
-                            error = %e,
-                            cert_name = %entry.name,
-                            "credoSignal hook failed"
-                        );
                         results.push(HookResult {
                             hook: hook_name,
                             command: command_str,
                             stdout: String::new(),
                             stderr: e.to_string(),
+                            success: false,
+                            exit_code: None,
                         });
                     }
                 }
@@ -193,25 +202,53 @@ async fn run_hooks(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResult> 
     results
 }
 
-/// Run all hooks for a flock entry and log each execution at INFO.
+/// Run all hooks for a flock entry and log each execution.
 /// This is the single entry point callers should use — `run_hooks` alone
-/// does not log successes, only failures, which previously let call sites
-/// silently diverge in observability.
+/// does not log outcomes, which previously let call sites silently diverge
+/// in observability.
+///
+/// A hook that exits non-zero (or fails to start) always logs at ERROR with
+/// its stdout/stderr/exit code, regardless of config — that's the case
+/// operators need to see. A hook that succeeds always logs an INFO "Hook
+/// executed" line; its stdout/stderr are additionally included only when
+/// `config.log_hook_output` is set, since successful output is noisy by
+/// default.
 pub async fn run_hooks_logged(entry: &FlockEntry, config: &CorgiConfig) -> Vec<HookResult> {
     let results = run_hooks(entry, config).await;
     for hr in &results {
-        tracing::info!(
-            cert_name = %entry.name,
-            hook = %hr.hook,
-            command = %hr.command,
-            "Hook executed"
-        );
+        if !hr.success {
+            tracing::error!(
+                cert_name = %entry.name,
+                hook = %hr.hook,
+                command = %hr.command,
+                exit_code = ?hr.exit_code,
+                stdout = %hr.stdout,
+                stderr = %hr.stderr,
+                "Hook failed"
+            );
+        } else if config.log_hook_output {
+            tracing::info!(
+                cert_name = %entry.name,
+                hook = %hr.hook,
+                command = %hr.command,
+                stdout = %hr.stdout,
+                stderr = %hr.stderr,
+                "Hook executed"
+            );
+        } else {
+            tracing::info!(
+                cert_name = %entry.name,
+                hook = %hr.hook,
+                command = %hr.command,
+                "Hook executed"
+            );
+        }
     }
     results
 }
 
 /// Spawn a command with shell (for simple hooks).
-async fn spawn_shell(cmd: &str) -> Result<(String, String)> {
+async fn spawn_shell(cmd: &str) -> Result<SpawnOutput> {
     let output = Command::new("sh")
         .arg("-c")
         .arg(cmd)
@@ -220,24 +257,16 @@ async fn spawn_shell(cmd: &str) -> Result<(String, String)> {
         .output()
         .await?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        return Err(anyhow::anyhow!(
-            "exited with {:?}: {}",
-            output.status.code(),
-            stderr.trim().to_string() + &stdout
-        ));
-    }
-
-    Ok((
-        String::from_utf8_lossy(&output.stdout).to_string(),
-        String::from_utf8_lossy(&output.stderr).to_string(),
-    ))
+    Ok(SpawnOutput {
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        success: output.status.success(),
+        exit_code: output.status.code(),
+    })
 }
 
 /// Spawn a command without shell (for parameterized hooks — prevents injection).
-async fn spawn_no_shell(argv: &[String]) -> Result<(String, String)> {
+async fn spawn_no_shell(argv: &[String]) -> Result<SpawnOutput> {
     if argv.is_empty() {
         return Err(anyhow::anyhow!("Empty command"));
     }
@@ -248,20 +277,12 @@ async fn spawn_no_shell(argv: &[String]) -> Result<(String, String)> {
         .output()
         .await?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        return Err(anyhow::anyhow!(
-            "exited with {:?}: {}",
-            output.status.code(),
-            stderr.trim().to_string() + &stdout
-        ));
-    }
-
-    Ok((
-        String::from_utf8_lossy(&output.stdout).to_string(),
-        String::from_utf8_lossy(&output.stderr).to_string(),
-    ))
+    Ok(SpawnOutput {
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        success: output.status.success(),
+        exit_code: output.status.code(),
+    })
 }
 
 /// Validate hook definitions at startup (warn on issues, don't panic).

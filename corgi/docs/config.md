@@ -298,3 +298,4 @@ Use this for credo's own binaries (shepherd, corgi, vigil, dashboard), which all
 | `logging.rotateOn.sizeMb` | number | `100` | — | Rotate to a new file once the current one reaches this size |
 | `logging.rotateOn.keepFiles` | number | `12` | — | Number of rotated backups to retain |
 | `logging.alsoStdout` | boolean | `true` | — | Also emit to stdout when file logging is enabled (set `false` for file-only) |
+| `logging.hookOutput` | boolean | `false` | — | A hook that exits non-zero (or fails to start) always logs its stdout/stderr at ERROR, regardless of this setting. Set `true` to also log a *successful* hook's stdout/stderr at INFO — off by default since successful output is usually just noise |

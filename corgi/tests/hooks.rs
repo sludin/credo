@@ -67,6 +67,7 @@ fn make_config(dir: &TempDir) -> CorgiConfig {
         bind: "127.0.0.1".to_string(),
         service_hooks: HashMap::new(),
         default_hooks: vec![],
+        log_hook_output: false,
         log_level: credo_lib::LogLevel::Warn,
         logging: credo_lib::LoggingConfig::default(),
         auth: AuthConfig {
@@ -242,6 +243,114 @@ async fn run_hooks_logged_emits_nothing_when_no_hooks_configured() {
     .await;
 
     assert!(!events.iter().any(|e| e.message == "Hook executed"));
+}
+
+/// A hook that exits non-zero must always log at ERROR with its stdout,
+/// stderr, and exit code — regardless of `log_hook_output` — so a failing
+/// post-install hook is visible without opting in to anything.
+#[tokio::test]
+async fn run_hooks_logged_logs_error_on_nonzero_exit() {
+    let _serial = serialize().await;
+    let dir = TempDir::new().unwrap();
+    let mut config = make_config(&dir);
+    config.service_hooks.insert(
+        "broken-reload".to_string(),
+        ServiceHookDef::Simple(vec![
+            "echo out-marker; echo err-marker 1>&2; exit 7".to_string()
+        ]),
+    );
+
+    let mut entry = empty_entry("failing.example.com", &dir);
+    entry.hooks = Some(vec![HookRef::Simple("broken-reload".to_string())]);
+
+    let events = capture_events(async {
+        run_hooks_logged(&entry, &config).await;
+    })
+    .await;
+
+    let failure_event = events
+        .iter()
+        .find(|e| e.message == "Hook failed")
+        .expect("expected a \"Hook failed\" ERROR event to be logged");
+
+    assert!(failure_event
+        .fields
+        .get("hook")
+        .is_some_and(|v| v.contains("broken-reload")));
+    assert!(failure_event
+        .fields
+        .get("exit_code")
+        .is_some_and(|v| v.contains('7')));
+    assert!(failure_event
+        .fields
+        .get("stdout")
+        .is_some_and(|v| v.contains("out-marker")));
+    assert!(failure_event
+        .fields
+        .get("stderr")
+        .is_some_and(|v| v.contains("err-marker")));
+
+    // A failed hook still must not silently succeed elsewhere.
+    assert!(!events.iter().any(|e| e.message == "Hook executed"));
+}
+
+/// A successful hook's INFO "Hook executed" event omits stdout/stderr by
+/// default — success output is noisy and not worth logging unless asked for.
+#[tokio::test]
+async fn run_hooks_logged_omits_output_on_success_by_default() {
+    let _serial = serialize().await;
+    let dir = TempDir::new().unwrap();
+    let mut config = make_config(&dir);
+    assert!(!config.log_hook_output, "default must be opt-in (false)");
+    config.service_hooks.insert(
+        "quiet-reload".to_string(),
+        ServiceHookDef::Simple(vec!["echo should-not-appear".to_string()]),
+    );
+
+    let mut entry = empty_entry("quiet.example.com", &dir);
+    entry.hooks = Some(vec![HookRef::Simple("quiet-reload".to_string())]);
+
+    let events = capture_events(async {
+        run_hooks_logged(&entry, &config).await;
+    })
+    .await;
+
+    let hook_event = events
+        .iter()
+        .find(|e| e.message == "Hook executed")
+        .expect("expected a \"Hook executed\" event to be logged");
+    assert!(!hook_event.fields.contains_key("stdout"));
+}
+
+/// With `log_hook_output` enabled, a successful hook's stdout/stderr ride
+/// along on the same INFO "Hook executed" event.
+#[tokio::test]
+async fn run_hooks_logged_includes_output_on_success_when_enabled() {
+    let _serial = serialize().await;
+    let dir = TempDir::new().unwrap();
+    let mut config = make_config(&dir);
+    config.log_hook_output = true;
+    config.service_hooks.insert(
+        "verbose-reload".to_string(),
+        ServiceHookDef::Simple(vec!["echo should-appear".to_string()]),
+    );
+
+    let mut entry = empty_entry("verbose.example.com", &dir);
+    entry.hooks = Some(vec![HookRef::Simple("verbose-reload".to_string())]);
+
+    let events = capture_events(async {
+        run_hooks_logged(&entry, &config).await;
+    })
+    .await;
+
+    let hook_event = events
+        .iter()
+        .find(|e| e.message == "Hook executed")
+        .expect("expected a \"Hook executed\" event to be logged");
+    assert!(hook_event
+        .fields
+        .get("stdout")
+        .is_some_and(|v| v.contains("should-appear")));
 }
 
 // ---------------------------------------------------------------------------
