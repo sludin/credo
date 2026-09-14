@@ -278,6 +278,8 @@ Sends a signal directly to the process recorded in `pidFile` via `nix::sys::sign
 
 Use this for credo's own binaries (shepherd, corgi, vigil, dashboard), which all write a PID file and already reload their TLS listener cert on `SIGHUP`. For corgi's own identity cert specifically, this is wired automatically: Shepherd attaches a `corgi-self-reload` hook to every corgi's self-assignment on enrollment, so a corgi just needs to define that hook name pointing at its own `corgi.pid` (relative paths resolve against the corgi process's own working directory — that's where it wrote the file). For shepherd/vigil/dashboard, the `pidFile` must be an absolute path, since it belongs to a different process than the corgi executing the hook.
 
+**Note:** the signal above is sent via a plain POSIX `kill()` from the corgi process, which only succeeds against another user's PID if corgi runs as root or shares that user. On a host where corgi/shepherd/vigil run as separate Unix users, a `credoSignal` hook targeting `shepherd.pid`/`vigil.pid` fails with `EPERM` — see `docs/deploy/cross-user-hook-reload.md` for the sudo-scoped `exec`-hook workaround used in that case.
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `defaultHooks` | string[] | `[]` | Hook names that run after any cert update, regardless of which cert changed |
