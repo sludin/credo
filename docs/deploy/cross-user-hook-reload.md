@@ -97,6 +97,30 @@ vigil.vigilcert.com      hooks: ["vigil-reload"]
   `corgi/docs/config.md`'s example as written. Not used because it
   grants `corgi` the ability to signal *any* process on the host, not
   just shepherd/vigil.
+- **Sudo-elevated inline shell, reading the pidfile at signal time**:
+  ```
+  corgi ALL=(root) NOPASSWD: /bin/sh -c "kill -1 $(cat /var/apps/credo/shepherd/shepherd.pid)"
+  ```
+  with the hook as
+  `"exec": ["sudo", "-n", "/bin/sh", "-c", "kill -1 $(cat /var/apps/credo/shepherd/shepherd.pid)"]`.
+  Unlike a plain `kill -HUP <pid>` sudoers rule, this doesn't go stale
+  on restart — `sudo` elevates `/bin/sh` itself, and the `$(cat ...)`
+  substitution runs *inside* that already-root shell at execution
+  time, so the sudoers rule stays a static, exact, non-wildcarded
+  string while still reading the live PID. This targets the exact PID
+  shepherd itself recorded, rather than "whatever process is currently
+  named shepherd" — meaningfully more precise if a rolling-restart
+  deploy pattern ever ran two `shepherd` processes briefly (`killall`
+  would signal both).
+
+  Not chosen: it's a shell one-liner embedded in a sudoers file, which
+  has to match corgi's `exec` array byte-for-byte (whitespace and
+  quoting included) to keep working — a fragile thing to get subtly
+  wrong and hard to eyeball-verify under pressure (e.g. a cert about
+  to expire), for a precision benefit this deployment doesn't need:
+  verified 2026-09-13 there is exactly one `shepherd`/`vigil` process
+  on `home` and no rolling-restart pattern in use. Revisit this option
+  if that ever changes.
 
 ## Applies to
 
