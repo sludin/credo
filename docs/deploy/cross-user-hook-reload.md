@@ -31,30 +31,28 @@ which co-hosts corgi-01, shepherd, and vigil as `corgi`/`shepherd`/
 `vigil` respectively), a `credoSignal` hook aimed at `shepherd.pid` or
 `vigil.pid` fails with `EPERM`.
 
-## Chosen approach: sudo-scoped exec wrapper
+## Chosen approach: sudo-scoped `killall`, no wrapper script
 
-Use an `exec` hook to run a single-purpose, root-owned wrapper script,
-permitted via a narrowly-scoped passwordless sudoers rule — the rule
-grants nothing beyond running that exact script.
+Use an `exec` hook to run `killall -HUP <name>` under a narrowly-scoped
+passwordless sudoers rule. No intermediate script is needed — and none
+is used, for a specific reason: a rule that names a PID directly
+(`kill -HUP 797586`) would break the moment the process restarts and
+gets a new PID (sudoers matches command *and* arguments as literal
+text — no way to say "whatever `shepherd.pid` currently contains").
+The naive fix, wildcarding the PID (`kill -HUP [0-9]*`), removes the
+staleness problem but also removes the scoping: it'd let `corgi` send
+`SIGHUP` to *any* PID on the host, not just shepherd/vigil — a much
+larger grant than intended, since a process with no `SIGHUP` handler
+is killed by that signal by default.
 
-### 1. Wrapper scripts (root:root, mode 0755)
+`killall -HUP <name>` sidesteps this cleanly: it matches by process
+name, not PID, so the sudoers rule can be an **exact, non-wildcarded
+string** — no staleness, no broadened scope, no script required.
+Verified on `home` (2026-09-13): `killall` is present
+(`/usr/bin/killall`), and there is exactly one `shepherd` and one
+`vigil` process — no ambiguity from name-based matching.
 
-`/usr/local/sbin/reload-shepherd`:
-```sh
-#!/bin/sh
-set -eu
-PIDFILE=/var/apps/credo/shepherd/shepherd.pid
-PID=$(cat "$PIDFILE")
-case "$PID" in
-  ''|*[!0-9]*) echo "reload-shepherd: invalid pid in $PIDFILE" >&2; exit 1 ;;
-esac
-exec kill -HUP "$PID"
-```
-
-`/usr/local/sbin/reload-vigil` — identical, pointed at
-`/var/apps/credo/vigil/vigil.pid`.
-
-### 2. Sudoers drop-in
+### 1. Sudoers drop-in
 
 `/etc/sudoers.d/020_corgi-hook-reload` (mode `0440`, `root:root`,
 matching this host's existing numbered `sudoers.d` convention):
@@ -62,40 +60,43 @@ matching this host's existing numbered `sudoers.d` convention):
 ```
 # Let the corgi hook runner send a reload signal (SIGHUP) to shepherd
 # and vigil after installing a renewed cert for their own listener.
-# Each entry is an exact command with no arguments and no wildcards —
-# this cannot be used to run anything beyond that one signal.
-corgi ALL=(root) NOPASSWD: /usr/local/sbin/reload-shepherd
-corgi ALL=(root) NOPASSWD: /usr/local/sbin/reload-vigil
+# Exact command + arguments, no wildcards — cannot be used for
+# anything beyond signaling exactly these two process names.
+corgi ALL=(root) NOPASSWD: /usr/bin/killall -HUP shepherd
+corgi ALL=(root) NOPASSWD: /usr/bin/killall -HUP vigil
 ```
 
 Validate before enabling: `visudo -c -f /etc/sudoers.d/020_corgi-hook-reload`.
 
-### 3. `corgi.config.json` — hook definitions
+### 2. `corgi.config.json` — hook definitions
 
 ```json
-"shepherd-reload": { "type": "exec", "exec": ["sudo", "-n", "/usr/local/sbin/reload-shepherd"] },
-"vigil-reload":    { "type": "exec", "exec": ["sudo", "-n", "/usr/local/sbin/reload-vigil"] }
+"shepherd-reload": { "type": "exec", "exec": ["sudo", "-n", "/usr/bin/killall", "-HUP", "shepherd"] },
+"vigil-reload":    { "type": "exec", "exec": ["sudo", "-n", "/usr/bin/killall", "-HUP", "vigil"] }
 ```
 
 `-n` makes `sudo` fail immediately instead of hanging on a password
 prompt if the sudoers rule is ever missing or misconfigured.
 
-### 4. `shepherd.assignments.json` — wire the hooks to the certs
+### 3. `shepherd.assignments.json` — wire the hooks to the certs
 
 ```
 shepherd.vigilcert.com   hooks: ["shepherd-reload"]
 vigil.vigilcert.com      hooks: ["vigil-reload"]
 ```
 
-## Alternative considered, not chosen
+## Alternatives considered, not chosen
 
-A Linux file capability (`setcap cap_kill+ep <corgi-binary>`) would
-let corgi's native `credoSignal` hook work directly against another
-user's PID, matching `corgi/docs/config.md`'s example as written, with
-no sudo/wrapper involved. Not used here because it grants `corgi` the
-ability to signal *any* process on the host, not just shepherd/vigil —
-the sudo+wrapper approach scopes the grant to exactly two named PID
-files.
+- **PID-file wrapper script** (`cat shepherd.pid`, then `kill -HUP` on
+  that exact PID) — this was the first draft of this doc. Dropped:
+  `killall` gets the same precision (signals the real running
+  process) without a script to write, deploy, and keep in sync across
+  hosts.
+- **Linux file capability** (`setcap cap_kill+ep <corgi-binary>`) —
+  would let corgi's native `credoSignal` hook work directly, matching
+  `corgi/docs/config.md`'s example as written. Not used because it
+  grants `corgi` the ability to signal *any* process on the host, not
+  just shepherd/vigil.
 
 ## Applies to
 
