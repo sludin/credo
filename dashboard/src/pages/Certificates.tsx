@@ -1272,7 +1272,7 @@ export default function Certificates(): React.ReactElement {
                                   padding: '10px', textAlign: 'center', fontSize: 11, color: 'var(--muted)',
                                   border: '1px dashed var(--border)', borderRadius: 4,
                                 }}>
-                                  No hooks added — use the selector below, or switch to <strong>None</strong> to suppress defaults.
+                                  No hooks added — use the selector below and click <strong>Add</strong>, or switch to <strong>None</strong> to suppress defaults.
                                 </div>
                               ) : (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
