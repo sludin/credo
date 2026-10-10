@@ -638,12 +638,32 @@ pub fn split_cert_chain(chain_pem: &str) -> (String, String, String) {
     }
 
     let leaf = certs[0].trim().to_string() + "\n";
+    // Some ACME servers include the self-signed trust-anchor root in the
+    // returned chain. Clients already have roots in their own trust store,
+    // so serving one wastes bytes on every handshake — drop it here.
     let chain: String = certs[1..]
         .iter()
+        .filter(|s| !is_self_signed_pem(s))
         .map(|s| s.trim().to_string() + "\n")
         .collect();
     let fullchain = format!("{leaf}{chain}");
     (leaf, chain, fullchain)
+}
+
+fn is_self_signed_pem(pem_block: &str) -> bool {
+    use rustls_pemfile::Item;
+    use x509_parser::prelude::{FromDer, X509Certificate};
+
+    let mut reader = std::io::BufReader::new(pem_block.as_bytes());
+    let der = match rustls_pemfile::read_one(&mut reader) {
+        Ok(Some(Item::X509Certificate(d))) => d,
+        _ => return false,
+    };
+
+    match X509Certificate::from_der(&der) {
+        Ok((_, cert)) => cert.verify_signature(None).is_ok(),
+        Err(_) => false,
+    }
 }
 
 pub fn leaf_fingerprint(cert_pem: &str) -> Result<String> {
@@ -812,6 +832,73 @@ mod tests {
             ledger,
             jobs,
             job_id,
+        );
+    }
+
+    /// Builds a self-signed CA cert plus a cert signed by it, returning
+    /// (signed_pem, signer_pem) so callers can chain further (signer becomes
+    /// the next cert's issuer) or treat signer_pem as a root to filter out.
+    fn make_ca(common_name: &str) -> rcgen::Certificate {
+        use rcgen::{
+            BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType, IsCa,
+        };
+
+        let mut params = CertificateParams::new(vec![]);
+        let mut dn = DistinguishedName::new();
+        dn.push(DnType::CommonName, common_name);
+        params.distinguished_name = dn;
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        Certificate::from_params(params).expect("rcgen CA params")
+    }
+
+    fn make_leaf(common_name: &str) -> rcgen::Certificate {
+        use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType};
+
+        let mut params = CertificateParams::new(vec![common_name.to_string()]);
+        let mut dn = DistinguishedName::new();
+        dn.push(DnType::CommonName, common_name);
+        params.distinguished_name = dn;
+        Certificate::from_params(params).expect("rcgen leaf params")
+    }
+
+    #[test]
+    fn split_cert_chain_drops_self_signed_root() {
+        let root = make_ca("Test Root CA");
+        let root_pem = root.serialize_pem().expect("self-sign root");
+
+        let intermediate = make_ca("Test Intermediate CA");
+        let intermediate_pem = intermediate
+            .serialize_pem_with_signer(&root)
+            .expect("sign intermediate with root");
+
+        let leaf = make_leaf("leaf.example.com");
+        let leaf_pem = leaf
+            .serialize_pem_with_signer(&intermediate)
+            .expect("sign leaf with intermediate");
+
+        // Simulate an ACME server that (over-)includes the root in the
+        // returned chain: leaf, intermediate, root.
+        let order_response = format!("{leaf_pem}\n{intermediate_pem}\n{root_pem}\n");
+
+        let (cert_pem, chain_pem, fullchain_pem) = split_cert_chain(&order_response);
+
+        assert_eq!(cert_pem.trim(), leaf_pem.trim());
+        assert!(
+            chain_pem.contains(intermediate_pem.trim()),
+            "chain_pem should still include the intermediate"
+        );
+        assert!(
+            !chain_pem.contains(root_pem.trim()),
+            "self-signed root must be filtered out of chain_pem"
+        );
+        assert!(
+            fullchain_pem.contains(leaf_pem.trim())
+                && fullchain_pem.contains(intermediate_pem.trim()),
+            "fullchain_pem should still include leaf and intermediate"
+        );
+        assert!(
+            !fullchain_pem.contains(root_pem.trim()),
+            "self-signed root must be filtered out of fullchain_pem"
         );
     }
 }
