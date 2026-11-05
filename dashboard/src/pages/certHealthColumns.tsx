@@ -28,8 +28,8 @@ function certStatusLabel(row: CertRow): string {
 export const CERT_COLUMNS: CertColumn[] = [
   {
     key: 'domain', header: 'Domain / Cert', pinned: true, sortable: true,
-    sortValue: (row) => (row.cert.sanNames[0] ?? row.cert.name).toLowerCase(),
-    render: (row) => <td className="fw-500">{row.cert.sanNames[0] ?? row.cert.name}</td>,
+    sortValue: (row) => (row.cert.name || row.cert.sanNames[0] || '').toLowerCase(),
+    render: (row) => <td className="fw-500">{row.cert.name || row.cert.sanNames[0] || '—'}</td>,
   },
   {
     key: 'corgi', header: 'Corgi', sortable: true,

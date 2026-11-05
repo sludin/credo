@@ -1,5 +1,31 @@
 import { describe, it, expect } from 'vitest';
-import { CERT_COLUMNS, DEFAULT_VISIBLE_CERT_COLUMNS, visibleCertColumns, type CertColumnKey } from './certHealthColumns';
+import { CERT_COLUMNS, DEFAULT_VISIBLE_CERT_COLUMNS, visibleCertColumns, type CertColumnKey, type CertRow } from './certHealthColumns';
+import type { FlockCert } from '../types';
+
+function makeRow(overrides: Partial<FlockCert>): CertRow {
+  const cert: FlockCert = {
+    name: 'hermes.ludin.org',
+    lifetimeDays: 85,
+    status: 'ok',
+    sanNames: ['claw.ludin.org', 'hermes.ludin.org'],
+    ...overrides,
+  };
+  return { corgi: 'corgi-04', cert, daysLeft: 85 };
+}
+
+describe('domain column', () => {
+  const domainColumn = CERT_COLUMNS.find((c) => c.key === 'domain')!;
+
+  it('prefers the cert\'s actual name over its first SAN, even when SANs are present', () => {
+    const row = makeRow({ name: 'hermes.ludin.org', sanNames: ['claw.ludin.org', 'hermes.ludin.org'] });
+    expect(domainColumn.sortValue!(row)).toBe('hermes.ludin.org');
+  });
+
+  it('falls back to the first SAN only when the cert has no name', () => {
+    const row = makeRow({ name: '', sanNames: ['claw.ludin.org', 'hermes.ludin.org'] });
+    expect(domainColumn.sortValue!(row)).toBe('claw.ludin.org');
+  });
+});
 
 describe('visibleCertColumns', () => {
   it('always keeps the pinned domain column, even when not in the visible set', () => {
