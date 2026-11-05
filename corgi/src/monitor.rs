@@ -3,7 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use credo_lib::types::{EndpointCheckResult, MonitorConfig, MonitorResult, MonitorStatus};
+use credo_lib::types::{
+    EndpointCheckResult, MatchedArchiveVersion, MonitorConfig, MonitorResult, MonitorStatus,
+};
 
 use crate::cert_ops::fingerprint_display;
 
@@ -53,6 +55,52 @@ async fn monitor_sweep(state: &crate::state::AppState) {
         .retain(|name, _| monitored.contains(name));
 }
 
+/// On a cert-mismatch, search `archive/<name>/cert-*.pem` for a version whose
+/// fingerprint matches what the endpoint actually served — so the UI can say
+/// "this is the version issued <date>, superseded by <date>" instead of
+/// leaving the served cert unidentified.
+fn find_matching_archive_version(
+    cert_store_dir: &std::path::Path,
+    entry: &crate::config::FlockEntry,
+    seen_fingerprint: &str,
+) -> Option<MatchedArchiveVersion> {
+    let archive_dir = crate::archive::archive_dir(cert_store_dir, &entry.name);
+    let read_dir = std::fs::read_dir(&archive_dir).ok()?;
+
+    let current_issued_at = std::fs::read_to_string(&entry.path)
+        .ok()
+        .and_then(|pem| crate::cert_ops::pem_cert_to_der(&pem).ok())
+        .and_then(|der| crate::cert_ops::validity_window(&der).0);
+
+    for ent in read_dir.flatten() {
+        let name = ent.file_name();
+        let name = name.to_string_lossy();
+        let Some(ordinal) = name
+            .strip_prefix("cert-")
+            .and_then(|s| s.strip_suffix(".pem"))
+        else {
+            continue;
+        };
+        let Ok(pem) = std::fs::read_to_string(ent.path()) else {
+            continue;
+        };
+        let Ok(der) = crate::cert_ops::pem_cert_to_der(&pem) else {
+            continue;
+        };
+        if fingerprint_display(&der) != seen_fingerprint {
+            continue;
+        }
+        let (issued_at, not_after) = crate::cert_ops::validity_window(&der);
+        return Some(MatchedArchiveVersion {
+            ordinal: ordinal.to_string(),
+            issued_at,
+            not_after,
+            current_issued_at,
+        });
+    }
+    None
+}
+
 /// Probe every endpoint configured for one flock entry (a SAN cert may
 /// configure several) and record the aggregated result.
 pub async fn check_one(state: &crate::state::AppState, entry: &crate::config::FlockEntry) {
@@ -60,11 +108,18 @@ pub async fn check_one(state: &crate::state::AppState, entry: &crate::config::Fl
         return;
     };
     let expected = crate::cert_ops::read_cert_fingerprint(&entry.path);
+    let cert_store_dir = state.config.load().cert_store_dir.clone();
 
     let mut endpoints = Vec::with_capacity(configs.len());
     for cfg in configs {
         let sni = entry.domain.as_deref().unwrap_or(&cfg.host);
-        let result = check_one_endpoint(cfg, sni, expected.as_deref()).await;
+        let mut result = check_one_endpoint(cfg, sni, expected.as_deref()).await;
+        if result.status == MonitorStatus::CertMismatch {
+            if let Some(fp) = result.seen_fingerprint.clone() {
+                result.matched_archive_version =
+                    find_matching_archive_version(&cert_store_dir, entry, &fp);
+            }
+        }
         match result.status {
             MonitorStatus::Ok => {
                 tracing::debug!(
@@ -296,6 +351,7 @@ pub async fn check_one_endpoint(
                 chain_trusted: p.chain_trusted,
                 status,
                 error: None,
+                matched_archive_version: None,
             }
         }
         Err(e) => EndpointCheckResult {
@@ -309,6 +365,7 @@ pub async fn check_one_endpoint(
             chain_trusted: None,
             status: MonitorStatus::Unreachable,
             error: Some(e),
+            matched_archive_version: None,
         },
     }
 }
@@ -511,6 +568,81 @@ mod tests {
         addr
     }
 
+    fn write_pem(path: &std::path::Path, pem: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, pem).unwrap();
+    }
+
+    fn flock_entry_at(name: &str, live_cert_path: std::path::PathBuf) -> crate::config::FlockEntry {
+        crate::config::FlockEntry {
+            name: name.to_string(),
+            path: live_cert_path,
+            key_path: std::path::PathBuf::new(),
+            chain_path: None,
+            fullchain_path: None,
+            csr_path: None,
+            domain: None,
+            monitor: None,
+            hooks: None,
+            csr_subject: None,
+            identity_uri: None,
+            sans: Vec::new(),
+            cert_mode: None,
+            key_mode: None,
+            cert_owner: None,
+            cert_group: None,
+            key_owner: None,
+            key_group: None,
+        }
+    }
+
+    #[test]
+    fn find_matching_archive_version_identifies_the_stale_version() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = dir.path();
+        let (old_pem, _) = self_signed(vec!["stale.example.com".into()]);
+        let (new_pem, _) = self_signed(vec!["stale.example.com".into()]);
+
+        let archive = crate::archive::archive_dir(store, "stale.example.com");
+        write_pem(&archive.join("cert-001.pem"), &old_pem);
+        write_pem(&archive.join("cert-002.pem"), &new_pem);
+
+        let live_cert_path = crate::archive::live_dir(store, "stale.example.com").join("cert.pem");
+        write_pem(&live_cert_path, &new_pem);
+
+        let entry = flock_entry_at("stale.example.com", live_cert_path);
+        let old_der = crate::cert_ops::pem_cert_to_der(&old_pem).unwrap();
+        let seen_fingerprint = crate::cert_ops::fingerprint_display(&old_der);
+
+        let matched = find_matching_archive_version(store, &entry, &seen_fingerprint)
+            .expect("should find the old archived version");
+
+        assert_eq!(matched.ordinal, "001");
+        assert!(matched.issued_at.is_some());
+        assert!(matched.current_issued_at.is_some());
+    }
+
+    #[test]
+    fn find_matching_archive_version_returns_none_when_no_archive_matches() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = dir.path();
+        let (archived_pem, _) = self_signed(vec!["no-match.example.com".into()]);
+        let (unrelated_pem, _) = self_signed(vec!["unrelated.example.com".into()]);
+
+        let archive = crate::archive::archive_dir(store, "no-match.example.com");
+        write_pem(&archive.join("cert-001.pem"), &archived_pem);
+
+        let live_cert_path =
+            crate::archive::live_dir(store, "no-match.example.com").join("cert.pem");
+        write_pem(&live_cert_path, &archived_pem);
+        let entry = flock_entry_at("no-match.example.com", live_cert_path);
+
+        let unrelated_der = crate::cert_ops::pem_cert_to_der(&unrelated_pem).unwrap();
+        let seen_fingerprint = crate::cert_ops::fingerprint_display(&unrelated_der);
+
+        assert!(find_matching_archive_version(store, &entry, &seen_fingerprint).is_none());
+    }
+
     fn monitor_cfg(addr: std::net::SocketAddr) -> MonitorConfig {
         MonitorConfig {
             host: addr.ip().to_string(),
@@ -660,6 +792,7 @@ mod tests {
                 chain_trusted: None,
                 status: MonitorStatus::Ok,
                 error: None,
+                matched_archive_version: None,
             }]),
         );
         assert_eq!(
@@ -690,6 +823,7 @@ mod tests {
             chain_trusted: None,
             status,
             error: error.map(str::to_string),
+            matched_archive_version: None,
         }
     }
 

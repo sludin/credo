@@ -81,6 +81,30 @@ async fn flock_get_unknown_cert_returns_404() {
     assert_eq!(resp.status(), 404);
 }
 
+/// POST /flock/:name/check returns 404 for a cert that is not in the flock.
+#[tokio::test]
+async fn flock_check_unknown_cert_returns_404() {
+    let corgi = TestCorgi::start_authed().await.unwrap();
+
+    let resp = corgi
+        .client
+        .post(format!(
+            "{}/flock/nonexistent-cert/check",
+            corgi.control_url
+        ))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 404);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["error"].as_str(),
+        Some("Certificate 'nonexistent-cert' not found"),
+        "must be the flock-lookup 404, not an unmatched-route fallback"
+    );
+}
+
 /// POST /sync/assignments returns a success response (reconcile trigger).
 #[tokio::test]
 async fn sync_assignments_returns_refreshed() {

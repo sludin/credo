@@ -878,6 +878,48 @@ pub async fn trigger_provision(
     admin_provision_or_renew(&state, &cert_name, &body).await
 }
 
+/// Trigger an on-demand re-probe of a cert's monitor endpoint(s), bypassing
+/// corgi's periodic sweep interval. Synchronous — the probe itself has a
+/// short connect timeout, so no job/polling pattern is needed.
+pub async fn trigger_monitor_check(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Path(cert_name): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    check_min_role(Some(&user.role), &Role::Admin)?;
+
+    let assignments = state.assignments.read().await;
+    let assignment = assignments
+        .iter()
+        .find(|a| a.cert_name == cert_name || a.domain.as_deref() == Some(cert_name.as_str()))
+        .ok_or_else(|| AppError::NotFound(format!("No assignment for '{cert_name}'")))?
+        .clone();
+    drop(assignments);
+
+    let corgi_name = assignment
+        .corgi
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest(format!("Assignment '{cert_name}' has no corgi")))?;
+
+    let corgis = state.corgis.read().await.clone();
+    let node = corgis
+        .iter()
+        .find(|c| c.name == corgi_name)
+        .ok_or_else(|| AppError::NotFound(format!("Corgi '{corgi_name}' not in config")))?
+        .clone();
+
+    let result: serde_json::Value = corgi_post(
+        &state.corgi_client_pool,
+        &node,
+        &format!("/flock/{}/check", urlencoded(&cert_name)),
+        &json!({}),
+    )
+    .await
+    .map_err(AppError::Internal)?;
+
+    Ok(Json(result))
+}
+
 async fn admin_provision_or_renew(
     state: &AppState,
     cert_name: &str,

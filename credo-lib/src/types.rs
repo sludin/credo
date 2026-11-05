@@ -189,6 +189,24 @@ pub enum MonitorStatus {
     PartialSuccess,
 }
 
+/// A previously-archived version of a cert whose fingerprint matches what an
+/// endpoint actually served — identifies a stale install (e.g. a hook that
+/// never reloaded the service) instead of leaving the mismatch unexplained.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchedArchiveVersion {
+    /// Archive ordinal, e.g. "006".
+    pub ordinal: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issued_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_after: Option<String>,
+    /// not_before of the cert currently installed in live/, for the
+    /// "...superseded by the version issued <date>" message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_issued_at: Option<String>,
+}
+
 /// Diagnostic detail for a single monitored endpoint: what was dialed, what
 /// was seen. Kept even on failure so a false "mismatch" caused by DNS drift
 /// or a wrong port is distinguishable from a real fingerprint change.
@@ -219,6 +237,8 @@ pub struct EndpointCheckResult {
     pub status: MonitorStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_archive_version: Option<MatchedArchiveVersion>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

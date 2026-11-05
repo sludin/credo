@@ -80,6 +80,10 @@ pub fn build_api_router(state: AppState) -> Router {
         .route("/accounts/:id", get(api::get_account))
         // Admin-only
         .route("/admin/renew/:name", post(api::trigger_renew))
+        .route(
+            "/admin/monitor-check/:name",
+            post(api::trigger_monitor_check),
+        )
         .route("/admin/provision/:name", post(api::trigger_provision))
         .route("/admin/renewal-jobs/:id", delete(api::cancel_renewal_job))
         .route("/accounts", post(api::create_account))

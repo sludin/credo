@@ -331,6 +331,31 @@ async fn get_me_returns_authenticated_identity() {
     assert!(body["role"].is_string(), "role must be present");
 }
 
+/// POST /admin/monitor-check/:name returns 404 when there's no assignment
+/// for the cert.
+#[tokio::test]
+async fn monitor_check_unknown_cert_returns_404() {
+    let shepherd = TestShepherd::start_authed().await.unwrap();
+
+    let resp = shepherd
+        .client
+        .post(format!(
+            "{}/admin/monitor-check/nonexistent-cert",
+            shepherd.dashboard_url
+        ))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 404);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["error"].as_str(),
+        Some("No assignment for 'nonexistent-cert'"),
+        "must be the assignment-lookup 404, not an unmatched-route fallback"
+    );
+}
+
 /// GET /admin/renewal-jobs returns an empty list on a fresh instance.
 #[tokio::test]
 async fn renewal_jobs_empty_on_fresh_instance() {

@@ -102,6 +102,25 @@ pub fn cert_days_remaining(cert_path: &Path) -> Option<i64> {
     Some((na - now) / 86400)
 }
 
+/// Formatted (not_before, not_after) for a DER-encoded cert, or (None, None)
+/// if it doesn't parse. Uses "%b %e %H:%M:%S %Y GMT" — the same format
+/// `to_flock_summary` uses for `valid_to` — so the dashboard's fmtDate() can
+/// parse it without a second format path.
+pub fn validity_window(der: &[u8]) -> (Option<String>, Option<String>) {
+    use x509_parser::prelude::*;
+    let Ok((_, cert)) = X509Certificate::from_der(der) else {
+        return (None, None);
+    };
+    let fmt = |ts: i64| {
+        chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
+            .map(|dt| dt.format("%b %e %H:%M:%S %Y GMT").to_string())
+    };
+    (
+        fmt(cert.validity().not_before.timestamp()),
+        fmt(cert.validity().not_after.timestamp()),
+    )
+}
+
 /// Read the leaf certificate from `cert_path` and return its display fingerprint.
 pub fn read_cert_fingerprint(cert_path: &Path) -> Option<String> {
     let pem_str = std::fs::read_to_string(cert_path).ok()?;
@@ -674,5 +693,35 @@ mod pending_key_match_tests {
         let key_file = write_key(&other.serialize_private_key_pem());
 
         assert!(!cert_pem_matches_key_file(&cert_pem, key_file.path()));
+    }
+}
+
+#[cfg(test)]
+mod validity_window_tests {
+    use super::*;
+    use rcgen::{Certificate, CertificateParams};
+
+    #[test]
+    fn returns_formatted_not_before_and_not_after() {
+        let cert =
+            Certificate::from_params(CertificateParams::new(vec!["example.com".into()])).unwrap();
+        let der = cert.serialize_der().unwrap();
+
+        let (not_before, not_after) = validity_window(&der);
+
+        let not_before = not_before.expect("not_before");
+        let not_after = not_after.expect("not_after");
+        // Matches the "%b %e %H:%M:%S %Y GMT" format used elsewhere (e.g.
+        // to_flock_summary's valid_to) so the dashboard's fmtDate() parses it.
+        assert!(not_before.ends_with("GMT"));
+        assert!(not_after.ends_with("GMT"));
+        assert_ne!(not_before, not_after);
+    }
+
+    #[test]
+    fn returns_none_for_garbage_der() {
+        let (not_before, not_after) = validity_window(&[0u8, 1, 2, 3]);
+        assert!(not_before.is_none());
+        assert!(not_after.is_none());
     }
 }

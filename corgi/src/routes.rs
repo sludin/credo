@@ -200,6 +200,32 @@ pub async fn flock_restart(
     Ok(Json(json!({ "restarted": true, "results": results })))
 }
 
+/// On-demand re-probe of a cert's monitor endpoint(s), bypassing the
+/// periodic sweep interval. Readonly: this only re-populates the same cache
+/// the sweep already writes, it doesn't mutate any cert material.
+pub async fn flock_check(
+    State(state): State<AppState>,
+    role: Option<Extension<Role>>,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    check_min_role(role.as_ref().map(|e| &e.0), &Role::Readonly)?;
+    let entry = find_flock_entry(&state, &name)
+        .await
+        .ok_or_else(|| AppError::NotFound(format!("Certificate '{}' not found", name)))?;
+    if entry.monitor.is_none() {
+        return Err(AppError::BadRequest(format!(
+            "Certificate '{}' has no monitor config",
+            name
+        )));
+    }
+
+    crate::monitor::check_one(&state, &entry).await;
+
+    let results = state.monitor_results.read().await;
+    let result = crate::monitor::monitor_result_for(&entry, &results);
+    Ok(Json(json!({ "certificate": name, "monitor": result })))
+}
+
 pub async fn hooks_list(
     State(state): State<AppState>,
     role: Option<Extension<Role>>,
