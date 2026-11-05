@@ -36,7 +36,10 @@ export function CertViewer(): React.ReactElement {
   useEffect(() => {
     fetchCerts()
       .then(payload => {
-        const existing = payload.entries.filter(e => e.exists);
+        // The backend only ever returns entries it could successfully read
+        // (shepherd/src/routes_api.rs::get_certstore uses filter_map), so
+        // every entry here already exists — no `exists` field is sent.
+        const existing = payload.entries.filter(e => e.certName);
         setShepherdCerts(existing);
         if (existing.length > 0) setSelectedCertName(existing[0].certName);
       })

@@ -88,7 +88,9 @@ export function CertMonitorCheck(): React.ReactElement {
 
   useEffect(() => {
     fetchCerts()
-      .then(payload => setCertOptions(payload.entries.filter(e => e.exists)))
+      // The backend only ever returns entries it could successfully read,
+      // so every entry here already exists — no `exists` field is sent.
+      .then(payload => setCertOptions(payload.entries.filter(e => e.certName)))
       .catch(() => { /* non-fatal */ });
   }, []);
 
