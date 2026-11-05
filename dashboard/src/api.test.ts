@@ -16,4 +16,9 @@ describe('api module exports', () => {
     const api = await import('./api');
     expect(typeof api.runMonitorCheck).toBe('function');
   });
+
+  it('exports fetchArchivedCertFull', async () => {
+    const api = await import('./api');
+    expect(typeof api.fetchArchivedCertFull).toBe('function');
+  });
 });

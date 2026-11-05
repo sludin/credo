@@ -105,6 +105,50 @@ async fn flock_check_unknown_cert_returns_404() {
     );
 }
 
+/// GET /flock/:name/archive/:ordinal/fullchain returns 400 for a
+/// non-numeric ordinal, regardless of whether the cert exists.
+#[tokio::test]
+async fn flock_archive_fullchain_rejects_unsafe_ordinal() {
+    let corgi = TestCorgi::start_authed().await.unwrap();
+
+    let resp = corgi
+        .client
+        .get(format!(
+            "{}/flock/nonexistent-cert/archive/not-a-number/fullchain",
+            corgi.control_url
+        ))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 400);
+}
+
+/// GET /flock/:name/archive/:ordinal/fullchain returns 404 for a cert that
+/// is not in the flock.
+#[tokio::test]
+async fn flock_archive_fullchain_unknown_cert_returns_404() {
+    let corgi = TestCorgi::start_authed().await.unwrap();
+
+    let resp = corgi
+        .client
+        .get(format!(
+            "{}/flock/nonexistent-cert/archive/001/fullchain",
+            corgi.control_url
+        ))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), 404);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(
+        body["error"].as_str(),
+        Some("Certificate 'nonexistent-cert' not found"),
+        "must be the flock-lookup 404, not an unmatched-route fallback"
+    );
+}
+
 /// POST /sync/assignments returns a success response (reconcile trigger).
 #[tokio::test]
 async fn sync_assignments_returns_refreshed() {

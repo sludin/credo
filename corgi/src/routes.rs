@@ -226,6 +226,37 @@ pub async fn flock_check(
     Ok(Json(json!({ "certificate": name, "monitor": result })))
 }
 
+/// Serves one archived version's fullchain, so the dashboard can show full
+/// cert detail for an observed-but-stale served cert (identified by
+/// check_one's archive match), not just the fingerprint/CN/SANs summary
+/// captured during the TLS probe.
+pub async fn flock_archive_fullchain(
+    State(state): State<AppState>,
+    role: Option<Extension<Role>>,
+    Path((name, ordinal)): Path<(String, String)>,
+) -> Result<impl IntoResponse, AppError> {
+    check_min_role(role.as_ref().map(|e| &e.0), &Role::Readonly)?;
+    if ordinal.is_empty() || !ordinal.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(AppError::BadRequest(format!(
+            "Invalid archive ordinal '{}'",
+            ordinal
+        )));
+    }
+    let entry = find_flock_entry(&state, &name)
+        .await
+        .ok_or_else(|| AppError::NotFound(format!("Certificate '{}' not found", name)))?;
+
+    let path = crate::archive::archive_dir(&state.config.load().cert_store_dir, &entry.name)
+        .join(format!("fullchain-{}.pem", ordinal));
+    let pem = std::fs::read_to_string(&path).map_err(|_| {
+        AppError::NotFound(format!(
+            "Archived version '{}' not found for '{}'",
+            ordinal, name
+        ))
+    })?;
+    Ok((StatusCode::OK, [("content-type", "text/plain")], pem))
+}
+
 pub async fn hooks_list(
     State(state): State<AppState>,
     role: Option<Extension<Role>>,

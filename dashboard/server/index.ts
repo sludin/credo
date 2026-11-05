@@ -607,13 +607,13 @@ async function main(): Promise<void> {
     });
   }));
 
-  app.get('/api/certs/:certName/full', asyncHandler(async (req: Request, res: Response) => {
-    const fullchainResponse = await clients.api.get(
-      `/admin/certstore/${encodeURIComponent(req.params.certName)}/fullchain`,
-      { responseType: 'text' },
-    );
-    const pems = splitPemChain(fullchainResponse.data as string);
-    if (pems.length === 0) { res.status(502).json({ error: 'No certificate found in PEM' }); return; }
+  /** Builds the CertChainPayload shape (chain + root) from a raw fullchain
+   * PEM string, appending the root CA from Shepherd's clientCa when it
+   * chains up to one. Shared by the live "/full" cert view and the
+   * archived-version view (both just differ in where the PEM comes from). */
+  async function buildCertChainPayload(fullchainPem: string, label: string) {
+    const pems = splitPemChain(fullchainPem);
+    if (pems.length === 0) return null;
 
     const { X509Certificate: NodeX509 } = await import('crypto');
 
@@ -652,7 +652,27 @@ async function main(): Promise<void> {
         cert: parseCertFull(pem),
       };
     });
-    res.json({ host: req.params.certName, port: 0, chain, root: { role: 'root', commonName: rootCN, received: false } });
+    return { host: label, port: 0, chain, root: { role: 'root', commonName: rootCN, received: false } };
+  }
+
+  app.get('/api/certs/:certName/full', asyncHandler(async (req: Request, res: Response) => {
+    const fullchainResponse = await clients.api.get(
+      `/admin/certstore/${encodeURIComponent(req.params.certName)}/fullchain`,
+      { responseType: 'text' },
+    );
+    const payload = await buildCertChainPayload(fullchainResponse.data as string, req.params.certName);
+    if (!payload) { res.status(502).json({ error: 'No certificate found in PEM' }); return; }
+    res.json(payload);
+  }));
+
+  app.get('/api/certs/:certName/archive/:ordinal/full', asyncHandler(async (req: Request, res: Response) => {
+    const fullchainResponse = await clients.api.get(
+      `/admin/archived-cert/${encodeURIComponent(req.params.certName)}/${encodeURIComponent(req.params.ordinal)}/fullchain`,
+      { responseType: 'text' },
+    );
+    const payload = await buildCertChainPayload(fullchainResponse.data as string, req.params.certName);
+    if (!payload) { res.status(502).json({ error: 'No certificate found in PEM' }); return; }
+    res.json(payload);
   }));
 
   app.get('/api/admin/config-summary', asyncHandler(async (_req: Request, res: Response) => {

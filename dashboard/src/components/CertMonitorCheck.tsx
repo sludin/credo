@@ -1,13 +1,35 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { fetchCerts, fetchShepherdCertFull, runMonitorCheck } from '../api';
+import { fetchArchivedCertFull, fetchCerts, fetchShepherdCertFull, runMonitorCheck } from '../api';
 import { Topbar } from './Shell';
 import { StatusBadge } from './StatusBadge';
 import { CertDetailPanel, type OutputTab } from './CertDetailPanel';
 import { monitorLabel, monitorTone } from '../utils/monitor';
 import type { CertStoreEntry, CertChainPayload, MonitorResult, EndpointCheckResult } from '../types';
 
-function EndpointCard({ endpoint }: { endpoint: EndpointCheckResult }): React.ReactElement {
+function EndpointCard({ certName, endpoint }: { certName: string; endpoint: EndpointCheckResult }): React.ReactElement {
+  const [archiveChain, setArchiveChain] = useState<CertChainPayload | null>(null);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [selectedChainIndex, setSelectedChainIndex] = useState(0);
+  const [activeTab, setActiveTab] = useState<OutputTab>('structured');
+  const [copied, setCopied] = useState<OutputTab | null>(null);
+
+  const ordinal = endpoint.matchedArchiveVersion?.ordinal;
+
+  useEffect(() => {
+    setArchiveChain(null);
+    setArchiveError(null);
+    setSelectedChainIndex(0);
+    setActiveTab('structured');
+    if (!ordinal) return;
+    setArchiveLoading(true);
+    fetchArchivedCertFull(certName, ordinal)
+      .then(setArchiveChain)
+      .catch(err => setArchiveError(err instanceof Error ? err.message : 'Failed to load archived cert'))
+      .finally(() => setArchiveLoading(false));
+  }, [certName, ordinal]);
+
   return (
     <div className="card" style={{ marginBottom: 10 }}>
       <div className="card-header">
@@ -66,6 +88,24 @@ function EndpointCard({ endpoint }: { endpoint: EndpointCheckResult }): React.Re
           </div>
         )}
       </div>
+
+      {ordinal && (
+        <div style={{ padding: '0 16px 16px' }}>
+          {archiveLoading && <span className="text-muted">Loading full cert detail…</span>}
+          {archiveError && <div className="toast toast-error">{archiveError}</div>}
+          {archiveChain && (
+            <CertDetailPanel
+              chainData={archiveChain}
+              selectedChainIndex={selectedChainIndex}
+              onChainSelect={setSelectedChainIndex}
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              copied={copied}
+              onCopy={(tab) => { setCopied(tab); setTimeout(() => setCopied(null), 2000); }}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -76,6 +116,11 @@ export function CertMonitorCheck(): React.ReactElement {
 
   const [certOptions, setCertOptions] = useState<CertStoreEntry[]>([]);
   const [selectedCertName, setSelectedCertName] = useState(autoRunCert ?? '');
+  // The cert the current chainData/monitorResult actually belong to — kept
+  // separate from selectedCertName so changing the dropdown before clicking
+  // "Run Check" again can't mismatch the still-displayed results against a
+  // different cert's archive.
+  const [checkedCertName, setCheckedCertName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [chainData, setChainData] = useState<CertChainPayload | null>(null);
@@ -112,6 +157,7 @@ export function CertMonitorCheck(): React.ReactElement {
       ]);
       setChainData(expected);
       setMonitorResult(checked.monitor);
+      setCheckedCertName(certName);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to run monitor check');
     } finally {
@@ -189,7 +235,9 @@ export function CertMonitorCheck(): React.ReactElement {
               {endpoints.length === 0 ? (
                 <span className="text-muted">No endpoint data available</span>
               ) : (
-                endpoints.map((ep, i) => <EndpointCard key={`${ep.host}:${ep.port}-${i}`} endpoint={ep} />)
+                endpoints.map((ep, i) => (
+                  <EndpointCard key={`${ep.host}:${ep.port}-${i}`} certName={checkedCertName} endpoint={ep} />
+                ))
               )}
             </div>
           </div>

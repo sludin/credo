@@ -241,6 +241,15 @@ export function fetchRemoteCert(host: string, port: number): Promise<CertChainPa
   );
 }
 
+/** Fetches full cert detail for one archived version of a cert — used to
+ * show the Observed/Served side of a monitor-check mismatch in full once
+ * it's been identified as a specific prior archived version. */
+export function fetchArchivedCertFull(certName: string, ordinal: string): Promise<CertChainPayload> {
+  return requestJson<CertChainPayload>(
+    '/api/certs/' + encodeURIComponent(certName) + '/archive/' + encodeURIComponent(ordinal) + '/full',
+  );
+}
+
 export type CorgiHooksPayload = {
   corgiId: string;
   availableHooks: string[];

@@ -84,6 +84,10 @@ pub fn build_api_router(state: AppState) -> Router {
             "/admin/monitor-check/:name",
             post(api::trigger_monitor_check),
         )
+        .route(
+            "/admin/archived-cert/:name/:ordinal/fullchain",
+            get(api::get_archived_cert_fullchain),
+        )
         .route("/admin/provision/:name", post(api::trigger_provision))
         .route("/admin/renewal-jobs/:id", delete(api::cancel_renewal_job))
         .route("/accounts", post(api::create_account))

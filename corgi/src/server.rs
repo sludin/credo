@@ -51,6 +51,10 @@ pub fn build_control_router(state: AppState) -> Router {
         .route("/flock/:name/install", post(routes::flock_install))
         .route("/flock/:name/restart", post(routes::flock_restart))
         .route("/flock/:name/check", post(routes::flock_check))
+        .route(
+            "/flock/:name/archive/:ordinal/fullchain",
+            get(routes::flock_archive_fullchain),
+        )
         .route("/sync/assignments", post(routes::sync_assignments))
         .route("/acme-challenges", post(routes::acme_challenge_create))
         .route(

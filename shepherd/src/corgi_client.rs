@@ -269,6 +269,58 @@ pub async fn corgi_get<T: DeserializeOwned>(
     serde_json::from_str::<T>(&body).with_context(|| format!("Parsing response from {url}"))
 }
 
+/// Like `corgi_get`, but for endpoints that return a raw body (e.g. a PEM
+/// file) rather than JSON — skips the `serde_json::from_str` parse step.
+pub async fn corgi_get_text(
+    pool: &Arc<RwLock<CorgiClientPool>>,
+    node: &CorgiNodeConfig,
+    path: &str,
+) -> Result<String> {
+    let client = get_or_create(pool, node).await?;
+    let url = format!("{}{}", node.url.trim_end_matches('/'), path);
+    let host = url_hostname(&url);
+    let start = Instant::now();
+    let resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            RequestLogEntry {
+                code: "F",
+                direction: "<",
+                status: 0,
+                method: "GET",
+                path,
+                host: &host,
+                peer_ip: "-",
+                identity: Some(node.name.as_str()),
+                duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+            }
+            .log();
+            return Err(anyhow::anyhow!("GET {url}: {e}"));
+        }
+    };
+    let status = resp.status();
+    RequestLogEntry {
+        code: "F",
+        direction: "<",
+        status: status.as_u16(),
+        method: "GET",
+        path,
+        host: &host,
+        peer_ip: "-",
+        identity: Some(node.name.as_str()),
+        duration_ms: start.elapsed().as_secs_f64() * 1000.0,
+    }
+    .log();
+    let body = resp
+        .text()
+        .await
+        .with_context(|| format!("Reading response from {url}"))?;
+    if !status.is_success() {
+        anyhow::bail!("GET {url} → {status}: {body}");
+    }
+    Ok(body)
+}
+
 pub async fn corgi_post<T: DeserializeOwned>(
     pool: &Arc<RwLock<CorgiClientPool>>,
     node: &CorgiNodeConfig,

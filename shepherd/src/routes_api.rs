@@ -10,7 +10,7 @@ use axum::response::IntoResponse;
 use crate::assignments::{file_mtime, load_assignments, save_assignments};
 use crate::auth::check_min_role;
 use crate::cert_store;
-use crate::corgi_client::{corgi_get_hooks, corgi_post};
+use crate::corgi_client::{corgi_get_hooks, corgi_get_text, corgi_post};
 use crate::corgis::load_corgis;
 use crate::error::AppError;
 use crate::issuance::issue_cert;
@@ -918,6 +918,56 @@ pub async fn trigger_monitor_check(
     .map_err(AppError::Internal)?;
 
     Ok(Json(result))
+}
+
+/// Serves one archived version of a cert's fullchain from the corgi that
+/// holds it — used to show full cert detail for an observed-but-stale
+/// served cert that a monitor check's archive match identified, not just
+/// the fingerprint/CN/SANs summary captured during the TLS probe.
+pub async fn get_archived_cert_fullchain(
+    State(state): State<AppState>,
+    axum::Extension(user): axum::Extension<AuthenticatedUser>,
+    Path((cert_name, ordinal)): Path<(String, String)>,
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    check_min_role(Some(&user.role), &Role::Readonly)?;
+
+    let assignments = state.assignments.read().await;
+    let assignment = assignments
+        .iter()
+        .find(|a| a.cert_name == cert_name || a.domain.as_deref() == Some(cert_name.as_str()))
+        .ok_or_else(|| AppError::NotFound(format!("No assignment for '{cert_name}'")))?
+        .clone();
+    drop(assignments);
+
+    let corgi_name = assignment
+        .corgi
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest(format!("Assignment '{cert_name}' has no corgi")))?;
+
+    let corgis = state.corgis.read().await.clone();
+    let node = corgis
+        .iter()
+        .find(|c| c.name == corgi_name)
+        .ok_or_else(|| AppError::NotFound(format!("Corgi '{corgi_name}' not in config")))?
+        .clone();
+
+    let pem = corgi_get_text(
+        &state.corgi_client_pool,
+        &node,
+        &format!(
+            "/flock/{}/archive/{}/fullchain",
+            urlencoded(&cert_name),
+            urlencoded(&ordinal)
+        ),
+    )
+    .await
+    .map_err(AppError::Internal)?;
+
+    Ok((
+        axum::http::StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "text/plain")],
+        pem,
+    ))
 }
 
 async fn admin_provision_or_renew(
