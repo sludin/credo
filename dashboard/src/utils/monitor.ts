@@ -5,7 +5,7 @@ import type { MonitorEndpoint, MonitorStatus } from '../types';
 export function monitorTone(status: MonitorStatus): 'green' | 'yellow' | 'red' | 'muted' {
   if (status === 'ok') return 'green';
   if (status === 'cert-mismatch') return 'red';
-  if (status === 'unreachable') return 'yellow';
+  if (status === 'unreachable' || status === 'partial-success') return 'yellow';
   return 'muted';
 }
 
@@ -15,8 +15,14 @@ export function monitorLabel(status: MonitorStatus): string {
     case 'cert-mismatch': return 'Cert Mismatch';
     case 'unreachable': return 'Unreachable';
     case 'pending': return 'Pending';
+    case 'partial-success': return 'Partial';
     default: return 'Unmonitored';
   }
+}
+
+/** Deep-link to the Cert Monitor Check tool, pre-loaded for a given cert. */
+export function monitorCheckUrl(certName: string): string {
+  return `/tools/cert-monitor-check?cert=${encodeURIComponent(certName)}`;
 }
 
 export type MonitorFormFields = {

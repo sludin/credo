@@ -4,7 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { usePoller } from '../hooks/usePoller';
 import { fetchFlock, renewCert } from '../api';
 import { StatusBadge, certTone } from '../components/StatusBadge';
-import { monitorLabel, monitorTone } from '../utils/monitor';
+import { monitorLabel, monitorTone, monitorCheckUrl } from '../utils/monitor';
 import { Topbar } from '../components/Shell';
 import { usePermission } from '../hooks/usePermission';
 import { useColumnVisibility } from '../hooks/useColumnVisibility';
@@ -190,7 +190,10 @@ export default function Corgis(): React.ReactElement {
                                         {daysLeft > 0 ? daysLeft : '—'}
                                       </td>
                                       <td><StatusBadge label={certLabel} tone={certStatusTone} /></td>
-                                      <td title={cert.monitor?.error ?? (cert.monitor?.checkedAt ? `Checked ${new Date(cert.monitor.checkedAt).toLocaleTimeString()}` : undefined)}>
+                                      <td
+                                        title={cert.monitor?.error ?? (cert.monitor?.checkedAt ? `Checked ${new Date(cert.monitor.checkedAt).toLocaleTimeString()}` : undefined)}
+                                        onClick={(e) => { e.stopPropagation(); navigate(monitorCheckUrl(cert.name)); }}
+                                      >
                                         <StatusBadge
                                           label={monitorLabel(cert.monitor?.status ?? 'unmonitored')}
                                           tone={monitorTone(cert.monitor?.status ?? 'unmonitored')}

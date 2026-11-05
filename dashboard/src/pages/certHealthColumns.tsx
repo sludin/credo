@@ -1,7 +1,8 @@
 // src/pages/certHealthColumns.tsx
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { StatusBadge, certTone } from '../components/StatusBadge';
-import { monitorTone, monitorLabel } from '../utils/monitor';
+import { monitorTone, monitorLabel, monitorCheckUrl } from '../utils/monitor';
 import { visibleColumns, type ColumnDef } from '../lib/columns';
 import type { CertStoreEntry, FlockCert } from '../types';
 
@@ -68,7 +69,13 @@ export const CERT_COLUMNS: CertColumn[] = [
     sortValue: (row) => row.cert.monitor?.status ?? 'unmonitored',
     render: (row) => {
       const status = row.cert.monitor?.status ?? 'unmonitored';
-      return <td><StatusBadge label={monitorLabel(status)} tone={monitorTone(status)} /></td>;
+      return (
+        <td>
+          <Link to={monitorCheckUrl(row.cert.name)} onClick={(e) => e.stopPropagation()}>
+            <StatusBadge label={monitorLabel(status)} tone={monitorTone(status)} />
+          </Link>
+        </td>
+      );
     },
   },
   {

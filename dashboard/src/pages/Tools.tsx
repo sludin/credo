@@ -3,12 +3,14 @@ import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { DnsTxtChecker } from '../components/DnsTxtChecker';
 import { CertViewer } from '../components/CertViewer';
+import { CertMonitorCheck } from '../components/CertMonitorCheck';
 
 export default function Tools(): React.ReactElement {
   return (
     <Routes>
       <Route path="dns-txt" element={<DnsTxtChecker />} />
       <Route path="cert-viewer" element={<CertViewer />} />
+      <Route path="cert-monitor-check" element={<CertMonitorCheck />} />
       <Route path="*" element={<Navigate to="dns-txt" replace />} />
     </Routes>
   );

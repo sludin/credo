@@ -11,4 +11,9 @@ describe('api module exports', () => {
     expect(typeof api.fetchLogsHistorical).toBe('function');
     expect(typeof api.openLogsStream).toBe('function');
   });
+
+  it('exports runMonitorCheck', async () => {
+    const api = await import('./api');
+    expect(typeof api.runMonitorCheck).toBe('function');
+  });
 });

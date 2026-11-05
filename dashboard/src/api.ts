@@ -8,6 +8,7 @@ import type {
   FlockPayload,
   HealthPayload,
   LastRenewalJob,
+  MonitorResult,
   RateLimitsPayload,
   ShepherdConfigSummary,
   VigilCAPayload,
@@ -59,6 +60,14 @@ export function renewCert(certName: string, corgiName: string): Promise<unknown>
   return requestJson('/api/certs/' + encodeURIComponent(certName) + '/renew', {
     method: 'POST',
     body: JSON.stringify({ corgiName }),
+  });
+}
+
+/** Triggers an immediate re-probe of a cert's monitor endpoint(s), bypassing
+ * corgi's periodic sweep interval. */
+export function runMonitorCheck(certName: string): Promise<{ certificate: string; monitor: MonitorResult }> {
+  return requestJson('/api/certs/' + encodeURIComponent(certName) + '/monitor-check', {
+    method: 'POST',
   });
 }
 

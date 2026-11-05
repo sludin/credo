@@ -1,8 +1,9 @@
 // src/pages/certificateListColumns.tsx
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { StatusBadge } from '../components/StatusBadge';
 import { statusTone, statusLabel } from './Certificates.testable';
-import { monitorTone, monitorLabel } from '../utils/monitor';
+import { monitorTone, monitorLabel, monitorCheckUrl } from '../utils/monitor';
 import { visibleColumns, type ColumnDef } from '../lib/columns';
 import { fmtDate, type UnifiedCertRow } from './Certificates';
 
@@ -47,7 +48,13 @@ export const CERTIFICATE_LIST_COLUMNS: CertificateListColumn[] = [
     sortValue: (r) => r.flockCert?.monitor?.status ?? 'unmonitored',
     render: (r) => {
       const status = r.flockCert?.monitor?.status ?? 'unmonitored';
-      return <td><StatusBadge label={monitorLabel(status)} tone={monitorTone(status)} /></td>;
+      return (
+        <td>
+          <Link to={monitorCheckUrl(r.certName)} onClick={(e) => e.stopPropagation()}>
+            <StatusBadge label={monitorLabel(status)} tone={monitorTone(status)} />
+          </Link>
+        </td>
+      );
     },
   },
   {

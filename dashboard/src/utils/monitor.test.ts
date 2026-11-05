@@ -1,5 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { monitorTone, monitorLabel, monitorToForm, monitorFromForm } from './monitor';
+import { monitorTone, monitorLabel, monitorToForm, monitorFromForm, monitorCheckUrl } from './monitor';
+
+describe('monitorCheckUrl', () => {
+  it('builds a deep-link to the Cert Monitor Check tool for a given cert', () => {
+    expect(monitorCheckUrl('hermes.ludin.org')).toBe('/tools/cert-monitor-check?cert=hermes.ludin.org');
+  });
+
+  it('URL-encodes cert names with special characters', () => {
+    expect(monitorCheckUrl('foo bar.example.com')).toBe('/tools/cert-monitor-check?cert=foo%20bar.example.com');
+  });
+});
 
 describe('monitorTone', () => {
   it('maps statuses to badge tones', () => {
@@ -8,6 +18,10 @@ describe('monitorTone', () => {
     expect(monitorTone('unreachable')).toBe('yellow');
     expect(monitorTone('unmonitored')).toBe('muted');
     expect(monitorTone('pending')).toBe('muted');
+  });
+
+  it('maps partial-success (some endpoints ok, some not) to yellow', () => {
+    expect(monitorTone('partial-success')).toBe('yellow');
   });
 });
 
@@ -18,6 +32,10 @@ describe('monitorLabel', () => {
     expect(monitorLabel('unreachable')).toBe('Unreachable');
     expect(monitorLabel('unmonitored')).toBe('Unmonitored');
     expect(monitorLabel('pending')).toBe('Pending');
+  });
+
+  it('labels partial-success distinctly from unmonitored', () => {
+    expect(monitorLabel('partial-success')).toBe('Partial');
   });
 });
 

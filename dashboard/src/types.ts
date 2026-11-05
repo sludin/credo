@@ -13,7 +13,8 @@ export type HealthPayload = {
 };
 
 // ── Endpoint monitoring ───────────────────────────────────────────────────
-export type MonitorStatus = 'ok' | 'cert-mismatch' | 'unreachable' | 'unmonitored' | 'pending';
+export type MonitorStatus =
+  | 'ok' | 'cert-mismatch' | 'unreachable' | 'unmonitored' | 'pending' | 'partial-success';
 
 export type MonitorEndpoint = {
   host: string;
@@ -21,11 +22,38 @@ export type MonitorEndpoint = {
   protocol: 'https' | 'tls';
 };
 
+/** A previously-archived version of a cert whose fingerprint matches what an
+ * endpoint actually served — identifies a stale install (e.g. a hook that
+ * never reloaded the service) instead of leaving the mismatch unexplained. */
+export type MatchedArchiveVersion = {
+  ordinal: string;
+  issuedAt?: string;
+  notAfter?: string;
+  currentIssuedAt?: string;
+};
+
+/** Diagnostic detail for a single monitored endpoint: what was dialed, what
+ * was seen. */
+export type EndpointCheckResult = {
+  host: string;
+  port: number;
+  sni: string;
+  resolvedAddr?: string;
+  seenFingerprint?: string;
+  seenCommonName?: string;
+  seenSanNames: string[];
+  chainTrusted?: boolean;
+  status: MonitorStatus;
+  error?: string;
+  matchedArchiveVersion?: MatchedArchiveVersion;
+};
+
 export type MonitorResult = {
   status: MonitorStatus;
   checkedAt?: string;
   seenFingerprint?: string;
   error?: string;
+  endpoints?: EndpointCheckResult[];
 };
 
 // ── Flock (Corgi + certs) ─────────────────────────────────────────────────

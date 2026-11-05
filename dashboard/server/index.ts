@@ -486,6 +486,13 @@ async function main(): Promise<void> {
     res.json(response.data);
   }));
 
+  app.post('/api/certs/:certName/monitor-check', asyncHandler(async (req: Request, res: Response) => {
+    const response = await clients.api.post(
+      `/admin/monitor-check/${encodeURIComponent(req.params.certName)}`
+    );
+    res.json(response.data);
+  }));
+
   app.get('/api/assignments', asyncHandler(async (_req: Request, res: Response) => {
     const response = await clients.api.get('/admin/assignments');
     const assignments = Array.isArray(response.data?.assignments) ? response.data.assignments as Assignment[] : [];

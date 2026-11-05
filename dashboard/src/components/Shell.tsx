@@ -41,6 +41,7 @@ const sections: SidebarSection[] = [
     items: [
       { to: '/tools/dns-txt', icon: '⚙', label: 'DNS TXT Checker' },
       { to: '/tools/cert-viewer', icon: '⬧', label: 'Cert Viewer' },
+      { to: '/tools/cert-monitor-check', icon: '✓', label: 'Cert Monitor Check' },
     ],
   },
 ];
