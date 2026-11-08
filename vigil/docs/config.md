@@ -48,7 +48,7 @@ The env var overrides take precedence over config file values. The startup wrapp
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `ca.curve` | string | `"P-384"` | ECDSA curve for issued certificates |
-| `ca.certDefaultDays` | number | `365` | Default certificate validity period in days |
+| `ca.certDefaultDays` | number | `30` | Default certificate validity period in days |
 | `ca.crlNextUpdateHours` | number | `24` | CRL `nextUpdate` field: hours from now |
 | `ca.ocspMaxAgeSeconds` | number | `60` | `max-age` for OCSP responses |
 
