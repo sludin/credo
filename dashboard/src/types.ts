@@ -92,6 +92,7 @@ export type CertStoreAssignment = {
   corgi: string;
   ca: string;
   domain?: string;
+  renewBeforeDays?: number;
 };
 
 export type CertStoreEntry = {

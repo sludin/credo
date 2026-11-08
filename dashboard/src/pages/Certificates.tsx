@@ -82,7 +82,6 @@ type FormState = {
   domain: string;
   identityUri: string;
   sans: string;
-  days: string;
   renewBeforeDays: string;
   validationType: 'none-01' | 'http-01' | 'dns-01';
   validationProvider: string;
@@ -97,7 +96,7 @@ type FormState = {
 const emptyForm: FormState = {
   certName: '', corgi: '', ca: 'letsencrypt', caTarget: '',
   letsEncryptTarget: '', domain: '', identityUri: '', sans: '',
-  days: '90', renewBeforeDays: '30',
+  renewBeforeDays: '30',
   validationType: 'none-01', validationProvider: '', validationDdnsKey: '',
   hooksMode: 'default', hooksList: [],
   monitorHost: '', monitorPort: '443', monitorProtocol: 'https',
@@ -178,7 +177,6 @@ function assignmentToForm(a: Assignment): FormState {
     domain: a.domain ?? '',
     identityUri: a.identityUri ?? '',
     sans: (a.sans ?? []).join('\n'),
-    days: String(a.days ?? 90),
     renewBeforeDays: String(a.renewBeforeDays ?? 30),
     validationType: a.validation?.type === 'auto' ? 'none-01' : (a.validation?.type ?? 'none-01'),
     validationProvider: (a.validation?.methods?.['dns-01']?.provider ?? '') as string,
@@ -190,7 +188,6 @@ function assignmentToForm(a: Assignment): FormState {
 
 function toAssignmentPayload(form: FormState): Record<string, unknown> {
   const sans = form.sans.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  const daysNum = Number(form.days);
   const renewBeforeNum = Number(form.renewBeforeDays);
   const payload: Record<string, unknown> = {
     certName: form.certName.trim(),
@@ -201,7 +198,6 @@ function toAssignmentPayload(form: FormState): Record<string, unknown> {
     domain: form.domain.trim() || undefined,
     identityUri: form.identityUri.trim() || undefined,
     sans: sans.length > 0 ? sans : undefined,
-    days: Number.isFinite(daysNum) && daysNum > 0 ? Math.floor(daysNum) : undefined,
     renewBeforeDays: Number.isFinite(renewBeforeNum) && renewBeforeNum > 0 ? Math.floor(renewBeforeNum) : undefined,
   };
   if (form.validationType !== 'none-01') {
@@ -950,8 +946,8 @@ export default function Certificates(): React.ReactElement {
                           <span className="field-value">{selectedRow.ca}</span>
                         </div>
                         <div className="field-row">
-                          <span className="field-label">Validity</span>
-                          <span className="field-value">{selectedRow.assignment.days ?? 90}d (renew before {selectedRow.assignment.renewBeforeDays ?? 30}d)</span>
+                          <span className="field-label">Renew Before</span>
+                          <span className="field-value">{selectedRow.assignment.renewBeforeDays ?? 30}d</span>
                         </div>
                         {selectedRow.assignment.domain && (
                           <div className="field-row">
@@ -1212,10 +1208,6 @@ export default function Certificates(): React.ReactElement {
                         <select className="form-select" value={form.ca} onChange={e => setForm(f => ({ ...f, ca: e.target.value }))}>
                           {caOptions.map(n => <option key={n} value={n}>{n}</option>)}
                         </select>
-                      </div>
-                      <div className="form-row">
-                        <label className="form-label">Validity (days)</label>
-                        <input className="form-input" type="number" value={form.days} onChange={e => setForm(f => ({ ...f, days: e.target.value }))} />
                       </div>
                       <div className="form-row">
                         <label className="form-label">Renew Before (days)</label>

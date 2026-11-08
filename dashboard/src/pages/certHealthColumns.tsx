@@ -8,11 +8,21 @@ import type { CertStoreEntry, FlockCert } from '../types';
 
 export type CertColumnKey =
   | 'domain' | 'corgi' | 'ca' | 'daysLeft' | 'expires' | 'status'
-  | 'monitorStatus' | 'monitorChecked' | 'fingerprint' | 'sanCount';
+  | 'monitorStatus' | 'monitorChecked' | 'fingerprint' | 'sanCount' | 'willRenewIn';
 
 export type CertRow = { corgi: string; cert: FlockCert; store?: CertStoreEntry; daysLeft: number };
 
 export type CertColumn = ColumnDef<CertColumnKey, CertRow>;
+
+/** Shepherd's own fallback when an assignment has no renewBeforeDays set (shepherd/src/config.rs). */
+const DEFAULT_RENEW_BEFORE_DAYS = 30;
+
+/** Days until Shepherd will actually attempt renewal: daysLeft - renewBeforeDays.
+ * <= 0 means it's already due (will renew on the next renewal sweep). */
+function willRenewInDays(row: CertRow): number {
+  const renewBefore = row.store?.assignment?.renewBeforeDays ?? DEFAULT_RENEW_BEFORE_DAYS;
+  return row.daysLeft - renewBefore;
+}
 
 /** "Apr 30 14:51:20 2027 GMT" → "Apr 30, 2027" (handles single-digit day padding) */
 export function fmtDate(s: string | undefined): string {
@@ -99,6 +109,14 @@ export const CERT_COLUMNS: CertColumn[] = [
     key: 'sanCount', header: 'SAN Count', sortable: true,
     sortValue: (row) => row.cert.sanNames.length,
     render: (row) => <td className="text-muted">{row.cert.sanNames.length}</td>,
+  },
+  {
+    key: 'willRenewIn', header: 'Will Renew In', sortable: true,
+    sortValue: (row) => willRenewInDays(row),
+    render: (row) => {
+      const n = willRenewInDays(row);
+      return <td className={n <= 0 ? 'text-yellow' : 'text-muted'}>{n <= 0 ? 'Due' : `${n}d`}</td>;
+    },
   },
 ];
 

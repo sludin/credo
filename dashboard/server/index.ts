@@ -375,12 +375,12 @@ async function main(): Promise<void> {
       clients.api.get('/admin/assignments'),
     ]);
 
-    const assignMap = new Map<string, { corgi: string; ca: string; domain?: string }>();
-    const rawAssignments: Array<{ certName?: string; corgi?: string; ca?: string; domain?: string }> =
+    const assignMap = new Map<string, { corgi: string; ca: string; domain?: string; renewBeforeDays?: number }>();
+    const rawAssignments: Array<{ certName?: string; corgi?: string; ca?: string; domain?: string; renewBeforeDays?: number }> =
       Array.isArray(assignRes.data?.assignments) ? assignRes.data.assignments : [];
     for (const a of rawAssignments) {
       if (a.certName) {
-        assignMap.set(a.certName, { corgi: a.corgi ?? '', ca: a.ca ?? '', domain: a.domain });
+        assignMap.set(a.certName, { corgi: a.corgi ?? '', ca: a.ca ?? '', domain: a.domain, renewBeforeDays: a.renewBeforeDays });
       }
     }
 

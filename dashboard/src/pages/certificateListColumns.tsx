@@ -9,9 +9,20 @@ import { fmtDate, type UnifiedCertRow } from './Certificates';
 
 export type CertificateListColumnKey =
   | 'name' | 'corgi' | 'ca' | 'status' | 'expires'
-  | 'monitorStatus' | 'monitorChecked' | 'fingerprint' | 'sanCount';
+  | 'monitorStatus' | 'monitorChecked' | 'fingerprint' | 'sanCount' | 'willRenewIn';
 
 export type CertificateListColumn = ColumnDef<CertificateListColumnKey, UnifiedCertRow>;
+
+/** Shepherd's own fallback when an assignment has no renewBeforeDays set (shepherd/src/config.rs). */
+const DEFAULT_RENEW_BEFORE_DAYS = 30;
+
+/** Days until Shepherd will actually attempt renewal: daysLeft - renewBeforeDays.
+ * <= 0 means it's already due (will renew on the next renewal sweep). */
+function willRenewInDays(row: UnifiedCertRow): number | null {
+  if (row.daysLeft === null) return null;
+  const renewBefore = row.assignment.renewBeforeDays ?? DEFAULT_RENEW_BEFORE_DAYS;
+  return row.daysLeft - renewBefore;
+}
 
 export const CERTIFICATE_LIST_COLUMNS: CertificateListColumn[] = [
   {
@@ -78,6 +89,15 @@ export const CERTIFICATE_LIST_COLUMNS: CertificateListColumn[] = [
     key: 'sanCount', header: 'SAN Count', sortable: true,
     sortValue: (r) => r.sanNames.length,
     render: (r) => <td className="text-muted">{r.sanNames.length}</td>,
+  },
+  {
+    key: 'willRenewIn', header: 'Will Renew In', sortable: true,
+    sortValue: (r) => willRenewInDays(r) ?? Infinity,
+    render: (r) => {
+      const n = willRenewInDays(r);
+      if (n === null) return <td className="text-muted">—</td>;
+      return <td className={n <= 0 ? 'text-yellow' : 'text-muted'}>{n <= 0 ? 'Due' : `${n}d`}</td>;
+    },
   },
 ];
 
