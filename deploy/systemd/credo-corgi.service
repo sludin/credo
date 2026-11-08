@@ -1,29 +1,46 @@
+# Credo Corgi - per-host certificate agent
+#
+# EXAMPLE unit, mirrors what runs in production. Install as /etc/systemd/system/credo-corgi.service.
+# Real per-host copies belong in your private config repo, not here.
 [Unit]
-Description=Credo Corgi - Distributed TLS Certificate Agent
-After=network-online.target
-Wants=network-online.target
+Description=Credo Corgi - per-host certificate agent
+# Wait for the network: shepherd/corgi talk to each other and to the CA at startup.
+After=network.target
+Wants=network.target
 
 [Service]
 Type=simple
+# Dedicated unprivileged user per service. Private group named after the user so service
+# state files are not shared by accident.
 User=corgi
-Group=credo
-SupplementaryGroups=ssl-cert
+Group=corgi
+# corgi OWNS the cert store, so it needs no extra group. It writes store/ as corgi:credo-cert
+# (see the store/ setgid note in docs); other services read it via SupplementaryGroups=credo-cert.
 WorkingDirectory=/var/apps/credo/corgi
 ExecStart=/var/apps/credo/corgi/corgi server start
 ExecStop=/var/apps/credo/corgi/corgi server stop
+# Reload = SIGHUP: re-read config without dropping connections.
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
-RestartSec=5s
-TimeoutStopSec=10s
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=corgi
-NoNewPrivileges=yes
+RestartSec=5
+
+# --- Sandboxing -------------------------------------------------------------
+# NoNewPrivileges is deliberately NOT set here, unlike the other three units.
+# corgi runs post-install hooks as a different Unix user than shepherd/vigil/
+# dashboard, so reloading their TLS listener (SIGHUP) needs sudo -- see
+# docs/deploy/cross-user-hook-reload.md. NoNewPrivileges blocks sudo itself,
+# not just the command it'd run, so this can't be scoped any tighter than
+# "off" at the systemd level; the actual scoping happens in sudoers (exact
+# commands only, no wildcards -- see /etc/sudoers.d/020_corgi-hook-reload).
+# ProtectSystem=strict mounts the whole filesystem read-only for this service...
 ProtectSystem=strict
+# ...except the paths listed here. Anything the service writes (config, logs, state, store) must be under it.
 ReadWritePaths=/var/apps/credo/corgi
+# Private /tmp, and no access to /home: certs and keys never need either.
 PrivateTmp=yes
 ProtectHome=yes
 
 [Install]
 WantedBy=multi-user.target
+# Lets 'systemctl status corgi' work as well as 'credo-corgi'.
 Alias=corgi.service
