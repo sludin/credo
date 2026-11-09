@@ -221,7 +221,7 @@ pub fn load_config() -> Result<VigilConfig> {
             .unwrap_or_default();
         CaConfig {
             curve: raw_ca.curve.unwrap_or_else(|| "P-384".to_string()),
-            cert_default_days: raw_ca.cert_default_days.unwrap_or(365),
+            cert_default_days: raw_ca.cert_default_days.unwrap_or(30),
             crl_next_update_hours: raw_ca.crl_next_update_hours.unwrap_or(24),
             ocsp_max_age_seconds: raw_ca.ocsp_max_age_seconds.unwrap_or(60),
         }
