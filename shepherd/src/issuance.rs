@@ -523,12 +523,23 @@ async fn verify_dns_propagation(
         return Ok(());
     }
 
-    // Resolve NS IPs
+    // Resolve NS IPs, grouped per nameserver name. A nameserver only needs
+    // ONE reachable address (v4 or v6) to confirm the record -- requiring
+    // every resolved address to independently succeed meant a nameserver
+    // whose AAAA resolved but was unreachable from this host (no outbound
+    // IPv6 route: every v6 query fails instantly with NoConnections) could
+    // never be satisfied, even though its v4 address answered correctly on
+    // every single attempt. That's exactly what happened to freya.ludin.org:
+    // every nameserver's IPv4 query returned the correct TXT record on every
+    // attempt, but the v6 queries' permanent NoConnections kept `all_ok`
+    // false forever, so the sweep never recognized a fully-propagated
+    // record and exhausted all 100 attempts every single time.
     use hickory_resolver::proto::rr::RData;
-    let mut ns_ips: Vec<std::net::IpAddr> = Vec::new();
+    let mut ns_ip_groups: Vec<(String, Vec<std::net::IpAddr>)> = Vec::new();
     for ns in &ns_names {
+        let mut ips: Vec<std::net::IpAddr> = Vec::new();
         if let Ok(Ok(r)) = timeout(DNS_QUERY_TIMEOUT, resolver.ipv4_lookup(ns.as_str())).await {
-            ns_ips.extend(r.answers().iter().filter_map(|rec| {
+            ips.extend(r.answers().iter().filter_map(|rec| {
                 if let RData::A(a) = &rec.data {
                     Some(std::net::IpAddr::V4(a.0))
                 } else {
@@ -537,7 +548,7 @@ async fn verify_dns_propagation(
             }));
         }
         if let Ok(Ok(r)) = timeout(DNS_QUERY_TIMEOUT, resolver.ipv6_lookup(ns.as_str())).await {
-            ns_ips.extend(r.answers().iter().filter_map(|rec| {
+            ips.extend(r.answers().iter().filter_map(|rec| {
                 if let RData::AAAA(aaaa) = &rec.data {
                     Some(std::net::IpAddr::V6(aaaa.0))
                 } else {
@@ -545,9 +556,12 @@ async fn verify_dns_propagation(
                 }
             }));
         }
+        if !ips.is_empty() {
+            ns_ip_groups.push((ns.clone(), ips));
+        }
     }
 
-    if ns_ips.is_empty() {
+    if ns_ip_groups.is_empty() {
         tracing::warn!(cert = %cert_name, "Could not resolve NS IPs; skipping propagation check");
         return Ok(());
     }
@@ -556,23 +570,26 @@ async fn verify_dns_propagation(
 
     for attempt in 1..=100u32 {
         let mut all_ok = true;
-        for &ip in &ns_ips {
-            let ns_cfg =
-                ResolverConfig::from_parts(None, vec![], vec![NameServerConfig::udp_and_tcp(ip)]);
-            let ns_resolver = match TokioResolver::builder_with_config(
-                ns_cfg,
-                hickory_resolver::net::runtime::TokioRuntimeProvider::new(),
-            )
-            .build()
-            {
-                Ok(r) => r,
-                Err(_) => {
-                    all_ok = false;
-                    continue;
-                }
-            };
-            match timeout(DNS_QUERY_TIMEOUT, ns_resolver.txt_lookup(record_name)).await {
-                Ok(Ok(records)) => {
+        for (ns_name, ips) in &ns_ip_groups {
+            let mut ns_confirmed = false;
+            for &ip in ips {
+                let ns_cfg = ResolverConfig::from_parts(
+                    None,
+                    vec![],
+                    vec![NameServerConfig::udp_and_tcp(ip)],
+                );
+                let ns_resolver = match TokioResolver::builder_with_config(
+                    ns_cfg,
+                    hickory_resolver::net::runtime::TokioRuntimeProvider::new(),
+                )
+                .build()
+                {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+                if let Ok(Ok(records)) =
+                    timeout(DNS_QUERY_TIMEOUT, ns_resolver.txt_lookup(record_name)).await
+                {
                     let found = records.answers().iter().any(|rec| {
                         if let RData::TXT(txt) = &rec.data {
                             txt.txt_data.iter().any(|d| {
@@ -584,13 +601,15 @@ async fn verify_dns_propagation(
                             false
                         }
                     });
-                    if !found {
-                        all_ok = false;
+                    if found {
+                        ns_confirmed = true;
+                        break;
                     }
                 }
-                _ => {
-                    all_ok = false;
-                }
+            }
+            if !ns_confirmed {
+                tracing::debug!(cert = %cert_name, ns = %ns_name, "Nameserver has not confirmed DNS TXT yet");
+                all_ok = false;
             }
         }
         if all_ok {
