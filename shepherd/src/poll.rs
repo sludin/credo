@@ -803,6 +803,18 @@ async fn cert_maintenance(
             // design: a dropped nudge is not fatal, since Corgi's own periodic
             // safety-net pull converges eventually regardless.
             nudge_corgi_sync(state, node).await;
+            // Same reasoning as admin_provision_or_renew's wait_for_corgi_fingerprint:
+            // state.corgi_state (what the dashboard's /flock reads) is otherwise only
+            // refreshed by the next periodic reconcile sweep, minutes away. Poll here
+            // so the cache picks up the new cert as soon as corgi actually installs it.
+            wait_for_corgi_fingerprint(
+                state,
+                node,
+                &assignment.cert_name,
+                &issued.fingerprint256,
+                Duration::from_secs(90),
+            )
+            .await;
             tracing::info!(
                 corgi = %node.name,
                 cert = %assignment.cert_name,
