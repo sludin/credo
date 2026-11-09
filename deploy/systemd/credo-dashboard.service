@@ -1,28 +1,44 @@
+# Credo Dashboard - web UI for shepherd
+#
+# EXAMPLE unit, mirrors what runs in production. Install as /etc/systemd/system/credo-dashboard.service.
+# Real per-host copies belong in your private config repo, not here.
 [Unit]
-Description=Credo Dashboard - Web UI and BFF for Shepherd
-After=network-online.target credo-shepherd.service
-Wants=network-online.target
+Description=Credo Dashboard - web UI for shepherd
+# Wait for the network: shepherd/corgi talk to each other and to the CA at startup.
+After=network.target
+Wants=network.target
 
 [Service]
 Type=simple
+# Dedicated unprivileged user per service. Private group named after the user so service
+# state files are not shared by accident.
 User=dashboard
-Group=credo
+Group=dashboard
+# credo-cert is the SHARED READ group for the corgi cert store. It lets this service read certs/keys
+# that corgi installs (store/ is corgi:credo-cert, mode 2750, setgid, so new files inherit the group).
+# Do NOT put a service's own state under this group, and never 'chown -R' a corgi dir: it resets
+# store/ to corgi:corgi and every service listed here instantly loses its TLS cert (Nov 2026 outage).
+SupplementaryGroups=credo-cert
 WorkingDirectory=/var/apps/credo/dashboard
-Environment=NODE_ENV=production
-ExecStart=/usr/bin/node dist/server/index.js
+ExecStart=/var/apps/credo/dashboard/dashboard server start
+ExecStop=/var/apps/credo/dashboard/dashboard server stop
+# Reload = SIGHUP: re-read config without dropping connections.
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
-RestartSec=5s
-TimeoutStopSec=10s
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=dashboard
+RestartSec=5
+
+# --- Sandboxing -------------------------------------------------------------
+# NoNewPrivileges: the process and its children can never gain privileges (setuid etc.).
 NoNewPrivileges=yes
+# ProtectSystem=strict mounts the whole filesystem read-only for this service...
 ProtectSystem=strict
+# ...except the paths listed here. Anything the service writes (config, logs, state, store) must be under it.
 ReadWritePaths=/var/apps/credo/dashboard
+# Private /tmp, and no access to /home: certs and keys never need either.
 PrivateTmp=yes
 ProtectHome=yes
 
 [Install]
 WantedBy=multi-user.target
+# Lets 'systemctl status dashboard' work as well as 'credo-dashboard'.
 Alias=dashboard.service
-
