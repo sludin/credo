@@ -1,0 +1,28 @@
+# EXAMPLE: a Caddy site that serves a certificate managed by Credo (corgi).
+# Real Caddyfiles belong in your host config, not this repo.
+#
+# Why this shape:
+#  * Caddy reads the cert from corgi's LIVE symlinks (store/live/<name>/). corgi installs new certs
+#    by repointing those symlinks, so Caddy never sees a half-written file.
+#  * Caddy must be in the credo-cert group to read store/ (usermod -aG credo-cert caddy).
+#  * Caddy only reads the files at load time. Renewal therefore needs a reload HOOK on corgi,
+#    see the hook example at the bottom.
+
+hermes.example.org {
+	tls /var/apps/credo/corgi/store/live/hermes.example.org/fullchain.pem /var/apps/credo/corgi/store/live/hermes.example.org/privkey.pem
+	reverse_proxy 127.0.0.1:8788
+}
+
+# --- corgi.config.json hook (JSON, shown here for reference) ------------------------------------
+#   "serviceHooks": {
+#     "caddy": ["caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--force"]
+#   },
+#   "defaultHooks": ["caddy"]
+#
+#  * --force is REQUIRED. 'caddy reload' compares the adapted config JSON, which contains only the
+#    cert FILE PATHS, not their contents. After a renewal the paths are unchanged, so a plain
+#    reload prints "config is unchanged" and skips the load: Caddy keeps serving the old cert.
+#    (The systemd unit's ExecReload for caddy already passes --force for the same reason.)
+#  * --config must be a path that EXISTS on this host. A wrong path makes the hook fail after the
+#    cert is already installed, leaving corgi's endpoint monitor reporting CertMismatch.
+#  * A manual 'systemctl restart caddy' also works if a hook has failed.
