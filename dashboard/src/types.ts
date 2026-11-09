@@ -92,16 +92,20 @@ export type CertStoreAssignment = {
   corgi: string;
   ca: string;
   domain?: string;
+  renewBeforeDays?: number;
 };
 
+/** Shepherd's own copy of a cert, as reported by GET /admin/certstore
+ * (shepherd/src/types.rs CertStoreEntry) -- not what corgi actually has
+ * installed/serving (see FlockCert for that). `certName` is added by the
+ * dashboard BFF; everything else is exactly what shepherd serializes. */
 export type CertStoreEntry = {
+  name: string;
   certName: string;
-  archiveDir: string;
-  liveDir: string;
-  exists: boolean;
-  latestOrdinal: string | null;
-  archiveFiles: string[];
-  live: Record<string, string | null>;
+  fingerprint256?: string;
+  validTo?: string;
+  expiresInDays?: number;
+  subject?: string;
   assignment?: CertStoreAssignment;
 };
 

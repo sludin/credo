@@ -364,7 +364,7 @@ async fn poll_flock(state: &AppState, node: &CorgiNodeConfig) -> CorgiStatus {
 /// between how Shepherd and Corgi render a fingerprint ("FD:5A:.." vs
 /// "fd5a..") don't cause a spurious non-match.
 fn flock_reports_fingerprint(
-    flock: &[FlockEntry],
+    flock: &[CorgiFlockEntry],
     cert_name: &str,
     expected_fingerprint: &str,
 ) -> bool {
@@ -384,6 +384,13 @@ fn flock_reports_fingerprint(
 /// *not* a failure signal to act on — Corgi's own periodic pull converges
 /// eventually regardless (see `nudge_corgi_sync`); it only means we couldn't
 /// confirm within this window.
+///
+/// Goes through `poll_flock` (not a bare `/flock` GET) so each confirmation
+/// attempt also refreshes `state.corgi_state` — the same cache the
+/// dashboard's `/flock` endpoint reads from. Without this, the admin-visible
+/// renewal job could confirm the new cert within seconds while the
+/// dashboard kept showing the old one until the next periodic reconcile
+/// sweep, minutes later.
 pub(crate) async fn wait_for_corgi_fingerprint(
     state: &AppState,
     node: &CorgiNodeConfig,
@@ -395,10 +402,13 @@ pub(crate) async fn wait_for_corgi_fingerprint(
     let deadline = tokio::time::Instant::now() + timeout;
 
     loop {
-        if let Ok(resp) = corgi_get::<FlockResponse>(&state.corgi_client_pool, node, "/flock").await
+        poll_flock(state, node).await;
         {
-            if flock_reports_fingerprint(&resp.flock, cert_name, expected_fingerprint) {
-                return true;
+            let cs = state.corgi_state.read().await;
+            if let Some(entry) = cs.get(&node.name) {
+                if flock_reports_fingerprint(&entry.flock, cert_name, expected_fingerprint) {
+                    return true;
+                }
             }
         }
         if tokio::time::Instant::now() >= deadline {
@@ -451,15 +461,15 @@ mod fast_reprobe_tests {
 mod fingerprint_match_tests {
     use super::*;
 
-    fn entry(name: &str, fp: Option<&str>) -> FlockEntry {
-        FlockEntry {
+    fn entry(name: &str, fp: Option<&str>) -> CorgiFlockEntry {
+        CorgiFlockEntry {
             name: name.to_string(),
             lifetime_days: None,
             status: None,
             san_names: vec![],
             fingerprint256: fp.map(str::to_string),
             valid_to: None,
-            key_exists: false,
+            key_exists: Some(false),
             monitor: None,
             install_issue: None,
         }
@@ -793,6 +803,18 @@ async fn cert_maintenance(
             // design: a dropped nudge is not fatal, since Corgi's own periodic
             // safety-net pull converges eventually regardless.
             nudge_corgi_sync(state, node).await;
+            // Same reasoning as admin_provision_or_renew's wait_for_corgi_fingerprint:
+            // state.corgi_state (what the dashboard's /flock reads) is otherwise only
+            // refreshed by the next periodic reconcile sweep, minutes away. Poll here
+            // so the cache picks up the new cert as soon as corgi actually installs it.
+            wait_for_corgi_fingerprint(
+                state,
+                node,
+                &assignment.cert_name,
+                &issued.fingerprint256,
+                Duration::from_secs(90),
+            )
+            .await;
             tracing::info!(
                 corgi = %node.name,
                 cert = %assignment.cert_name,

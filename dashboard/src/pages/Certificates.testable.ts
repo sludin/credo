@@ -12,7 +12,11 @@ export function deriveStatus(
   lastFailed: boolean,
 ): UnifiedStatus {
   if (isRenewing) return 'renewing';
-  if (!flockCert && !certEntry?.exists) return 'invalid';
+  // certEntry is only ever present when shepherd's /admin/certstore actually
+  // has an entry for this cert name (read_cert_store_entry returns None, and
+  // the entry is filtered out, when nothing exists on disk) -- no separate
+  // "exists" flag is sent over the wire.
+  if (!flockCert && !certEntry) return 'invalid';
   if (flockCert?.status === 'not-ok') return 'invalid';
   if (daysLeft !== null && daysLeft < 0) return 'invalid';
   if (flockCert?.installIssue) return 'error';

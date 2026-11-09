@@ -25,6 +25,7 @@ const sections: SidebarSection[] = [
     items: [
       { to: '/corgis', icon: '⬡', label: 'Corgis' },
       { to: '/certificates', icon: '⬢', label: 'Certificates' },
+      { to: '/certificates/metadata', icon: '▦', label: 'Cert Metadata' },
       { to: '/shepherd-cas', icon: '⬡', label: 'CAs' },
     ],
   },

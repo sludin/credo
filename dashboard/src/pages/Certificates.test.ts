@@ -12,8 +12,8 @@ const okFlock: FlockCert = {
   sanNames: ['example.com'], fingerprint256: 'abc',
 };
 
-const existsEntry = { exists: true } as CertStoreEntry;
-const noEntry = { exists: false } as CertStoreEntry;
+const existsEntry: CertStoreEntry = { name: 'example.com', certName: 'example.com' };
+const noEntry: CertStoreEntry | null = null;
 
 describe('deriveStatus', () => {
   it('returns renewing when active job exists', () => {
