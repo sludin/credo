@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use instant_acme::{AuthorizationStatus, ChallengeType, Identifier, NewOrder, Order, OrderStatus};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, timeout, Duration};
 
 use uuid::Uuid;
 
@@ -480,6 +480,15 @@ async fn wait_for_certificate(cert_name: &str, ca_name: &str, order: &mut Order)
 // DNS propagation verification
 // ---------------------------------------------------------------------------
 
+/// Bound on every individual DNS query in propagation verification. Without
+/// this, a single query that never gets a response (library bug, dropped
+/// packet with no error, slow/unresponsive nameserver) hangs the renewal
+/// forever instead of counting as one failed attempt and retrying -- this is
+/// exactly what happened to freya.ludin.org's renewal after the
+/// hickory-resolver 0.26.3 bump: it entered this function and never logged
+/// again for 9+ hours.
+const DNS_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+
 async fn verify_dns_propagation(
     cert_name: &str,
     domain: &str,
@@ -518,7 +527,7 @@ async fn verify_dns_propagation(
     use hickory_resolver::proto::rr::RData;
     let mut ns_ips: Vec<std::net::IpAddr> = Vec::new();
     for ns in &ns_names {
-        if let Ok(r) = resolver.ipv4_lookup(ns.as_str()).await {
+        if let Ok(Ok(r)) = timeout(DNS_QUERY_TIMEOUT, resolver.ipv4_lookup(ns.as_str())).await {
             ns_ips.extend(r.answers().iter().filter_map(|rec| {
                 if let RData::A(a) = &rec.data {
                     Some(std::net::IpAddr::V4(a.0))
@@ -527,7 +536,7 @@ async fn verify_dns_propagation(
                 }
             }));
         }
-        if let Ok(r) = resolver.ipv6_lookup(ns.as_str()).await {
+        if let Ok(Ok(r)) = timeout(DNS_QUERY_TIMEOUT, resolver.ipv6_lookup(ns.as_str())).await {
             ns_ips.extend(r.answers().iter().filter_map(|rec| {
                 if let RData::AAAA(aaaa) = &rec.data {
                     Some(std::net::IpAddr::V6(aaaa.0))
@@ -562,8 +571,8 @@ async fn verify_dns_propagation(
                     continue;
                 }
             };
-            match ns_resolver.txt_lookup(record_name).await {
-                Ok(records) => {
+            match timeout(DNS_QUERY_TIMEOUT, ns_resolver.txt_lookup(record_name)).await {
+                Ok(Ok(records)) => {
                     let found = records.answers().iter().any(|rec| {
                         if let RData::TXT(txt) = &rec.data {
                             txt.txt_data.iter().any(|d| {
@@ -579,7 +588,7 @@ async fn verify_dns_propagation(
                         all_ok = false;
                     }
                 }
-                Err(_) => {
+                _ => {
                     all_ok = false;
                 }
             }
@@ -603,7 +612,9 @@ async fn resolve_authoritative_ns(
     let parts: Vec<&str> = fqdn.trim_end_matches('.').split('.').collect();
     for i in 0..parts.len().saturating_sub(1) {
         let zone = parts[i..].join(".");
-        if let Ok(ns_lookup) = resolver.ns_lookup(zone.as_str()).await {
+        if let Ok(Ok(ns_lookup)) =
+            timeout(DNS_QUERY_TIMEOUT, resolver.ns_lookup(zone.as_str())).await
+        {
             let names: Vec<String> = ns_lookup
                 .answers()
                 .iter()
