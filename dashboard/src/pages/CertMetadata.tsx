@@ -31,10 +31,18 @@ function hooksLabel(a: Assignment): string {
   return a.hooks.join(', ');
 }
 
+/** "Apr 30 14:51:20 2027 GMT" (corgi's OpenSSL-style FlockCert.validTo) → "Apr 30, 2027" */
 function fmtDate(s: string | undefined | null): string {
   if (!s) return '—';
   const p = s.split(' ').filter(Boolean);
   return p.length >= 4 ? `${p[0]} ${p[1]}, ${p[3]}` : s;
+}
+
+/** ISO 8601 (shepherd's own CertStoreEntry.validTo) → "Jan 11, 2027" */
+function fmtIsoDate(s: string | undefined | null): string {
+  if (!s) return '—';
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? s : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 const COLUMNS: ColumnDef<string, MetadataRow>[] = [
@@ -126,19 +134,17 @@ const COLUMNS: ColumnDef<string, MetadataRow>[] = [
     render: (r) => <td className="mono text-muted">{r.flockCert?.monitor?.seenFingerprint ? `${r.flockCert.monitor.seenFingerprint.slice(0, 16)}…` : '—'}</td> },
   { key: 'monitorError', header: 'Monitor Error', sortable: false,
     render: (r) => <td className="text-red">{r.flockCert?.monitor?.error ?? '—'}</td> },
-  { key: 'storeExists', header: 'In Store', sortable: true,
-    sortValue: (r) => (r.certEntry?.exists ? 1 : 0),
-    render: (r) => <td className="text-muted">{r.certEntry ? (r.certEntry.exists ? 'yes' : 'no') : '—'}</td> },
-  { key: 'latestOrdinal', header: 'Latest Ordinal', sortable: true,
-    sortValue: (r) => r.certEntry?.latestOrdinal ?? '',
-    render: (r) => <td className="mono text-muted">{r.certEntry?.latestOrdinal ?? '—'}</td> },
-  { key: 'archiveFileCount', header: 'Archive Files', sortable: true,
-    sortValue: (r) => r.certEntry?.archiveFiles.length ?? 0,
-    render: (r) => <td className="text-muted">{r.certEntry?.archiveFiles.length ?? '—'}</td> },
-  { key: 'archiveDir', header: 'Archive Dir', sortable: false,
-    render: (r) => <td className="mono text-muted">{r.certEntry?.archiveDir ?? '—'}</td> },
-  { key: 'liveDir', header: 'Live Dir', sortable: false,
-    render: (r) => <td className="mono text-muted">{r.certEntry?.liveDir ?? '—'}</td> },
+  { key: 'storeSubject', header: 'Store Subject', sortable: true,
+    sortValue: (r) => r.certEntry?.subject ?? '',
+    render: (r) => <td className="mono text-muted">{r.certEntry?.subject ?? '—'}</td> },
+  { key: 'storeExpiresInDays', header: 'Store Days Left', sortable: true,
+    sortValue: (r) => r.certEntry?.expiresInDays ?? Infinity,
+    render: (r) => <td className="text-muted">{r.certEntry?.expiresInDays ?? '—'}</td> },
+  { key: 'storeValidTo', header: 'Store Valid To', sortable: true,
+    sortValue: (r) => (r.certEntry?.validTo ? new Date(r.certEntry.validTo).getTime() : 0),
+    render: (r) => <td className="text-muted">{fmtIsoDate(r.certEntry?.validTo)}</td> },
+  { key: 'storeFingerprint', header: 'Store Fingerprint', sortable: false,
+    render: (r) => <td className="mono text-muted">{r.certEntry?.fingerprint256 ? `${r.certEntry.fingerprint256.slice(0, 16)}…` : '—'}</td> },
 ];
 
 export default function CertMetadata(): React.ReactElement {
