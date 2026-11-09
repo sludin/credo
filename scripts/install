@@ -120,17 +120,23 @@ npm_install_remote() {
 chown_dir() {
   local host="$1" port="$2" ssh_opts="$3" dir="$4" owner="$5" use_sudo="${6:-true}" files_str="${7:-}"
   echo "[install] chown $owner $dir"
-  if [[ "$use_sudo" == "true" ]]; then
-    run_cmd "$host" "$port" "$ssh_opts" "sudo chown -R '$owner' '$dir'"
-  else
-    # Non-recursive: chown the dir itself then each deployed file/subdir individually.
-    # Preserves special sub-directory ownership (e.g. store/ → corgi:credo-cert).
-    local cmd="chown '$owner' '$dir'"
+  local sudo_cmd=""
+  if [[ "$use_sudo" == "true" ]]; then sudo_cmd="sudo "; fi
+  # Never chown -R the whole service dir: it contains state with its own
+  # ownership (e.g. corgi's store/ is corgi:credo-cert so shepherd/vigil/caddy
+  # can read certs via the credo-cert group). Chown the dir itself, then only
+  # what was deployed.
+  local cmd="${sudo_cmd}chown '$owner' '$dir'"
+  if [[ -n "${files_str// /}" ]]; then
+    local f
     for f in $files_str; do
-      cmd+=" && chown -R '$owner' '$dir/$f'"
+      cmd+=" && ${sudo_cmd}chown -R '$owner' '$dir/$f'"
     done
-    run_cmd "$host" "$port" "$ssh_opts" "$cmd"
+  else
+    # No explicit file list: recurse, but prune cert-store state.
+    cmd+=" && ${sudo_cmd}find '$dir' -mindepth 1 \( -path '$dir/store' -o -path '$dir/pending' \) -prune -o -exec chown '$owner' {} +"
   fi
+  run_cmd "$host" "$port" "$ssh_opts" "$cmd"
 }
 
 chmod_dir() {
